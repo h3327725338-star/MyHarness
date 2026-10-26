@@ -48,6 +48,12 @@ html[data-export-readonly="1"] .transcript img[src^="http"] {
 .composer.drag { border-color: var(--accent); background: var(--accent-soft); }
 .composer-input { position: relative; width: 100%; min-height: 44px; max-height: 260px; border: 0; background: transparent; color: var(--text); font-size: var(--fs-read); line-height: 1.55; padding: 2px 2px; outline: none; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
 .composer-input[data-empty]::before { content: attr(data-placeholder); position: absolute; top: 2px; left: 2px; right: 2px; color: var(--text-4); pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A narrow box (collaboration column, wide panel) shows the short placeholder, so the / @ ! hints are not cut off;
+   the ellipsis stays the last resort. The full English one needs about 474px, the short one about 320px. */
+.composer-input { container: composer-input / inline-size; }
+@container composer-input (max-width: 480px) {
+	.composer-input[data-empty][data-placeholder-short]::before { content: attr(data-placeholder-short); }
+}
 
 /* The draft drawn as formatted Markdown (draft-editor.js, draft-markdown.js): one block per source line, every character
    kept. A line's syntax marks (#, **, `, >, the list dash) show, faint, only while the caret is on that line. */

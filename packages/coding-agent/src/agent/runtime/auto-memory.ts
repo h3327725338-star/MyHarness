@@ -19,6 +19,7 @@ import { assertDirectPath } from "../../session/artifacts/store.ts";
 import {
 	archiveMemoryFile,
 	getMemoryPaths,
+	MEMORY_PROFILE_ID,
 	migrateLegacyMemories,
 	refreshMemoryIndexes,
 	withMemoryLock,
@@ -54,6 +55,12 @@ export interface MemoryEntry {
 	sourceEntryId?: string;
 	sourceWorkspaceId?: string;
 	sourceSessionId?: string;
+	/**
+	 * Who wrote this version: the session id of the chat whose extraction or memory_write saved it, "consolidation", or
+	 * "restore". Absent in versions written before the field existed. Deleting a chat removes only memories whose every
+	 * version it wrote.
+	 */
+	updatedBy?: string;
 }
 
 export interface MemoryOperation {
@@ -134,8 +141,8 @@ const MEMORY_TRIGGER_MAX_BYTES = 60;
 const MAX_DIRECT_TRIGGER_MEMORIES = 3;
 const MEMORY_IMPORTANCE_WEIGHT: Record<MemoryImportance, number> = { high: 1.3, normal: 1, low: 0.7 };
 const MEMORY_IMPORTANCES = new Set<MemoryImportance>(["high", "normal", "low"]);
-/** The one global entry the consolidator maintains; it is sent with every turn instead of being ranked. */
-export const MEMORY_PROFILE_ID = "global/用户画像";
+/** The one global entry the consolidator maintains (defined with the memory store, which must not import the runtime). */
+export { MEMORY_PROFILE_ID };
 /**
  * Recall-side token estimate tuned for Chinese text: every non-ASCII character counts as ~1 token,
  * ASCII characters count as ~1 token per 4 characters (rounded up). The shared estimateTextTokens
@@ -236,6 +243,8 @@ export function getAutoMemoryMaintenanceLogPath(sessionDir: string): string {
 function appendMaintenanceLogLine(logPath: string, entry: Record<string, unknown>): void {
 	try {
 		assertDirectPath(logPath);
+		// The chat folder (<session>/, two levels up) must still exist: a log line never recreates a deleted chat.
+		if (!fs.existsSync(path.dirname(path.dirname(logPath)))) return;
 		fs.mkdirSync(path.dirname(logPath), { recursive: true });
 		try {
 			const stat = fs.statSync(logPath);
@@ -420,6 +429,7 @@ function parseMemoryFile(filePath: string, expectedScope: MemoryScope): MemoryEn
 				typeof parsed.frontmatter.sourceWorkspaceId === "string" ? parsed.frontmatter.sourceWorkspaceId : undefined,
 			sourceSessionId:
 				typeof parsed.frontmatter.sourceSessionId === "string" ? parsed.frontmatter.sourceSessionId : undefined,
+			updatedBy: typeof parsed.frontmatter.updatedBy === "string" ? parsed.frontmatter.updatedBy : undefined,
 		};
 	} catch {
 		return undefined;
@@ -470,6 +480,7 @@ export function serializeMemory(entry: MemoryEntry): string {
 		sourceEntryId: entry.sourceEntryId,
 		sourceWorkspaceId: entry.sourceWorkspaceId,
 		sourceSessionId: entry.sourceSessionId,
+		updatedBy: entry.updatedBy,
 		createdAt: entry.createdAt,
 		updatedAt: entry.updatedAt,
 	}).trim();
@@ -1045,6 +1056,8 @@ export class AutoMemoryManager {
 
 	/** 本地结构化日志：只追加写 maintenance.log，失败静默，绝不抛错。 */
 	private logMaintenance(stage: string, details: Record<string, unknown> = {}): void {
+		// Work that outlives its session (the chat was deleted or replaced) leaves no trace in its folder.
+		if (this.disposed) return;
 		try {
 			appendMaintenanceLogLine(this.maintenanceLogPath, {
 				ts: new Date().toISOString(),
@@ -1933,6 +1946,7 @@ export class AutoMemoryManager {
 					sourceEntryId: sourceEntryId ?? previous?.sourceEntryId,
 					sourceWorkspaceId: sourceEntryId ? ctxWorkspaceId : previous?.sourceWorkspaceId,
 					sourceSessionId: sourceEntryId ? ctxSessionId : previous?.sourceSessionId,
+					updatedBy: allowDelete ? "consolidation" : ctxSessionId,
 				};
 				this.assertActive();
 				if (previous) await archiveMemoryFile(previous.filePath, "updated");

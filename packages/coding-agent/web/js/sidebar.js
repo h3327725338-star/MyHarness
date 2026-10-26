@@ -220,9 +220,14 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 
 // One chat row of a group. Removed rows stay mounted until their shared fade/collapse transition has finished; rows that
 // are there when the list first appears are simply shown, only rows that arrive later grow in (see ListSlot).
+// The row's own grow and fold timing is `.chat-slot > .collapse` in layout.css.
 function DraftChat({ info, present, initial, renderRow }) {
 	return html`<div class="chat-slot" data-path=${info.path} data-key=${rowKeyOf(info)}><${ListSlot} present=${present} initial=${initial}>${renderRow(info)}<//></div>`;
 }
+
+/** A new chat (no message yet: a stand-in row or a saved blank chat). */
+const isNewChatRow = (info) => !!(info?.empty || info?.blank);
+const holdsForNewChat = (arrived, leaving) => isNewChatRow(leaving) && arrived.some(isNewChatRow);
 
 /**
  * The rows of one group. A row that leaves (archived, deleted, a blank chat left behind) folds away in place; a row that
@@ -232,8 +237,10 @@ function DraftChat({ info, present, initial, renderRow }) {
 function ChatRows({ items, renderRow, capped = false }) {
 	const signature = items.map(rowKeyOf).join("\n");
 	// Rows that left stay for the length of the fold-away; a row that left is animated in again if it comes back later.
-	// A row that leaves as another arrives (the blank chat left behind by a new chat) folds only after the new one grew in.
-	const { rows: visible, present, initial } = useRetainedRows(items, rowKeyOf, { holdExits: true });
+	// A blank chat left behind as a new chat arrives in the same group folds only after the new one grew in. Any other
+	// row that leaves folds at once, also when another row comes back at the same time (in a group longer than
+	// CHAT_ROWS_SHOWN, the row below the cut returns whenever one above it leaves).
+	const { rows: visible, present, initial } = useRetainedRows(items, rowKeyOf, { holdExits: holdsForNewChat });
 	// Only a pure reorder needs a slide. Inserts/exits already move their neighbours through grid collapse;
 	// measuring those intermediate heights and applying FLIP again caused the second downward nudge.
 	// Fixed row indices give the displacement without reading layout or mixing reads with animation writes.
@@ -578,6 +585,9 @@ export function Sidebar() {
 			if (key && slot.sessionFile) rowAliases.set(pathKey(slot.sessionFile), key);
 			return key;
 		};
+		// Also a chat the service answered with that is already saved (it reuses an untouched one, see hub.newSession):
+		// its saved row takes the stand-in's key instead of growing in beside it.
+		for (const slot of slots) aliasOf(slot);
 		const listable = (slot) => !!slot.sessionFile && !archivedPaths.has(pathKey(slot.sessionFile)) && (slot.hasContent || slot.firstMessage || slot.active || slot.slot === activeSlot);
 		const row = (slot) => ({ rowKey: aliasOf(slot), path: slot.sessionFile, id: slot.sessionId, name: slot.name || "", firstMessage: slot.firstMessage, modified: Date.now(), unsaved: true, copy: !!slot.copy, empty: !slot.hasContent && !slot.firstMessage && !slot.active && !slot.name });
 		const byRoot = new Map();

@@ -57,7 +57,7 @@ const failure = (title, error) => {
 // ---- /commit -----------------------------------------------------------------------------------------------------
 /**
  * Commits the way the terminal's /commit does: no choice is needed, so it starts at once. The Changes panel passes its
- * scope, so "Current conversation" commits only the files this chat changed; every other entry (the slash command, the
+ * scope, so "This chat" commits only the files this chat changed; every other entry (the slash command, the
  * /git panel) keeps committing the whole working tree.
  */
 export function commitChanges(options = {}) {

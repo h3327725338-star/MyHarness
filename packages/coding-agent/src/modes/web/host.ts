@@ -21,7 +21,7 @@ import { SessionHandoff, type SessionHandoffStatus } from "../../agent/runtime/s
 import type { AgentSessionRuntime } from "../../agent/runtime/session-runtime.ts";
 import type { Workspace, WorkspaceStore } from "../../application/workspace-store.ts";
 import { WorkspaceStore as WorkspaceStoreImpl } from "../../application/workspace-store.ts";
-import { UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
+import { getDefaultWorkingDir, UNBOUND_WORKSPACE_ID } from "../../config/paths/index.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../config/trust/index.ts";
 import { getDataDir } from "../../config.ts";
 import type { ProjectTrustContext } from "../../extensions/compat/types.ts";
@@ -40,6 +40,7 @@ import type { SessionEntry } from "../../session/types.ts";
 import { getRenamePlanPaths } from "../../symbols/workflow/rename-plans.ts";
 import { applyPatchPaths } from "../../tools/files/apply-patch-parser.ts";
 import { resolveToCwd } from "../../tools/path-utils.ts";
+import { pathIdentityKey } from "../../utils/paths.ts";
 import {
 	describeTaskNotification,
 	popupKindForRunState,
@@ -244,6 +245,12 @@ export interface SlotStatus {
 	unread: boolean;
 	/** The session belongs to no registered Workspace (created without one, or its Workspace was removed). */
 	unbound: boolean;
+	/**
+	 * The session is unbound and runs in MyHarness's own default working directory: the one place hub.newSession puts a
+	 * new chat without a Workspace, and so the only unbound chat it reuses for one. A chat whose Workspace was removed
+	 * keeps that folder and is not. Only worked out for unbound sessions (always false for a Workspace's chat).
+	 */
+	atDefaultDir: boolean;
 	/** The session runs inside a worktree copy (the sidebar shows one space at a time: main or copies). */
 	copy: boolean;
 	/**
@@ -509,6 +516,7 @@ export class WebHost {
 
 	get status(): SlotStatus {
 		const run = this.session.getRunStateSnapshot();
+		const unbound = this.unbound;
 		return {
 			mode: this.session.sessionManager.getMode(),
 			slot: this.slotId,
@@ -523,7 +531,11 @@ export class WebHost {
 			completion: this.completionActive,
 			lastOutcome: this.latestRunFinished()?.outcome ?? null,
 			unread: this.unread,
-			unbound: this.unbound,
+			unbound,
+			// Compared the way hub.newSession compares a reusable chat's folder with the one the new chat gets.
+			atDefaultDir:
+				unbound &&
+				pathIdentityKey(this.cwd) === pathIdentityKey(getDefaultWorkingDir(this.runtimeHost.services.agentDir)),
 			copy: isWorktreeCopyPath(this.runtimeHost.services.agentDir, this.cwd),
 			lastActivityAt: this.lastActivityAt,
 			conversationNaming: this.conversationNaming?.status ?? null,

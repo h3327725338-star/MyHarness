@@ -134,16 +134,16 @@ try{
  must(JSON.stringify(saved.wsPanels.a.wsTabs.map(tab=>tab.id))===JSON.stringify(inA),'the saved panel of A is wrong');
  must(saved.wsTabs===undefined,'the old global tab list is still written');
 
- // The uncommitted count sits on the scope button that owns it: the conversation's own number on Current conversation,
+ // The uncommitted count sits on the scope button that owns it: the conversation's own number on This chat,
  // the folder's whole number on Working tree. There is no separate explanatory row.
  setView({chatMode:'coding'});
  setView({changesScope:'session'});
  render(h(ChangesPanel,{}),document.getElementById('app'));
  const scopeButton=(label)=>[...document.querySelectorAll('.panel-toolbar .segmented button')].find(b=>b.textContent.trim().startsWith(label));
  // The counts render a moment after the panel; a fixed short wait read them too early on a slow runner.
- for(const end=Date.now()+4000;Date.now()<end&&!(scopeButton('Current conversation')?.textContent.trim()==='Current conversation 3'&&scopeButton('Working tree')?.textContent.trim()==='Working tree 2');)await wait(20);
- must(!!scopeButton('Current conversation'),'the Changes panel lost its conversation scope');
- must(scopeButton('Current conversation')?.textContent.trim()==='Current conversation 3','the conversation scope does not carry how much of this chat is uncommitted: '+scopeButton('Current conversation')?.textContent);
+ for(const end=Date.now()+4000;Date.now()<end&&!(scopeButton('This chat')?.textContent.trim()==='This chat 3'&&scopeButton('Working tree')?.textContent.trim()==='Working tree 2');)await wait(20);
+ must(!!scopeButton('This chat'),'the Changes panel lost its conversation scope');
+ must(scopeButton('This chat')?.textContent.trim()==='This chat 3','the conversation scope does not carry how much of this chat is uncommitted: '+scopeButton('This chat')?.textContent);
  must(scopeButton('Working tree')?.textContent.trim()==='Working tree 2','the worktree scope does not carry the uncommitted count: '+scopeButton('Working tree')?.textContent);
  must(!document.querySelector('.changes-basis'),'the Changes panel still shows an explanatory row');
  const gitBadges=[...document.querySelectorAll('.gitbar .badge')].map(node=>node.textContent.trim());
@@ -153,7 +153,7 @@ try{
  setView({chatMode:'general'});
  render(h(ChangesPanel,{}),document.getElementById('app'));
  await wait(80);
- must(scopeButton('Current conversation')?.textContent.trim()==='Current conversation','a general chat still shows the conversation uncommitted count: '+scopeButton('Current conversation')?.textContent);
+ must(scopeButton('This chat')?.textContent.trim()==='This chat','a general chat still shows the conversation uncommitted count: '+scopeButton('This chat')?.textContent);
  must(scopeButton('Working tree')?.textContent.trim()==='Working tree','a general chat still shows the folder uncommitted count: '+scopeButton('Working tree')?.textContent);
  must(!document.querySelector('.gitbar'),'a general chat still shows the folder Git bar');
 

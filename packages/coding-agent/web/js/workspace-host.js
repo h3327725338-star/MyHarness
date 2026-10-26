@@ -50,7 +50,28 @@ export function workspaceState() {
 		tabs: state.view.wsTabs.map((tab) => ({ id: tab.id, type: tab.type, path: tab.path, url: tab.url })),
 		closed: state.view.wsClosed.map((tab) => ({ id: tab.id, type: tab.type, path: tab.path, url: tab.url })),
 		media: mediaState(mediaIn(state.view.wsActive)),
+		onScreen: true,
 	};
+}
+
+/**
+ * Whether an opened tab is really drawn: its pane is mounted and shown in a panel that has a width. Polled with timers,
+ * not animation frames, which stop while the window is hidden or minimized. The Agent may only tell the user a tab is
+ * open in front of them when this says "visible".
+ */
+async function shownOnScreen(tabId, limitMs = 800) {
+	if (typeof document === "undefined") return "not-yet";
+	const drawn = () => {
+		const pane = paneOf(tabId);
+		const panel = document.querySelector("aside.panel");
+		return !!pane && !pane.hidden && !!panel && panel.getBoundingClientRect().width > 0;
+	};
+	const started = Date.now();
+	while (!drawn()) {
+		if (Date.now() - started >= limitMs) return "not-yet";
+		await new Promise((resolve) => setTimeout(resolve, 16));
+	}
+	return document.visibilityState === "visible" ? "visible" : "window-hidden";
 }
 
 const tabSummary = (tab) => ({ id: tab.id, type: tab.type, path: tab.path, url: tab.url });
@@ -182,7 +203,10 @@ export async function runWorkspaceCommand(command) {
 			const id = actions.openWorkspace({ type: tab.type, path: tab.path, url: tab.url }, { background: value.background === true });
 			if (!id)
 				throw new Error("workspace: this tab needs type=browser with a url, or type=file with a path");
-			return workspaceState();
+			// A tab opened in the background is not meant to be shown; only the one that comes to the front is checked.
+			if (value.background === true && state.view.wsActive !== id) return workspaceState();
+			const shown = await shownOnScreen(id);
+			return { ...workspaceState(), shown };
 		}
 		case "close":
 			actions.closeWorkspaceTab(String(value.tabId || ""));

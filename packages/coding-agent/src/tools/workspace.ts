@@ -644,6 +644,23 @@ function formatTab(tab: WorkspaceTabSummary): string {
 	return `${tab.active ? "→ " : "  "}${tab.type} ${tab.id} ${label}${state ? ` ${state}` : ""}`;
 }
 
+const NOT_ON_SCREEN =
+	"this chat is not the one on the user's screen; the tab is saved in this chat's panel and appears when the user opens this chat. Do not say it is open in front of the user";
+
+/**
+ * Whether the page really drew what `open` asked for. A chat that is not on screen only changes its saved panel
+ * (`onScreen: false`); on screen the page reports `shown` once the tab's pane is mounted in a visible panel.
+ */
+function screenLine(reply: unknown): string {
+	const value = reply && typeof reply === "object" ? (reply as { onScreen?: boolean; shown?: string }) : {};
+	if (value.onScreen === false) return `\n  on_screen=no (${NOT_ON_SCREEN})`;
+	if (value.shown === "visible") return "\n  on_screen=yes";
+	if (value.shown === "window-hidden")
+		return "\n  on_screen=window-hidden (the MyHarness window is minimized or hidden)";
+	if (value.shown === "not-yet") return "\n  on_screen=unconfirmed (requested; the page has not drawn it yet)";
+	return "";
+}
+
 export interface WorkspaceToolOptions {
 	/** Where the commands go; tests hand in a fake host, production uses the process IPC channel. */
 	channel?: () => DesktopWorkspaceChannel | undefined;
@@ -678,16 +695,19 @@ export function createWorkspaceToolDefinition(
 		tabs: WorkspaceTabSummary[];
 		activeId: string | null;
 		panelOpen: boolean;
+		onScreen?: false;
 	}> => {
 		const value = (await page({ action: "tabs" })) as {
 			tabs?: WorkspaceTabSummary[];
 			activeId?: string | null;
 			panelOpen?: boolean;
+			onScreen?: boolean;
 		};
 		return {
 			tabs: Array.isArray(value?.tabs) ? value.tabs : [],
 			activeId: value?.activeId ?? null,
 			panelOpen: !!value?.panelOpen,
+			...(value?.onScreen === false ? { onScreen: false as const } : {}),
 		};
 	};
 
@@ -743,6 +763,7 @@ export function createWorkspaceToolDefinition(
 		tabs: WorkspaceTabSummary[];
 		activeId: string | null;
 		panelOpen: boolean;
+		onScreen?: false;
 	}> => {
 		const state = await pageTabs();
 		const known = await browserTabs().catch(() => [] as WorkspaceTabSummary[]);
@@ -756,7 +777,12 @@ export function createWorkspaceToolDefinition(
 				error: live?.error,
 			};
 		});
-		return { tabs, activeId: state.activeId, panelOpen: state.panelOpen };
+		return {
+			tabs,
+			activeId: state.activeId,
+			panelOpen: state.panelOpen,
+			...(state.onScreen === false ? { onScreen: false as const } : {}),
+		};
 	};
 
 	const runOne = async (input: WorkspaceToolInput): Promise<WorkspaceResult> => {
@@ -785,7 +811,7 @@ export function createWorkspaceToolDefinition(
 			case "tabs": {
 				const state = await mergedTabs();
 				const lines = [
-					`[workspace] tabs=${state.tabs.length} active=${state.activeId ?? "(none)"} panel=${state.panelOpen ? "open" : "closed"}`,
+					`[workspace] tabs=${state.tabs.length} active=${state.activeId ?? "(none)"} panel=${state.panelOpen ? "open" : "closed"}${state.onScreen === false ? ` on_screen=no (${NOT_ON_SCREEN})` : ""}`,
 				];
 				for (const tab of state.tabs) lines.push(formatTab(tab));
 				if (state.tabs.length === 0) lines.push("  (no tabs open yet; use open)");
@@ -839,7 +865,7 @@ export function createWorkspaceToolDefinition(
 						content: [
 							{
 								type: "text",
-								text: `[workspace] opened browser tab ${tab.id}${background ? " (background)" : ""}\n  ${parsed.href}\n  state=${JSON.stringify(live)}`,
+								text: `[workspace] opened browser tab ${tab.id}${background ? " (background)" : ""}\n  ${parsed.href}\n  state=${JSON.stringify(live)}${screenLine(opened)}`,
 							},
 						],
 						details: { operation, activeId: tab.id, page: state as Record<string, unknown>, browser: live },
@@ -857,7 +883,7 @@ export function createWorkspaceToolDefinition(
 						content: [
 							{
 								type: "text",
-								text: `[workspace] opened file tab ${tab?.id || `file:${path}`}\n  path=${path}\n  tabs=${opened?.tabs?.length ?? 0}`,
+								text: `[workspace] opened file tab ${tab?.id || `file:${path}`}\n  path=${path}\n  tabs=${opened?.tabs?.length ?? 0}${screenLine(opened)}`,
 							},
 						],
 						details: {
@@ -1774,6 +1800,7 @@ export function createWorkspaceToolDefinition(
 			"Fewer round trips: add `screenshot: true` to an action to get the picture of the page after it, and use `batch` with `steps` (click/type/mouse/key/scroll/wait/navigate/back/forward/reload/text/interactive/find/exec/screenshot/state, at most 30) to run a sequence in one call; it stops at the first failing step and ends with one screenshot unless `screenshot: false`.",
 			"Bookmarks are sites the user trusts: `bookmarks` lists them, `open` with `bookmark` opens one, `login` signs in to a bookmarked site with the login the user saved (the password is filled by the app and never shown to you), and their site-permission requests are allowed automatically. `permissions` lists decisions and pending requests of any site; `answer_permission` allows or denies a pending one.",
 			"Media tabs support play/pause/seek/volume/mute/rate/subtitles. Every call returns the state that was actually reached; a page that does not answer in time is an error, not a success.",
+			"`open` reports `on_screen`: only `on_screen=yes` means the user can see the tab now. `on_screen=no` means this chat is not the one on the user's screen (the tab waits in this chat's panel), so never tell the user it is open in front of them.",
 			"What it cannot do: solve CAPTCHAs or bot checks, see or type a saved password, confirm payments, or drive anything outside this app's workspace.",
 		].join("\n"),
 		promptSnippet: loadSystemPrompt("tools/workspace/snippet.md"),

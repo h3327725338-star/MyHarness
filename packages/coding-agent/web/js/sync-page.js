@@ -13,8 +13,9 @@ function Card({ title, description, action, children, id }) {
 	</section>`;
 }
 
-function Row({ label, description, children, stack }) {
-	return html`<div class=${`set-row ${stack ? "stack" : ""}`}><div class="set-text"><span class="set-label">${label}</span>${description ? html`<span class="set-desc">${description}</span>` : null}</div><div class="set-control">${children}</div></div>`;
+/** `wide`: the control takes its own full-width line under the name, for values too long for the right column. */
+function Row({ label, description, children, stack, wide }) {
+	return html`<div class=${`set-row ${stack ? "stack" : ""} ${wide ? "wide" : ""}`}><div class="set-text"><span class="set-label">${label}</span>${description ? html`<span class="set-desc">${description}</span>` : null}</div><div class="set-control">${children}</div></div>`;
 }
 
 function formatBytes(value) {
@@ -351,7 +352,7 @@ export function SyncPage() {
 			<${Row}
 				label=${t("OAuth client id")}
 				description=${t("Paste the client ID of a Google Cloud desktop OAuth client.")}
-				stack=${true}
+				wide=${true}
 			>
 				<div class="row sync-field">
 					<input
@@ -380,7 +381,7 @@ export function SyncPage() {
 				description=${status.clientSecretConfigured
 					? t("A secret is saved on this computer. Paste a new one only to replace it.")
 					: t("Google rejects the token exchange without it, even with PKCE.")}
-				stack=${true}
+				wide=${true}
 			>
 				<div class="row sync-field">
 					<input

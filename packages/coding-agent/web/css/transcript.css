@@ -307,6 +307,8 @@ a.web-link:hover { color: var(--accent); text-decoration: underline; }
 .status-pill.memory-warn .mem-btn.retry { background: color-mix(in srgb, currentColor 16%, transparent); color: inherit; font-weight: 600; }
 .status-pill.memory-warn .mem-btn.retry:hover { background: color-mix(in srgb, currentColor 24%, transparent); }
 .status-pill.memory-warn .mem-btn.dismiss { background: transparent; color: inherit; padding: 0 8px; }
+/* Archive carries its folder icon only in the icon-only form of a narrow header (layout.css, @container chat-head). */
+.status-pill.memory-warn .mem-btn.dismiss > svg { display: none; }
 .status-pill.memory-warn .mem-btn.dismiss:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
 .status-pill.memory-warn .mem-btn:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
 .status-pill.danger { color: var(--danger); }

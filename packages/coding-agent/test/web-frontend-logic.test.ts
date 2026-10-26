@@ -2115,6 +2115,7 @@ describe("Web UI: applyAppearance writes <html> only when a value changed", () =
 
 describe("Web UI: cross-session turns cache (store.js bag + turns.js hit check)", () => {
 	let cacheStore: any;
+	let i18nLib: { getLang: () => string; setLang: (lang: string) => void };
 	let turnsLib: {
 		buildTurns: (...a: unknown[]) => unknown[];
 		cachedTurns: (...a: unknown[]) => unknown[] | null;
@@ -2124,6 +2125,7 @@ describe("Web UI: cross-session turns cache (store.js bag + turns.js hit check)"
 	beforeAll(async () => {
 		cacheStore = await import(new URL("store.js", webDir).href);
 		turnsLib = await import(new URL("turns.js", webDir).href);
+		i18nLib = await import(new URL("lang.js", webDir).href);
 	});
 
 	const user = { kind: "user", id: "cu-1", ts: 1, text: "task", images: [] };
@@ -2134,7 +2136,8 @@ describe("Web UI: cross-session turns cache (store.js bag + turns.js hit check)"
 		const cached = turnsLib.cachedTurns(cacheStore.getTurnsCache(slot), items, toolRuns, cwd);
 		if (cached) return cached;
 		const built = turnsLib.buildTurns(items, { cwd, toolRuns });
-		cacheStore.setTurnsCache({ items, toolRuns, cwd, turns: built }, slot);
+		// The transcript stores the language its turns were built in (their verbs are translated).
+		cacheStore.setTurnsCache({ items, toolRuns, cwd, lang: i18nLib.getLang(), turns: built }, slot);
 		return built;
 	};
 
@@ -2175,6 +2178,20 @@ describe("Web UI: cross-session turns cache (store.js bag + turns.js hit check)"
 		expect(turnsLib.cachedTurns(cacheStore.getTurnsCache("cache-s3"), [...items], toolRuns, "/w")).toBeNull();
 		expect(turnsLib.turnsProbe.builds - buildsBefore).toBe(0);
 		expect(turnsLib.cachedTurns(cacheStore.getTurnsCache("cache-s3"), items, toolRuns, "/w")).not.toBeNull();
+	});
+
+	it("② a language switch misses the cache: the built rows carry translated verbs", () => {
+		const items = [user, reply];
+		const toolRuns = {};
+		const before = i18nLib.getLang();
+		computeTurns("cache-lang", items, toolRuns, "/w");
+		expect(turnsLib.cachedTurns(cacheStore.getTurnsCache("cache-lang"), items, toolRuns, "/w")).not.toBeNull();
+		i18nLib.setLang(before === "en" ? "zh-CN" : "en");
+		try {
+			expect(turnsLib.cachedTurns(cacheStore.getTurnsCache("cache-lang"), items, toolRuns, "/w")).toBeNull();
+		} finally {
+			i18nLib.setLang(before);
+		}
 	});
 
 	it("③ exceeding the cap evicts the least recently used sessions first", () => {

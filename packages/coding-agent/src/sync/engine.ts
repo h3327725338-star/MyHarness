@@ -781,9 +781,9 @@ export class SyncEngine {
 			this.watcher = watch(this.options.dataRoot, { recursive: true }, (_event, filename) => {
 				if (filename) {
 					const name = filename.replace(/\\/g, "/");
-					// Derived catalogs, memory maintenance and Coding traces are local-only. Watching our own
-					// index writes (or shell output) used to wake a full sync scan again immediately.
-					if (/^(?:cache|logs|traces|tool-traces|\.git)(?:\/|$)/u.test(name)) return;
+					// Derived catalogs, memory maintenance, Coding traces and deleted chats waiting in trash/ are
+					// local-only. Watching our own index writes (or shell output) used to wake a full sync scan again.
+					if (/^(?:cache|logs|traces|tool-traces|trash|\.git)(?:\/|$)/u.test(name)) return;
 					if (/(?:^|\/)memory\/(?:index\.json|state\.json|maintenance\.[^/]+|migration-[^/]+\.json)$/u.test(name))
 						return;
 					if (/\.(?:tmp|part|crdownload|lock|bridge|owner)$/u.test(name)) return;

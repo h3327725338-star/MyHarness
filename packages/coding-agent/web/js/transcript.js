@@ -2,7 +2,7 @@
 // and (only when relevant) an outcome banner. Details open in layers: summary -> steps -> raw tool data.
 import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton, usePresence, useHeightGlide, useSwapGlide } from "./ui.js";
 import { createReadCache } from "./scheduling.js";
-import { retrySwitch, activeSlotId, api, fetchMoreTranscript, toast, getTurnsCache, notePaintedTurns, setTurnsCache, setView, slotUrl, useStore } from "./store.js";
+import { retrySwitch, activeSlotId, api, fetchMoreTranscript, toast, getTurnsCache, notePaintedTurns, setTurnsCache, setView, settleLanding, slotUrl, useStore } from "./store.js";
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
 import { DiffView, languageFor, parsePatch } from "./diff.js";
@@ -14,7 +14,7 @@ import { basename, clip, splitFirstSentence, dirname, fmtBytes, fmtDuration, fmt
 import { count, t, N_, serverText, tNodes, getLang } from "./i18n.js";
 import { openImageLightbox } from "./lightbox.js";
 import { MessageRail } from "./message-rail.js";
-import { jumpToQuote, registerScroller, REVEAL_ENTRY_EVENT, revealEntryIn, turnKeyForEntry } from "./message-nav.js";
+import { jumpToQuote, offsetInScroller, registerScroller, REVEAL_ENTRY_EVENT, revealEntryIn, scrollToNode, turnKeyForEntry } from "./message-nav.js";
 import { exportReadOnly } from "./export-mode.js";
 
 import { OUTCOME_ICON, processSummaryState } from "./process-summary.js";
@@ -221,7 +221,7 @@ function TaskResult({ task }) {
 	return html`<div class="sub-task">
 		<div class="action-row" onClick=${toggle} role="button" tabindex="0" aria-expanded=${open} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
 			<span class="action-ico">${task.status === "running" ? html`<${Spinner} />` : html`<span class=${`dot ${TASK_DOT[task.status] ?? ""}`} />`}</span>
-			<span class="action-text truncate">${task.description || clip(task.prompt || "", 80)}</span>
+			<span class="action-text truncate" title=${task.description || clip(task.prompt || "", 300)}>${task.description || clip(task.prompt || "", 80)}</span>
 			<span class="action-tail dim">${task.toolUseCount ? plural(task.toolUseCount, "tool call") : ""}${task.durationMs ? ` · ${fmtDuration(task.durationMs)}` : ""}<${Fold} /></span>
 		</div>
 		${task.status === "running" && task.lastToolInfo ? html`<div class="dim sub-last truncate">${task.lastToolInfo}</div>` : null}
@@ -281,7 +281,7 @@ const ActionRow = memo(function ActionRow({ step, defaultOpen }) {
 	return html`<div class=${`action ${step.isError ? "err" : ""} ${step.status}`} data-tool-call=${step.call?.id}>
 		<div class="action-row" onClick=${toggle} role="button" tabindex="0" aria-expanded=${open} onKeyDown=${(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())}>
 			<span class="action-ico"><${StatusGlyph} step=${step} /></span>
-			<span class="action-text truncate">
+			<span class="action-text truncate" title=${[step.verb, step.target, step.detail].filter(Boolean).join(" ")}>
 				<span class=${step.status === "running" ? "shimmer-text" : "verb"}>${step.verb}</span>
 				${step.target ? html` <span class=${step.kind === "run" ? "mono target" : "target"}>${step.target}</span>` : null}
 				${step.detail ? html` <span class="dim">${step.detail}</span>` : null}
@@ -514,7 +514,7 @@ function ProcessSummary({ turn, steps = turn.steps, stats = turn.stats, last = t
 	// happening and the timer (no arrow, and no empty area under it).
 	if (!steps.length) return html`<div class=${`summary live o-${outcome}`}><div class="summary-head" role="status">${head}</div></div>`;
 	return html`<div class=${`summary ${live ? "live" : ""} o-${summary.outcome}`}>
-		<button class="summary-head" onClick=${() => { interacted.current = true; setOpen(!open); }} aria-expanded=${open} title=${open ? t("Hide steps") : t("Show what the agent did")}>
+		<button class="summary-head" onClick=${() => { interacted.current = true; setOpen(!open); }} aria-expanded=${open} title=${`${label} · ${open ? t("Hide steps") : t("Show what the agent did")}`}>
 			${head}
 			<span class="grow" />
 			<${Fold} />
@@ -841,7 +841,7 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 	const lastBlock = pending ? undefined : segments.filter((segment) => segment.type === "process").pop();
 	// Folding rebuilds the blocks (texts and later blocks go into the first one): glide to the new height instead of jumping.
 	const processRef = useSwapGlide(fold);
-	return html`<section class=${`turn ${live ? "live" : ""}`} data-turn-key=${turn.user ? turn.key : undefined}>
+	return html`<section class=${`turn ${live ? "live" : ""}`} data-turn-key=${turn.user ? turn.key : undefined} data-last-turn=${isLast ? "" : undefined}>
 		${turn.user ? html`<${UserMessage} item=${turn.user} turn=${turn} />` : null}
 		<div class="turn-process" ref=${processRef}>
 		${segments.map((segment) =>
@@ -910,7 +910,7 @@ function Welcome({ snap, models, opening = false }) {
 	const model = snap?.model;
 	return html`<div class="welcome">
 		<h1>${ws ? tNodes("What should we work on in {workspace}?", { workspace: html`<span class="ws">${ws}</span>` }) : t("What should we work on?")}</h1>
-		<div class="welcome-meta dim mono truncate">${snap?.cwd || ""}</div>
+		<div class="welcome-meta dim mono truncate" title=${snap?.cwd || ""}>${snap?.cwd || ""}</div>
 		<div class="welcome-tips dim">
 			<span><span class="kbd">/</span> ${t("commands & skills")}</span>
 			<span><span class="kbd">@</span> ${t("mention a file")}</span>
@@ -932,6 +932,55 @@ const FILL_DELAY = 200;
 /** Whether a build published for `owner` describes the session on screen right now (same slot, same session id). */
 function describesSession(owner, slot, session) {
 	return !!owner && owner.slot === slot && (owner.session == null || owner.session === session);
+}
+// Where the reader was in each chat they left, by session id (a slot can be released and the chat reopened in another):
+// `{ stick: true }` when it followed the bottom, otherwise the first turn still visible at the top (its key) and how many
+// pixels of it were above the view. Coming back to the chat puts that turn at the same place (see the return below).
+const readerPlaces = new Map();
+const READER_PLACES_MAX = 64;
+/** How long a return keeps waiting for the turn it left at (a full build or an older page still on its way). */
+const RESTORE_WAIT_MS = 1500;
+function rememberPlace(session, place) {
+	if (!session || !place) return;
+	readerPlaces.delete(session);
+	readerPlaces.set(session, place);
+	while (readerPlaces.size > READER_PLACES_MAX) readerPlaces.delete(readerPlaces.keys().next().value);
+}
+/** The reader's place in the transcript `el` shows, or null when it shows no turn (a loading page, an empty chat). */
+function readPlace(el, stuck) {
+	const sections = el?.querySelectorAll(":scope > .transcript-inner > section.turn[data-turn-key]");
+	if (!sections?.length) return null;
+	if (stuck) return { stick: true };
+	const top = el.getBoundingClientRect().top;
+	// The first turn whose bottom is below the top of the view: a binary search, a handful of layout reads.
+	let lo = 0;
+	let hi = sections.length - 1;
+	let found = -1;
+	while (lo <= hi) {
+		const mid = (lo + hi) >> 1;
+		if (sections[mid].getBoundingClientRect().bottom > top + 1) {
+			found = mid;
+			hi = mid - 1;
+		} else lo = mid + 1;
+	}
+	if (found < 0) return { stick: true };
+	const node = sections[found];
+	return { stick: false, key: node.dataset.turnKey, offset: Math.round(top - node.getBoundingClientRect().top) };
+}
+/** The mount window of a first open: the newest CHUNK_FIRST turns, none held back. */
+const OPEN_WINDOW = { count: CHUNK_FIRST, held: 0 };
+/** Turns mounted above the turn a return goes back to, in its first commit (the rest of CHUNK_FIRST is below it). */
+const RETURN_ABOVE = 5;
+/**
+ * The first mount window of a return to the turn `key`: CHUNK_FIRST turns around it, with the `held` newest turns not
+ * mounted yet. They mount below it one batch per frame, then older ones above as usual, so a return costs one first
+ * batch like any open, wherever the turn is. The open window when the turn is not among `shown`.
+ */
+function windowFor(shown, key) {
+	const at = key ? shown.findIndex((turn) => turn.key === key) : -1;
+	if (at < 0) return OPEN_WINDOW;
+	const end = Math.min(shown.length, Math.max(at + 1, Math.max(0, at - RETURN_ABOVE) + CHUNK_FIRST));
+	return { count: CHUNK_FIRST, held: shown.length - end };
 }
 export function Transcript() {
 	const switching = useStore((s) => s.switching);
@@ -961,7 +1010,13 @@ export function Transcript() {
 	// The paged first screen (TRANSCRIPT_FIRST_PAGE): a full 400-item page with older items still
 	// server-side opens as the 60-turn tail preview, exactly like an over-long transcript.
 	const transcriptHasMore = useStore((s) => s.transcriptHasMore);
+	// A task-end notification asked for this chat's last turn (store.openChatAtLastTurn): it wins over a remembered place.
+	const landing = useStore((s) => s.landing);
+	// The built turns carry translated text (action verbs, summaries): after a language switch the turns on screen stay
+	// until the build in the new language lands, but none of their objects is reused for it.
+	const lang = useStore((s) => s.view.lang);
 	const turns = useMemo(() => {
+		const reusable = prevOwner.current.lang === lang ? prevTurns.current : null;
 		// A loading shell has no transcript to project; avoid empty intermediate builds and cache pollution.
 		if (switching || items.length === 0) {
 			previewing.current = false;
@@ -973,7 +1028,7 @@ export function Transcript() {
 		const cached = cachedTurns(getTurnsCache(turnsSlot), items, toolRuns, cwd);
 		if (cached) {
 			prevTurns.current = cached;
-			prevOwner.current = { slot: turnsSlot, session };
+			prevOwner.current = { slot: turnsSlot, session, lang };
 			previewing.current = false;
 			return cached;
 		}
@@ -985,7 +1040,7 @@ export function Transcript() {
 			// the reader's scroll position away; the build driver below publishes each full build as it lands.
 			if (asyncTurns && describesSession(asyncTurns, turnsSlot, session)) {
 				prevTurns.current = asyncTurns.turns;
-				prevOwner.current = { slot: turnsSlot, session: asyncTurns.session };
+				prevOwner.current = { slot: turnsSlot, session: asyncTurns.session, lang: asyncTurns.lang };
 				previewing.current = false;
 				return asyncTurns.turns;
 			}
@@ -996,36 +1051,36 @@ export function Transcript() {
 			// Cold load: keep a complete tail turn when possible, rather than cutting in the middle of a tool exchange.
 			// Only until the first full build of this session lands: from then on the preview is never shown again.
 			previewing.current = true;
-			return buildTurns(previewSlice, { cwd, toolRuns }, prevTurns.current);
+			return buildTurns(previewSlice, { cwd, toolRuns }, reusable);
 		}
 		// Small sessions still build synchronously, but under an 8ms frame budget: drive the shared generator
 		// directly and publish only a finished build. When the budget runs out, show the same tail-window preview
 		// the cold-load path above shows and let the single-flight startBuild below publish the full build (it is
 		// gated to run while previewing/fullNeeded); no intermediate state is published and thumbnails never roll back.
-		const work = buildTurnsWork(items, { cwd, toolRuns }, prevTurns.current);
+		const work = buildTurnsWork(items, { cwd, toolRuns }, reusable);
 		const deadline = performance.now() + 8;
 		let step = work.next();
 		while (!step.done && performance.now() < deadline) step = work.next();
 		if (step.done) {
 			const built = step.value;
-			setTurnsCache({ items, toolRuns, cwd, turns: built }, turnsSlot);
+			setTurnsCache({ items, toolRuns, cwd, lang, turns: built }, turnsSlot);
 			prevTurns.current = built;
-			prevOwner.current = { slot: turnsSlot, session };
+			prevOwner.current = { slot: turnsSlot, session, lang };
 			previewing.current = false;
 			return built;
 		}
 		let start = Math.max(0, items.length - 60);
 		while (start > Math.max(0, items.length - 120) && items[start]?.kind !== "user") start--;
 		previewing.current = true;
-		return buildTurns(items.slice(start), { cwd, toolRuns }, prevTurns.current);
-	}, [items, toolRuns, cwd, turnsSlot, session, asyncTurns, switching, transcriptHasMore]);
+		return buildTurns(items.slice(start), { cwd, toolRuns }, reusable);
+	}, [items, toolRuns, cwd, turnsSlot, session, asyncTurns, switching, transcriptHasMore, lang]);
 	// Full builds for huge sessions run one at a time: while one runs, newer stream updates only mark it dirty, the
 	// finished build is published as soon as it lands, and the newest state is built right after. Cancelling the build
 	// on every update (the previous shape) meant no build ever finished while output streamed, so the view kept falling
 	// back to the tail preview it had just replaced.
 	const build = useRef({ running: false, dirty: false, token: null, slot: null, items: null, toolRuns: null });
 	const buildRequest = useRef(null);
-	buildRequest.current = { items, toolRuns, cwd, slot: turnsSlot, session, switching };
+	buildRequest.current = { items, toolRuns, cwd, slot: turnsSlot, session, switching, lang };
 	const startBuild = () => {
 		const request = buildRequest.current;
 		const state = build.current;
@@ -1034,7 +1089,7 @@ export function Transcript() {
 				// The bag moved on: the running build describes another session and must not be published.
 				if (state.token) state.token.cancelled = true;
 				state.running = false;
-			} else if (state.items !== request.items || state.toolRuns !== request.toolRuns) {
+			} else if (state.items !== request.items || state.toolRuns !== request.toolRuns || state.lang !== request.lang) {
 				// Newer data arrived while a build runs: remember that one more build is owed and leave the single-flight
 				// gate alone. Falling through started a second full projection next to the running one (and reset the dirty
 				// flag), which is what let an older build land last and stay on screen.
@@ -1060,8 +1115,9 @@ export function Transcript() {
 		state.slot = request.slot;
 		state.items = request.items;
 		state.toolRuns = request.toolRuns;
+		state.lang = request.lang;
 		const token = state.token = { cancelled: false };
-		void buildTurnsAsync(request.items, { cwd: request.cwd, toolRuns: request.toolRuns }, request.slot === prevOwner.current.slot ? prevTurns.current : null, () => token.cancelled).then((built) => {
+		void buildTurnsAsync(request.items, { cwd: request.cwd, toolRuns: request.toolRuns }, request.slot === prevOwner.current.slot && prevOwner.current.lang === request.lang ? prevTurns.current : null, () => token.cancelled).then((built) => {
 			if (token.cancelled || !built) {
 				// A cancelled build must not leave the gate closed for the build that replaced it.
 				if (state.token === token) state.running = false;
@@ -1083,8 +1139,13 @@ export function Transcript() {
 				request.items[request.items.length - 1] === asyncTurns.items[asyncTurns.items.length - 1]
 			)
 				swapHeight.current = scroller.current?.scrollHeight || 0;
-			setTurnsCache({ items: request.items, toolRuns: request.toolRuns, cwd: request.cwd, turns: built }, request.slot);
-			setAsyncTurns({ slot: request.slot, session: request.session, items: request.items, toolRuns: request.toolRuns, cwd: request.cwd, turns: built });
+			// A build started before a language switch describes the old language: the next render builds again.
+			if (request.lang !== getLang()) {
+				if (state.dirty) scheduleBuild();
+				return;
+			}
+			setTurnsCache({ items: request.items, toolRuns: request.toolRuns, cwd: request.cwd, lang: request.lang, turns: built }, request.slot);
+			setAsyncTurns({ slot: request.slot, session: request.session, items: request.items, toolRuns: request.toolRuns, cwd: request.cwd, lang: request.lang, turns: built });
 			if (state.dirty) scheduleBuild();
 		}).catch(() => {
 			// A failed background build must not wedge the single-flight gate: clear it so the next render can
@@ -1127,7 +1188,26 @@ export function Transcript() {
 	const jump = usePresence(away, 160);
 	const lastTop = useRef(0);
 	const programmatic = useRef(false);
+	// After a landing (a notification click, see below) the last turn is held where it was put while the chat settles:
+	// older turns mounting, older pages and late layout above it would otherwise push it down (overflow-anchor is off).
+	const anchor = useRef(null);
+	const holdAnchor = () => {
+		const a = anchor.current;
+		const el = scroller.current;
+		if (!a || !el) return;
+		const node = content.current?.querySelector(":scope > section.turn[data-last-turn]");
+		if (!node || Date.now() > a.until) { anchor.current = null; return; }
+		// A landing on the loaded part of a long turn: once the turn's own message is there, the landing effect places it.
+		if (a.userless && node.querySelector(":scope > .user-row")) { anchor.current = null; return; }
+		const drift = node.getBoundingClientRect().top - el.getBoundingClientRect().top - a.offset;
+		if (Math.abs(drift) >= 1) { el.scrollTop += drift; lastTop.current = el.scrollTop; }
+	};
 	const holdPlace = useRef(false);
+	// A jump to one message of another chat, waiting for that chat to be on screen (see the reveal effect below).
+	const revealWant = useRef(null);
+	// A pending return to where the reader left this chat (readerPlaces), applied once that turn is on the page.
+	const restore = useRef(null);
+	const restoreTimer = useRef(0);
 	// At most one real scroll per frame: toBottom only schedules, the frame callback does one read plus one write.
 	const bottomFrame = useRef(0);
 	// The ResizeObserver reports the mounted content height; while pinned we scroll to that cached number instead
@@ -1166,7 +1246,13 @@ export function Transcript() {
 	};
 	const onScroll = () => scheduleMeasure();
 	const noteInteraction = (event) => {
-		if (event.type === "wheel" || event.type === "keydown" || event.target === scroller.current) holdPlace.current = false;
+		anchor.current = null;
+		if (event.type === "wheel" || event.type === "keydown" || event.type === "mousedown") landingWait.current = null;
+		if (event.type === "wheel" || event.type === "keydown" || event.target === scroller.current) {
+			holdPlace.current = false;
+			// The reader moved by themselves: a return still waiting for its turn must not pull them away afterwards.
+			restore.current = null;
+		}
 		const scrollInput = event.type === "wheel" ? event.deltaY < 0
 			: event.type === "keydown" ? ["ArrowUp", "PageUp", "Home"].includes(event.key)
 			: event.target === scroller.current;
@@ -1211,7 +1297,20 @@ export function Transcript() {
 		el.scrollTop = contentHeight.current;
 		lastTop.current = el.scrollTop;
 	};
+	const sentSeen = useRef({ session: null, id: null });
 	useLayoutEffect(() => {
+		const last = items[items.length - 1];
+		const sent = last?.kind === "user" && last.pending ? last.clientMessageId : null;
+		const seen = sentSeen.current;
+		sentSeen.current = { session, id: sent };
+		// The reader's own message was just sent in this chat: show it (and the answer that follows) wherever they were.
+		if (sent && seen.session === session && seen.id !== sent) {
+			restore.current = null;
+			holdPlace.current = false;
+			stick.current = true;
+			toBottom();
+			return;
+		}
 		// Without a ResizeObserver (or before its first callback) the item signal still has to drive the follow.
 		if (!roActive.current && stick.current && Date.now() - lastInteract.current > 500) toBottom();
 	}, [items, order, userBash, toolRuns]);
@@ -1226,7 +1325,10 @@ export function Transcript() {
 				if (height > 0) contentHeight.current = height;
 			}
 			if (stick.current) followToBottom();
-			else scheduleMeasure();
+			else {
+				holdAnchor();
+				scheduleMeasure();
+			}
 		});
 		ro.observe(content.current);
 		ro.observe(scroller.current);
@@ -1240,14 +1342,32 @@ export function Transcript() {
 	const nav = useRef({ revealAll: () => {}, pending: () => null });
 	useLayoutEffect(() => registerScroller({
 		el: scroller.current,
-		release: () => { stick.current = false; holdPlace.current = false; },
+		release: () => { stick.current = false; holdPlace.current = false; anchor.current = null; restore.current = null; },
 		revealAll: () => nav.current.revealAll(),
 		pending: () => nav.current.pending(),
 	}), []);
 	useLayoutEffect(() => {
-		stick.current = true;
+		anchor.current = null;
 		// The cached height belongs to the previous session; the first follow after a switch reads once.
 		contentHeight.current = 0;
+		// So do heights a chunk or a preview swap of the previous session took: they must not shift this one.
+		chunkHeightBefore.current = 0;
+		swapHeight.current = 0;
+		clearTimeout(restoreTimer.current);
+		const place = readerPlaces.get(session);
+		// Back to a chat the reader left away from the bottom: the turn they were reading goes back where it was. A jump to
+		// one message (View source, an answer's sources) or a notification's landing decides where it opens instead.
+		if (place && !place.stick && !revealWant.current && landing?.slot !== turnsSlot) {
+			stick.current = false;
+			holdPlace.current = false;
+			programmatic.current = false;
+			restore.current = { session, key: place.key, offset: place.offset, until: Date.now() + RESTORE_WAIT_MS };
+			restoreTimer.current = setTimeout(() => giveUpRestore(), RESTORE_WAIT_MS + 50);
+			applyRestore();
+			return;
+		}
+		restore.current = null;
+		stick.current = true;
 		toBottom();
 	}, [session]);
 	useEffect(() => () => {
@@ -1286,14 +1406,32 @@ export function Transcript() {
 	// id in the same commit) chunking restarts from the first batch; while one session keeps streaming the
 	// batch count only grows, so the transcript never collapses back. Derived during render on purpose: the
 	// first commit after a switch already shows 20, never a stale full mount.
-	const [batches, setBatches] = useState(1);
+	const [win, setWin] = useState(OPEN_WINDOW);
 	const batchSession = useRef(session);
 	const switched = batchSession.current !== session;
-	if (switched) batchSession.current = session;
-	const liveBatches = switched ? 1 : batches;
-	const mounted = liveBatches <= 1 ? Math.min(shown.length, CHUNK_FIRST) : Math.min(shown.length, CHUNK_FIRST + (liveBatches - 1) * CHUNK_NEXT);
-	const rendered = mounted >= shown.length ? shown : shown.slice(shown.length - mounted);
-	const renderedStart = shown.length - rendered.length;
+	const firstWin = useRef(OPEN_WINDOW);
+	if (switched) {
+		// This render replaces the chat on the page, and the page still shows the one being left: the last moment its
+		// reader's place can be read (a return still waiting keeps the place it waits for).
+		if (restore.current?.session !== batchSession.current) rememberPlace(batchSession.current, readPlace(scroller.current, stick.current));
+		batchSession.current = session;
+		const place = readerPlaces.get(session);
+		firstWin.current = place && !place.stick && !revealWant.current && landing?.slot !== turnsSlot ? windowFor(shown, place.key) : OPEN_WINDOW;
+	}
+	// Unmounted (a language switch rebuilds the interface, main.js keys <App> by it): the page still shows this chat, so
+	// its place is read now and the new Transcript opens where the reader is, not at a place from an earlier switch.
+	// Hook cleanups run before the old DOM goes and before the new Transcript's layout effects.
+	useLayoutEffect(() => () => {
+		if (restore.current?.session !== batchSession.current) rememberPlace(batchSession.current, readPlace(scroller.current, stick.current));
+	}, []);
+	const liveWin = switched ? firstWin.current : win;
+	// The window of the newest render: a chunk frame queued for an older window does nothing.
+	const winNow = useRef(liveWin);
+	winNow.current = liveWin;
+	const end = shown.length - Math.min(liveWin.held, shown.length);
+	const mounted = Math.min(end, liveWin.count);
+	const rendered = mounted >= shown.length ? shown : shown.slice(end - mounted, end);
+	const renderedStart = end - rendered.length;
 	const chunkFrame = useRef(0);
 	const chunkHeightBefore = useRef(0);
 	const cancelChunks = () => {
@@ -1302,28 +1440,86 @@ export function Transcript() {
 	};
 	// A jump from the message index to a message that is still mounting asks for the whole mount at once: the reader
 	// named a message, so waiting out the chunked mount would only look like a dead click.
-	const revealAll = () => setBatches(Number.MAX_SAFE_INTEGER);
+	const revealAll = () => setWin({ count: Number.MAX_SAFE_INTEGER, held: 0 });
 	nav.current.revealAll = revealAll;
 	nav.current.pending = () => {
 		// The cold-load tail preview stands in for a full build that is still on its way: that counts as mounting too.
 		const mounting = previewing.current || rendered.length < shown.length;
 		return mounting || transcriptHasMore ? { mounting, older: transcriptHasMore } : null;
 	};
+	// The return to a remembered place: the turn goes back to the same distance from the top of the view. It runs before
+	// paint (from the switch's layout effect, then after every commit while it waits), so the bottom is never shown first.
+	// A turn that is loaded but not mounted is mounted around at once; one that is not loaded yet (the full build or an
+	// older page on its way) is waited for at the bottom, like a first open, for at most RESTORE_WAIT_MS.
+	// An entry is used once: after the return (placed or given up) only a later leave or unmount writes a place again, so
+	// a stale one can never pull the reader back.
+	const giveUpRestore = () => {
+		clearTimeout(restoreTimer.current);
+		if (!restore.current) return;
+		readerPlaces.delete(restore.current.session);
+		restore.current = null;
+		stick.current = true;
+		toBottom();
+	};
+	const applyRestore = () => {
+		const want = restore.current;
+		const el = scroller.current;
+		if (!want || !el) return;
+		if (want.session !== session || landing?.slot === turnsSlot) {
+			restore.current = null;
+			clearTimeout(restoreTimer.current);
+			return;
+		}
+		const node = !switching && want.key ? content.current?.querySelector(`:scope > section.turn[data-turn-key="${CSS.escape(want.key)}"]`) : null;
+		if (node) {
+			// Waiting at the bottom may have counted as following it: the restored place is not.
+			stick.current = false;
+			el.scrollTop = node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop + want.offset;
+			lastTop.current = el.scrollTop;
+			readerPlaces.delete(want.session);
+			restore.current = null;
+			clearTimeout(restoreTimer.current);
+			scheduleMeasure();
+			return;
+		}
+		// Loaded but outside the mounted window (it arrived after the switch: the full build, an older page): mount around it.
+		const at = want.key ? shown.findIndex((turn) => turn.key === want.key) : -1;
+		if (at >= 0 && (at < renderedStart || at >= renderedStart + rendered.length)) {
+			// A chunk queued for the window on the page must not land on top of this one (its height would be compensated).
+			cancelChunks();
+			setWin(windowFor(shown, want.key));
+			return;
+		}
+		if (Date.now() < want.until && (switching || previewing.current || transcriptHasMore || transcriptFetching)) {
+			el.scrollTop = el.scrollHeight;
+			lastTop.current = el.scrollTop;
+			return;
+		}
+		// Not in this chat any more (another branch, a rewritten history) or waited long enough: open like a first open.
+		giveUpRestore();
+	};
 	useLayoutEffect(() => {
-		// A switch renders batch 1 from derived state; sync the counter before paint so later frames keep counting up.
-		if (switched && batches !== 1) setBatches(1);
+		// A switch renders its first window from derived state; sync the state before paint so later frames grow from it.
+		if (switched && win !== firstWin.current) setWin(firstWin.current);
 	});
 	useEffect(() => {
 		if (rendered.length >= shown.length) return undefined;
 		chunkFrame.current = requestAnimationFrame(() => {
 			chunkFrame.current = 0;
+			if (winNow.current !== liveWin) return;
+			if (liveWin.held > 0) {
+				// A return mounted around the turn being read: the newer turns go in below it first, which moves nothing.
+				const n = Math.min(CHUNK_NEXT, liveWin.held);
+				setWin({ count: liveWin.count + n, held: liveWin.held - n });
+				return;
+			}
 			// Older turns mount above what is already on screen; the height taken before the commit lets the
 			// layout effect below shift the scroll by exactly the growth, so the newest message does not move.
 			chunkHeightBefore.current = scroller.current?.scrollHeight || 0;
-			setBatches(liveBatches + 1);
+			setWin({ count: liveWin.count + CHUNK_NEXT, held: 0 });
 		});
 		return cancelChunks;
-	}, [rendered.length, shown.length, liveBatches]);
+	}, [rendered.length, shown.length, liveWin]);
 	useLayoutEffect(() => {
 		if (chunkHeightBefore.current && scroller.current) {
 			scroller.current.scrollTop += scroller.current.scrollHeight - chunkHeightBefore.current;
@@ -1353,11 +1549,11 @@ export function Transcript() {
 	// A jump to a message of another chat ("View source", an answer's sources): the chat is opened first, then the
 	// message is looked for in the loaded items. Older pages keep filling in by themselves, so a message that is not
 	// loaded yet is waited for (bounded); a message that is not on the chat's current branch is reported, not guessed.
-	const revealWant = useRef(null);
 	const [revealTick, setRevealTick] = useState(0);
 	useEffect(() => {
 		const onReveal = (event) => {
 			const detail = event.detail || {};
+			restore.current = null;
 			revealWant.current = { path: detail.path, entryId: detail.entryId, until: Date.now() + 15_000 };
 			setRevealTick((tick) => tick + 1);
 		};
@@ -1405,6 +1601,74 @@ export function Transcript() {
 		swapHeight.current = 0;
 		if (!stick.current && delta) scroller.current.scrollTop += delta;
 	}, [turns]);
+	useLayoutEffect(() => {
+		if (restore.current) applyRestore();
+	});
+	useEffect(() => () => clearTimeout(restoreTimer.current), []);
+	// A task-end notification was clicked (store.openChatAtLastTurn): once that chat's turns are on screen, the start of
+	// its last turn (the message that began the final reply) goes to the top with the message index's air above it. It
+	// runs after the bottom pin of the same commit and lets go of the bottom, so neither the follow nor a later stream
+	// update pulls the view back down; a commit record after the last turn keeps the end of the chat in view instead.
+	// A landing that could only reach the loaded part of a last turn longer than one transcript page: when older pages
+	// bring that turn's own message, the view glides up to it.
+	const landingWait = useRef(null);
+	const LAND_AIR = 14;
+	useLayoutEffect(() => {
+		const el = scroller.current;
+		const wait = landingWait.current;
+		if (wait && el) {
+			const target = turns[lastTurnIndex];
+			if (wait.slot !== turnsSlot || Date.now() > wait.until) landingWait.current = null;
+			else if (target?.user) {
+				landingWait.current = null;
+				const node = content.current?.querySelector(":scope > section.turn[data-last-turn]");
+				if (node) {
+					// Placed in the same commit that brings the message: the only movement is the turn's newly loaded start.
+					el.scrollTop = Math.max(0, offsetInScroller(el, node) - LAND_AIR);
+					lastTop.current = el.scrollTop;
+					anchor.current = { offset: Math.round(node.getBoundingClientRect().top - el.getBoundingClientRect().top), until: Date.now() + 10_000 };
+				}
+			}
+		}
+		const want = landing;
+		if (!want || !el || want.slot !== turnsSlot || switching) return;
+		// A chat that waits for a confirmation or an answer (store.openChatAtBottom) opens at its end, where the live turn
+		// shows what it waits for: the place the reader left it at is not restored, and is not wanted afterwards either.
+		if (want.bottom) {
+			settleLanding(want.nonce);
+			clearTimeout(restoreTimer.current);
+			restore.current = null;
+			anchor.current = null;
+			landingWait.current = null;
+			holdPlace.current = false;
+			stick.current = true;
+			rememberPlace(session, { stick: true });
+			toBottom(want.smooth);
+			return;
+		}
+		if (turns.length === 0) return;
+		const commitAfter = turns.slice(lastTurnIndex + 1).some((turn) => turn.standalone?.kind === "gitRepair" || turn.standalone?.kind === "gitStatus");
+		if (Date.now() > want.until || lastTurnIndex < 0 || commitAfter) { settleLanding(want.nonce); return; }
+		const node = content.current?.querySelector(":scope > section.turn[data-last-turn]");
+		if (!node) { revealAll(); return; }
+		settleLanding(want.nonce);
+		restore.current = null;
+		cancelAnimationFrame(bottomFrame.current);
+		bottomFrame.current = 0;
+		stick.current = false;
+		holdPlace.current = false;
+		programmatic.current = false;
+		const partial = !turns[lastTurnIndex].user && transcriptHasMore;
+		if (partial) landingWait.current = { slot: turnsSlot, until: want.until };
+		if (want.smooth) {
+			void scrollToNode(node);
+			return;
+		}
+		el.scrollTop = Math.max(0, offsetInScroller(el, node) - LAND_AIR);
+		lastTop.current = el.scrollTop;
+		anchor.current = { offset: Math.round(node.getBoundingClientRect().top - el.getBoundingClientRect().top), until: Date.now() + 10_000, userless: partial };
+		scheduleMeasure();
+	}, [landing, turnsSlot, switching, turns, lastTurnIndex, transcriptHasMore]);
 	const waiting = dialogs.length > 0 && active;
 	const compacting = !!compaction || !!snap?.flags?.compacting;
 	const liveBash = order.map((id) => userBash[id]).filter((entry) => entry && entry.status === "running");

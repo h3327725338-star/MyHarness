@@ -349,14 +349,21 @@ function dropEntries(
 	);
 }
 
-export function preserveArtifactOrigin(scope: SessionDataPathInfo, sessionPath: string): void {
+/** `sessionMetadataFile`: where the deleted chat's session.json (its display name) now is, if not in its own folder. */
+export function preserveArtifactOrigin(
+	scope: SessionDataPathInfo,
+	sessionPath: string,
+	sessionMetadataFile?: string,
+): void {
 	const root = getSessionDir(scope.dataRoot, scope.workspaceId, scope.sessionId);
 	const metadata = join(root, "metadata");
 	assertDirectPath(metadata);
 	mkdirSync(metadata, { recursive: true });
 	let name: string | undefined;
 	try {
-		name = (JSON.parse(readFileSync(join(metadata, "session.json"), "utf8")) as { name?: string }).name;
+		name = (
+			JSON.parse(readFileSync(sessionMetadataFile ?? join(metadata, "session.json"), "utf8")) as { name?: string }
+		).name;
 	} catch {
 		/* Optional display name only. */
 	}

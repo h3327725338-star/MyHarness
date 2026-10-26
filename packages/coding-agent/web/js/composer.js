@@ -215,7 +215,7 @@ function ModelPicker() {
 		}
 	};
 	return html`<span ref=${anchor} class="picker-anchor">
-		<button class="chip" onClick=${() => setOpen(!open)} title=${running ? t("Models can be switched when the agent is idle") : t("Model")} aria-haspopup="listbox" aria-expanded=${open}>
+		<button class="chip" onClick=${() => setOpen(!open)} title=${running ? t("Models can be switched when the agent is idle") : `${t("Model")}: ${model ? model.name || model.id : t("No model")}`} aria-haspopup="listbox" aria-expanded=${open}>
 			<span class="truncate chip-text">${model ? model.name || model.id : opening ? "…" : t("No model")}</span><${Chevron} />
 		</button>
 		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="end" width=${300} maxHeight=${380} class="model-pop">
@@ -816,6 +816,8 @@ const send = async (mode) => {
 	// The input box's stop ends everything, the sub-agents included; the activity bar's stop ends only sub-agents.
 	const stopTitle = subAgentsRunning ? t("Stop the run and all sub-agents (Esc)") : t("Stop the current run (Esc)");
 	const placeholder = noModel ? t("Add a provider in Settings to start…") : active ? t("Add to the running task… (Enter: {action})", { action: t(RUN_MODES[runMode].label) }) : t("Ask MyHarness to work on something…  / commands · @ files · ! shell");
+	// A narrow input box shows the short form, so the / @ ! hints stay readable (composer.css, @container composer-input).
+	const placeholderShort = noModel || active ? undefined : t("Ask MyHarness…  / commands · @ files · ! shell");
 
 	return html`<div class="composer-zone">
 		<div class="composer-col">
@@ -882,7 +884,7 @@ const send = async (mode) => {
 					return html`<div class="thumb" key=${i} role=${zoomable ? "button" : undefined} tabindex=${zoomable ? 0 : undefined} aria-label=${zoomable ? t("Preview image {name}", { name: img.name }) : undefined} onClick=${zoomable ? open : undefined} onKeyDown=${zoomable ? onKey : undefined}>${img.path ? html`<span class="file-attachment" title=${img.path}><${Icon} name="file" size=${18} /><span class="truncate">${img.name}</span></span>` : html`<img src=${img.url} alt=${img.name} />`}<button class="thumb-x" aria-label=${t("Remove attachment")} onClick=${(e) => { e.stopPropagation(); setImages(images.filter((_, j) => j !== i)); }}><${Icon} name="x" size=${11} /></button></div>`;
 				})}</div>` : null}
 				${loadingFiles ? html`<div class="branch-note dim" role="status"><${Spinner} />${t("Loading files…")}</div>` : null}
-				<${DraftEditor} apiRef=${area} class="composer-input" value=${text} placeholder=${placeholder}
+				<${DraftEditor} apiRef=${area} class="composer-input" value=${text} placeholder=${placeholder} placeholderShort=${placeholderShort}
 					onChange=${(value, at) => (setText(slashStart(value)), setCaret(at))}
 					onSelect=${setCaret}
 					onKeyDown=${onKeyDown}

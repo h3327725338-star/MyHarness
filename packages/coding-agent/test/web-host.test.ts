@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
@@ -782,6 +783,93 @@ describe("Web host (real runtime with a faux provider)", () => {
 			),
 		).not.toContain(path);
 	});
+
+	it("reports what deleting a chat removes and keeps for open, saved and deferred chats", async () => {
+		const fx = await start();
+		fx.faux.setResponses([fauxAssistantMessage([fauxText("saved answer")])]);
+		await fx.post("/api/prompt", { text: "impact chat" });
+		await fx.waitFor("run_finished");
+		const owner = fx.hub.get((await fx.get("/api/state")).slot)!;
+		const file = owner.session.sessionFile!;
+		const sessionDir = dirname(dirname(file));
+		const sessionId = owner.session.sessionManager.getSessionId();
+		writeFileSync(join(sessionDir, "artifacts", "reports", "report.md"), "12345");
+		mkdirSync(join(sessionDir, "uploads", "id-1"), { recursive: true });
+		writeFileSync(join(sessionDir, "uploads", "id-1", "attachment-a.txt"), "abc");
+		writeFileSync(join(sessionDir, "uploads", "id-1", "manifest.json"), "{}");
+		mkdirSync(join(sessionDir, "tool-results"), { recursive: true });
+		writeFileSync(join(sessionDir, "tool-results", "result.txt"), "xy");
+		writeFileSync(join(sessionDir, "tool-results", ".myharness-sidecar-orphans.json"), "{}");
+		const globalMemory = join(owner.session.sessionManager.getDataRoot()!, "memory");
+		mkdirSync(globalMemory, { recursive: true });
+		const memory = (name: string, updatedBy: string) =>
+			`---\nid: global/${name}\nname: ${name}\ndescription: d\ntype: project\nscope: global\nsourceSessionId: ${sessionId}\nupdatedBy: ${updatedBy}\n---\n\nbody\n`;
+		writeFileSync(join(globalMemory, "owned.md"), memory("owned", sessionId));
+		writeFileSync(join(globalMemory, "shared.md"), memory("shared", "consolidation"));
+		// A retired session memory: only its archived text is left, and deleting the memories removes it too.
+		mkdirSync(join(sessionDir, "memory", "archive"), { recursive: true });
+		writeFileSync(join(sessionDir, "memory", "archive", "old-1.md"), "---\nid: session/old\n---\n\nold\n");
+		const expected = {
+			artifacts: { files: 1, bytes: 5 },
+			history: { uploads: { files: 1, bytes: 3 }, toolResults: { files: 1, bytes: 2 } },
+			memories: { owned: [{ id: "global/owned", name: "owned", scope: "global" }], shared: 1, retired: 1 },
+		};
+		const impact = (path: string, slot?: string) =>
+			fx.get(`/api/sessions/delete-impact?path=${encodeURIComponent(path)}`, slot);
+		expect(await impact(file)).toEqual(expected);
+		// Saved but no longer open in any slot.
+		const next = await fx.post("/api/sessions/new", {});
+		await fx.hub.closeSlot(owner);
+		expect(fx.hub.slotsShowing(file)).toHaveLength(0);
+		expect(await impact(file, next.slot)).toEqual(expected);
+		// A deferred draft has nothing on disk yet.
+		const draft = (await fx.get("/api/state", next.slot)).session.file;
+		await fx.post("/api/sessions/touched", {}, next.slot);
+		expect(existsSync(draft)).toBe(false);
+		expect(await impact(draft, next.slot)).toEqual({
+			artifacts: { files: 0, bytes: 0 },
+			history: { uploads: { files: 0, bytes: 0 }, toolResults: { files: 0, bytes: 0 } },
+			memories: { owned: [], shared: 0, retired: 0 },
+		});
+		await expect(impact(join(fx.project, "unknown.jsonl"))).rejects.toThrow("404: Unknown session");
+	});
+
+	it.skipIf(process.platform !== "win32")(
+		"refuses with a plain message and deletes nothing while a file of the chat is open elsewhere",
+		async () => {
+			const fx = await start();
+			fx.faux.setResponses([fauxAssistantMessage([fauxText("saved answer")])]);
+			await fx.post("/api/prompt", { text: "open file chat" });
+			await fx.waitFor("run_finished");
+			const file = (await fx.get("/api/state")).session.file;
+			const report = join(dirname(dirname(file)), "artifacts", "reports", "report.docx");
+			writeFileSync(report, "docx");
+			const holder = spawn(
+				"powershell.exe",
+				[
+					"-NoProfile",
+					"-NonInteractive",
+					"-WindowStyle",
+					"Hidden",
+					"-Command",
+					`$f=[System.IO.File]::Open('${report.replace(/'/g, "''")}','Open','Read','None'); [Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); Start-Sleep -Seconds 60; $f.Close()`,
+				],
+				{ windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
+			);
+			cleanups.push(() => {
+				holder.kill();
+			});
+			await new Promise<void>((resolve) =>
+				holder.stdout?.on("data", (chunk: Buffer) => chunk.toString().includes("ready") && resolve()),
+			);
+			await expect(fx.post("/api/sessions/delete", { path: file, deleteArtifacts: true })).rejects.toThrow(
+				"409: A file of this chat is open in another program. Close it and try again. Nothing was deleted.",
+			);
+			expect(existsSync(file)).toBe(true);
+			expect(existsSync(report)).toBe(true);
+		},
+		60_000,
+	);
 
 	it("gives the Agent a conversation artifact path and indexes tool-created output", async () => {
 		const fx = await start();

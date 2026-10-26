@@ -20,6 +20,11 @@
 .nav-btn.primary-nav { color: var(--text); font-weight: 550; }
 .nav-btn .kbd { margin-left: auto; opacity: 0; transition: opacity var(--t-fast); }
 .nav-btn:hover .kbd { opacity: 1; }
+/* The hover-only shortcut hint keeps its room while invisible: in a narrow sidebar it gives way entirely, so a longer
+   label ("Search & commands" next to "Ctrl+Alt+K" needs a 220px content box) stays on one line instead of wrapping. */
+.sidebar-top .nav-btn { container: nav-btn / inline-size; }
+.sidebar-top .nav-btn .kbd { flex: none; }
+@container nav-btn (max-width: 224px) { .sidebar-top .nav-btn .kbd { display: none; } }
 .sidebar-search { padding: 0 var(--pad-side) 6px; }
 .sidebar-search .field { width: 100%; background: transparent; }
 .sidebar-search .field:not(:hover):not(:focus) { border-color: var(--border); }
@@ -87,6 +92,12 @@
 .chat-row .pin-mark { color: var(--text-4); margin-right: 4px; vertical-align: -1px; }
 /* Rows measure their place against their own list, so a list above them that folds does not count as a move (see ChatRows). */
 .chat-rows { position: relative; }
+/* A chat row that arrives or leaves (a new chat, a blank chat left behind, an archived or deleted chat). The row is never
+   seen cut in half: arriving, the space opens first (fast start, soft landing) and the row fades in once most of it is
+   there; leaving, the row fades out at once while the space closes behind it. */
+.chat-slot > .collapse.open { transition: grid-template-rows 220ms var(--ease-out), opacity 140ms var(--ease) 50ms, visibility 0s; }
+.chat-slot > .collapse:not(.open) { transition: grid-template-rows 200ms cubic-bezier(0.4, 0, 0.2, 1), opacity var(--t-fast) var(--ease-out), visibility 0s linear 200ms; }
+:root[data-motion="off"] .chat-slot > .collapse { transition-delay: 0s !important; }
 /* A fully expanded long group: twelve rows tall (CHAT_ROWS_SHOWN in sidebar.js), the rest scrolls inside without
    scrolling the sidebar once it reaches either end. */
 .chat-rows-capped { max-height: calc(12 * var(--h-row)); overflow-y: auto; overscroll-behavior: contain; }
@@ -430,8 +441,21 @@ html.ws-morph::view-transition-new(ws-sidebar) { animation: ws-morph-in var(--t-
 @container chat-head (max-width: 480px) {
 	.main-header .status-pill:not(.memory-warn) { flex: none; width: 26px; padding: 0; justify-content: center; }
 	.main-header .status-pill .pill-text { display: none; }
+	/* The memory warning keeps its two actions as icons (their names stay in the tooltips) instead of shrinking until
+	   "Archive" is cut; it beats the frameless rule above that lets status pills shrink. */
+	.app.ws-max .main-header .status-pill.memory-warn { flex: none; }
+	.main-header .memory-warn :is(.mem-text, .mem-btn-text) { display: none; }
+	.main-header .status-pill.memory-warn .mem-btn.dismiss > svg { display: block; }
 }
 @container chat-head (max-width: 360px) { .main-header :is(.title-btn, .badge) { display: none; } }
+/* Narrower still (the narrowest desktop collaboration column), the icon-only warning (120px) and the six header icons
+   (222px) no longer fit side by side: the warning then keeps only its sign, like the other pills, rather than pushing
+   the icons under the window buttons. Its actions come back once the column is wider; the tooltip still names it. */
+@container chat-head (max-width: 353px) {
+	.app.ws-max .main-header .status-pill.memory-warn { flex: 0 1 26px; padding: 0; justify-content: center; }
+	.main-header .status-pill.memory-warn :is(.mem-dot, .mem-divider, .mem-btn) { display: none; }
+	.main-header .status-pill.memory-warn .mem-left { padding-right: 0; }
+}
 .desktop-frameless .main, .desktop-frameless .app.ws-max .main, .desktop-frameless .panel, .desktop-frameless .app.ws-max .panel { margin: 0; border-width: 0; border-left: 1px solid var(--border); border-radius: 0; }
 .desktop-frameless .sidebar.is-collapsed + .main, .desktop-frameless .app.ws-max:has(> .sidebar.is-collapsed) .panel { margin: 0; border-left-width: 0; }
 .desktop-frameless .app.ws-max .main { border-left-width: 1px; }

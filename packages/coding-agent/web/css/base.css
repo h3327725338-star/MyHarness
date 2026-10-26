@@ -241,6 +241,12 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; flex: none; }
 .select-like[aria-expanded="true"] > .chev { transform: rotate(180deg); }
 .select-value { min-width: 0; }
 .select-placeholder { color: var(--text-3); }
+/* Every option label in the trigger's box, stacked in one cell and never painted (select.js): a container that keeps the
+   width of the longest choice, as a native select does, sizes itself on it (the settings rows, overlays.css). The labels
+   come from data-label, so the text is not part of the page's text. Elsewhere it takes no room. */
+.select-sizer { display: none; }
+.select-sizer > span { grid-area: 1 / 1; padding: 0 30px 0 10px; border: 1px solid transparent; font-size: var(--fs-body); white-space: nowrap; }
+.select-sizer > span::before { content: attr(data-label); }
 
 /* The Select panel: never narrower than the trigger (its min-width is set when opening), never wider than min(420 px,
    viewport − 16 px); the option list itself scrolls at 280 px. Rows keep the shared `.pop-item` look, long labels wrap

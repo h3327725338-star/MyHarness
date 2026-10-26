@@ -2,7 +2,7 @@
 
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import {
 	generateConversationTitle,
 	normalizeConversationTitle,
@@ -33,7 +33,7 @@ import {
 } from "../../session/history/continuation.ts";
 import { MissingSessionCwdError } from "../../session/manager/cwd.ts";
 import { SessionManager } from "../../session/manager/index.ts";
-import { deleteSessionFile } from "../../session/storage/jsonl/file-operations.ts";
+import { deleteSessionFile, summarizeSessionDeletion } from "../../session/storage/jsonl/file-operations.ts";
 import { readSessionHeader } from "../../session/storage/jsonl/index.ts";
 import {
 	getIndexedSessionMarkers,
@@ -75,6 +75,16 @@ export function paginateSessionSummaries<T>(
 		sessions: summaries.slice(pagination.offset, pagination.offset + pagination.limit),
 		total: summaries.length,
 	};
+}
+
+/**
+ * Whether `path` lies inside `root`, compared by path identity (case-insensitive on Windows). Identity keys use the
+ * platform separator, so the prefix test does too: a `/` never matches a Windows key. Exported for tests.
+ */
+export function isPathInsideRoot(path: string, root: string): boolean {
+	const rootKey = pathIdentityKey(root);
+	const key = pathIdentityKey(path);
+	return key === rootKey || key.startsWith(rootKey.endsWith(sep) ? rootKey : `${rootKey}${sep}`);
 }
 
 function asObject(body: unknown): Record<string, unknown> {
@@ -661,12 +671,8 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 			patchIndexMarker(path, suffix.slice(1) as "pinned" | "archived", on);
 	};
 	/** Header fast path guard: only files inside the current library's sessions tree can be known sessions. */
-	const isInsideSessionsLibrary = (path: string): boolean => {
-		const customDir = sessionDir();
-		const rootKey = pathIdentityKey(customDir ?? getWorkspacesDir(getDataDir()));
-		const key = pathIdentityKey(path);
-		return key === rootKey || key.startsWith(`${rootKey}/`);
-	};
+	const isInsideSessionsLibrary = (path: string): boolean =>
+		isPathInsideRoot(path, sessionDir() ?? getWorkspacesDir(getDataDir()));
 	const assertKnownSession = async (path: string, allowDeferred = false): Promise<void> => {
 		if (allowDeferred && hub.slotsShowing(path).length > 0) return;
 		// Fast path: persistent index hit (rows only exist for real library files).
@@ -731,10 +737,30 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 			deleteArtifacts: input.deleteArtifacts === true,
 			deleteMemory: input.deleteMemory === true,
 		});
-		if (!deleted.ok) throw new HttpError(409, deleted.error ?? "Failed to delete the chat.");
+		if (!deleted.ok)
+			throw new HttpError(
+				409,
+				deleted.code === "in-use"
+					? "A file of this chat is open in another program. Close it and try again. Nothing was deleted."
+					: deleted.code === "memory-busy"
+						? "Memories are being updated right now. Try again in a moment. Nothing was deleted."
+						: (deleted.error ?? "Failed to delete the chat."),
+			);
 		await setSessionMarker(path, ".pinned", false);
 		host.broadcast("workspaces_changed", {});
 		return { ok: true };
+	});
+
+	/**
+	 * What the delete confirmation shows before anything is deleted: the chat's artifact files, the uploads and tool
+	 * results that stay, and the memories "Also delete this chat's memories" would remove (`owned`, plus `retired`:
+	 * archived memory text of this chat alone) or keep because another chat, consolidation or a restore also wrote them,
+	 * or a copy of the chat still carries them (`shared`). Read-only, asynchronous I/O only.
+	 */
+	server.route("GET", "/api/sessions/delete-impact", async ({ url }) => {
+		const path = asString(url.searchParams.get("path"), "path");
+		await assertKnownSession(path, true);
+		return summarizeSessionDeletion(path);
 	});
 
 	server.route("POST", "/api/sessions/clear", async ({ body }) => {

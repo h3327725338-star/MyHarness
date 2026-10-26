@@ -101,8 +101,9 @@ const unesc = (s) => String(s).replace(/&(amp|lt|gt|quot|#39);/g, (m) => UNESC[m
 /**
  * Controlled by `value`; reports `onChange(text, caret)` and `onSelect(caret)`. `apiRef` gets `focus()`, `setCaret(pos)`
  * and `element`, which the composer uses where a textarea's focus() / setSelectionRange() were used before.
+ * `placeholderShort` (optional) is the placeholder a narrow box shows instead; the stylesheet decides when.
  */
-export function DraftEditor({ value, onChange, onSelect, onKeyDown, onPaste, placeholder, apiRef, class: cls }) {
+export function DraftEditor({ value, onChange, onSelect, onKeyDown, onPaste, placeholder, placeholderShort, apiRef, class: cls }) {
 	const root = useRef(null);
 	const st = useRef({ text: null, caret: 0, composing: false, undo: [], redo: [], lastKind: "", lastAt: 0, rows: null });
 	const props = useRef({});
@@ -324,7 +325,7 @@ export function DraftEditor({ value, onChange, onSelect, onKeyDown, onPaste, pla
 	};
 
 	return html`<div ref=${root} class=${`draft ${cls || ""}`} contenteditable="true" role="textbox" aria-multiline="true"
-		aria-placeholder=${placeholder} data-placeholder=${placeholder} spellcheck=${false} autocapitalize="off" autocorrect="off" translate="no"
+		aria-placeholder=${placeholder} data-placeholder=${placeholder} data-placeholder-short=${placeholderShort} spellcheck=${false} autocapitalize="off" autocorrect="off" translate="no"
 		onKeyDown=${onKey}
 		onPaste=${(event) => {
 			props.current.onPaste?.(event);

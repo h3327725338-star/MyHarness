@@ -162,6 +162,21 @@ describe("workspace tool: opening and closing tabs", () => {
 		expect(sent).toHaveLength(1);
 	});
 
+	it("says whether the opened tab is really on the user's screen", async () => {
+		const tabs = [{ id: "file:a.html", type: "file", path: "a.html" }];
+		const reply = (extra: Record<string, unknown>) =>
+			fakeHost((channel) => (channel === "workspace" ? { ...pageState(tabs, "file:a.html"), ...extra } : [])).tool;
+		const text = async (extra: Record<string, unknown>, operation = "open") =>
+			(await call(reply(extra), { operation, type: "file", path: "a.html" })).content[0]!.text;
+		// The page kept the tab in a chat that is not on screen: the model must not claim it is open in front of the user.
+		expect(await text({ onScreen: false })).toContain("on_screen=no");
+		expect(await text({ onScreen: false }, "tabs")).toContain("on_screen=no");
+		expect(await text({ onScreen: true, shown: "visible" })).toContain("on_screen=yes");
+		expect(await text({ onScreen: true, shown: "window-hidden" })).toContain("on_screen=window-hidden");
+		expect(await text({ onScreen: true, shown: "not-yet" })).toContain("on_screen=unconfirmed");
+		expect(await text({ onScreen: true }, "tabs")).not.toContain("on_screen");
+	});
+
 	it("creates the browser tab in the page and the host view under the same id", async () => {
 		const events: string[] = [];
 		const { tool } = fakeHost((channel, command) => {

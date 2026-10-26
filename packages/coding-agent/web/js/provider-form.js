@@ -477,7 +477,7 @@ export function ProviderForm({ initial, apiTypes, defaults, keyArea, hasStoredKe
 				<div class="set-card-body col">
 					<div class="pf-detect">
 						<div class="row pf-detect-bar">
-							<input class="field mono grow" placeholder=${t("Model IDs to detect, e.g. gpt-5, deepseek-chat")} aria-label=${t("Model IDs to detect")} value=${idsText} disabled=${detecting} onInput=${(e) => setIdsText(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && (e.preventDefault(), runDetect())} />
+							<input class="field mono grow" placeholder=${t("e.g. gpt-5, deepseek-chat")} aria-label=${t("Model IDs to detect")} value=${idsText} disabled=${detecting} onInput=${(e) => setIdsText(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && (e.preventDefault(), runDetect())} />
 							<button class="btn" disabled=${detecting || !idsText.trim()} onClick=${runDetect}>${detecting ? html`<${Spinner} />` : html`<${Icon} name="search" size=${13} />`}${detecting ? t("Detecting…") : t("Detect")}</button>
 						</div>
 						<span class="dim pf-hint">${t("Only the Model IDs typed here are looked up in the endpoint's model list (separate several with commas or spaces); no request is sent to the models themselves. A new ID is added; for an existing model only what the list states is updated. Thinking effort levels, context window and the other values are never tested: tick or enter them yourself.")}</span>

@@ -9,6 +9,7 @@ import {
 	parseMemoryOperations,
 	sanitizeMemoryText,
 } from "../src/agent/runtime/auto-memory.ts";
+import { getSessionDir } from "../src/config/paths/index.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
 import type { ModelRuntime } from "../src/providers/runtime/index.ts";
 import type { SessionEntry } from "../src/session/manager/index.ts";
@@ -305,6 +306,60 @@ describe("auto memory", () => {
 		});
 		expect(existsSync(join(paths.globalDir, "disposed-memory.md"))).toBe(false);
 	});
+
+	it.each([true, false])(
+		"never recreates a deleted chat folder from an extraction still in flight (disposed=%s)",
+		async (disposeFirst) => {
+			const projectDir = join(testRoot, "deleted-project");
+			mkdirSync(projectDir, { recursive: true });
+			const sessionDir = getSessionDir(dataRoot, "workspace", "deleted-chat");
+			mkdirSync(join(sessionDir, "conversation"), { recursive: true });
+			let release: (() => void) | undefined;
+			let started: (() => void) | undefined;
+			const requested = new Promise<void>((resolve) => {
+				started = resolve;
+			});
+			const extractor = new AutoMemoryManager({
+				cwd: projectDir,
+				sessionId: "deleted-chat",
+				workspaceId: "workspace",
+				dataRoot,
+				settingsManager: SettingsManager.inMemory({
+					autoMemory: { enabled: true, provider: "test", model: "memory-model", thinkingLevel: "high" },
+				}),
+				persisted: true,
+				agentDir: join(testRoot, "deleted-agent"),
+				modelRunner: async () =>
+					await new Promise<string>((resolve) => {
+						release = () => resolve('<MEMORY_OPERATIONS>{"operations":[]}</MEMORY_OPERATIONS>');
+						started?.();
+					}),
+			});
+			const entries = [
+				{
+					type: "message",
+					id: "deleted-user",
+					parentId: null,
+					timestamp: new Date().toISOString(),
+					message: { role: "user", content: [{ type: "text", text: "记住这件事。" }], timestamp: Date.now() },
+				},
+			] as unknown as SessionEntry[];
+			try {
+				const extraction = extractor.runExtraction(entries);
+				await requested;
+				// The request was logged while the chat existed.
+				expect(existsSync(join(sessionDir, "memory", "maintenance.log"))).toBe(true);
+				if (disposeFirst) extractor.dispose();
+				rmSync(sessionDir, { recursive: true, force: true });
+				release?.();
+				await extraction;
+				await extractor.waitForBackgroundTasks();
+				expect(existsSync(sessionDir)).toBe(false);
+			} finally {
+				extractor.dispose();
+			}
+		},
+	);
 
 	it("uses one direct tool-free model request for extraction", async () => {
 		const projectDir = join(testRoot, "direct-project");

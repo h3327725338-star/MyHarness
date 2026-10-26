@@ -38,7 +38,8 @@ The project root contains the project configuration and runtime data:
 | `<data>\workspace-folders\` | General quick-created physical workspace folders | Same resolved Data root as the registry; existing workspace paths never move |
 | `<data>\workspaces\<workspace-id>\uploads\<source-id>\` | General workspace source file and `source.json` manifest | Shared across its chats; independent of session attachments; disabling library access does not delete files |
 | `<data>\workspaces\<workspace-id>\memory\` | Workspace active memories, archive and reference index | Shared by this Workspace's conversations |
-| `<data>\workspaces\<workspace-id>\sessions\<session-id>\memory\` | Conversation active memories and archive | Retained when the conversation is deleted, even when artifacts are explicitly deleted |
+| `<data>\workspaces\<workspace-id>\sessions\<session-id>\memory\` | Conversation active memories and archive, plus its memory maintenance job and log | Retained when the conversation is deleted unless its memories are explicitly deleted with it; a folder holding only the maintenance job/log is not retained |
+| `<data>\trash\` | What a chat deletion removes, moved here first (one folder per deletion) | Local-only, never synced; a folder left behind because a file was still open is removed by a later deletion |
 | `<project>\.myharness\settings.json` | Project Settings | Project-local configuration; tracked only when intentionally supplied |
 | `<project>\data\workspaces\<workspace-id>\` | Workspace registry, metadata and Session roots | Ignored runtime data; contains user conversations and paths |
 | `<project>\data\workspaces\<workspace-id>\sessions\<session-id>\conversation\` | Session JSONL entries | Primary product Session store; user data, not disposable build output |
@@ -54,14 +55,15 @@ Web file imports are stored alongside the originating Session JSONL in
 `uploads/<random-id>/attachment-<sanitized-name>`. Each import has a separate
 directory, so matching names do not overwrite one another. These are user-owned
 original file bytes; removing a draft attachment only removes its reference, not
-the stored file. Structured Session deletion removes them with the Session data
-directory; they must not be treated as disposable build cache.
+the stored file. Deleting a chat keeps them (copies of the chat, such as forks,
+may still refer to them); only an explicit attachment deletion removes them. They
+must not be treated as disposable build cache.
 
 ## Long-term memory
 
 Memory bodies are Markdown with metadata and are stored once at their owning global, Workspace or Conversation level. Recall uses only active global + current Workspace + current Conversation files. `archive/` is excluded from recall and stores prior versions and consolidated entries; age alone is not an archival rule. Files → Memories provides hierarchy-wide browsing and archive restoration. Restoring first archives any current version and retains the restored archive itself.
 
-All derived indexes, extraction cursors, migration records and pending ownership data live inside the active Data root. Workspace identity is the stable Workspace ID rather than a project-path hash. Old project-path hashes are used only to match legacy files to retained Workspace metadata; ambiguous or unmatched files are copied into `memory/pending/` without becoming global. Old files are not deleted, and migration markers prevent repeat imports. Removing a Workspace or deleting a Chat does not grant permission to remove its memories; its IDs remain attached to retained data. No permanent memory deletion UI/API is currently provided.
+All derived indexes, extraction cursors, migration records and pending ownership data live inside the active Data root. Workspace identity is the stable Workspace ID rather than a project-path hash. Old project-path hashes are used only to match legacy files to retained Workspace metadata; ambiguous or unmatched files are copied into `memory/pending/` without becoming global. Old files are not deleted, and migration markers prevent repeat imports. Removing a Workspace does not remove its memories; their IDs remain attached to retained data. Deleting a Chat keeps its memories unless the deletion dialog's "Also delete this chat's memories" is checked. Then the Chat's own Conversation memory folder goes, and so do the global and Workspace memories (with their archives) that only this Chat wrote: each memory version records its writer in `updatedBy` (the writing chat's session id, `consolidation` or `restore`), and a version older than that field counts as this Chat's only when it came from this Chat's extraction (`sourceSessionId`, no `sourceEntryId` repeated across versions) or from a `memory_write` creation recorded in this Chat's history. Memories that another chat, consolidation or a restore also changed, the resident profile and `memory/pending/` are kept. One memory can be permanently deleted with `memory_delete` or `POST /api/memory/delete` (body and all archives).
 
 ## Managed Worktree test services
 
@@ -109,10 +111,14 @@ parent index directories also create a local `.gitignore` containing `*`, useful
 with a different data root. Existing tracked files and `git add --force` are not
 made safe by ignore rules. Never auto-move files solely by filename heuristics.
 
-Deleting a chat defaults to preserving artifacts and a minimal
-`metadata/artifacts-origin.json` provenance record; chat contents, tool results
-and imported attachments are removed. Workspace/global references remain and mark
-the source chat deleted. The deletion UI offers an unchecked option to permanently
+Deleting a chat removes its conversation and metadata. By default it keeps its
+artifacts with a minimal `metadata/artifacts-origin.json` provenance record, its
+imported uploads, its tool results and its memories; an artifacts folder holding
+no file (only the empty reports/tests/temporary scaffold) is not kept. Deletion is
+all-or-nothing: everything that goes is first moved by rename into `<data>/trash/`,
+and when a file of it is open in another program nothing is deleted and the chat
+stays as it was (files that are kept may stay open). Workspace/global references
+remain and mark the source chat deleted. The deletion UI offers an unchecked option to permanently
 delete artifacts too; that removes the original files and their derived references,
 not other chats' output. Bulk chat deletion follows the same backend default.
 

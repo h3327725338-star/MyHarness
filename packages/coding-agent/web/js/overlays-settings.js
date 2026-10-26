@@ -68,8 +68,9 @@ const PAGE_NOTE = {
 /** Groups of settings that share a switch: the switch sits in the card header, the rest of the group below it. */
 const GROUPS = { "webSearch.": "webSearch.enabled" };
 
-function Row({ label, description, children, stack, off, wide }) {
-	return html`<div class=${`set-row ${stack ? "stack" : ""} ${off ? "off" : ""} ${wide ? "wide" : ""}`}><div class="set-text"><span class="set-label">${label}</span>${description ? html`<span class="set-desc" title=${description}>${description}</span>` : null}</div><div class="set-control">${children}</div></div>`;
+/** `note`: something that belongs to the setting rather than to its value (a permission to grant), shown under the description. */
+function Row({ label, description, children, stack, off, wide, note }) {
+	return html`<div class=${`set-row ${stack ? "stack" : ""} ${off ? "off" : ""} ${wide ? "wide" : ""}`}><div class="set-text"><span class="set-label">${label}</span>${description ? html`<span class="set-desc" title=${description}>${description}</span>` : null}${note || null}</div><div class="set-control">${children}</div></div>`;
 }
 
 function Card({ title, description, action, children, collapsible = false }) {
@@ -144,7 +145,7 @@ function TokensField({ item, onApply }) {
 			toast(t("Enter a positive number of {unit}.", { unit: item.unit }), "warning", 4000);
 		} else if (tokens !== item.value) onApply(item.id, tokens);
 	};
-	return html`<input class=${`field num ${invalid ? "invalid" : ""}`} inputmode="decimal" autocomplete="off" spellcheck="false" aria-label=${serverText(item.label)} aria-invalid=${invalid ? "true" : undefined} placeholder=${t("Model limit")} value=${draft} onInput=${(event) => setDraft(event.target.value)} onBlur=${(event) => commit(event.target.value)} onKeyDown=${(event) => {
+	return html`<input class=${`field num ${invalid ? "invalid" : ""}`} inputmode="decimal" autocomplete="off" spellcheck="false" aria-label=${serverText(item.label)} aria-invalid=${invalid ? "true" : undefined} placeholder=${t("No cap")} value=${draft} onInput=${(event) => setDraft(event.target.value)} onBlur=${(event) => commit(event.target.value)} onKeyDown=${(event) => {
 		if (event.key === "Enter") (event.preventDefault(), commit(event.target.value));
 	}} />`;
 }
@@ -380,7 +381,7 @@ const describe = (item) => {
 /** `before`: something shown in front of the control (a state of the setting, or what to do about it). */
 function SettingRow({ item, models, off, before }) {
 	const [saving, save] = useSaving();
-	return html`<${Row} label=${html`${serverText(item.label)}${item.type === "number" && item.min != null && item.max != null ? html` <span class="dim">(${item.min}–${item.max})</span>` : null}`} description=${describe(item)} off=${off} wide=${item.type === "modelRef" || (item.type === "multi" && item.id === "webSearch.engines")}>
+	return html`<${Row} label=${html`${serverText(item.label)}${item.type === "number" && item.min != null && item.max != null ? html` <span class="dim">(${item.min}–${item.max})</span>` : null}`} description=${describe(item)} note=${item.id === "popupNotifications" ? html`<${BrowserNotifications} on=${item.value !== "never"} />` : null} off=${off} wide=${item.type === "modelRef" || (item.type === "multi" && item.id === "webSearch.engines")}>
 		${before || notificationExtra(item)}<${Saving} shown=${saving} /><${SettingControl} item=${item} models=${models} onApply=${save} />
 	<//>`;
 }
@@ -795,13 +796,13 @@ function BrowserNotifications({ on }) {
 	const permission = useStore(() => notificationPermission());
 	// The desktop app shows its own notifications: there is no browser permission to ask for.
 	if (!on || permission === "granted" || globalThis.myHarnessDesktop?.notify) return null;
-	if (permission === "default") return html`<button class="btn sm" onClick=${allowBrowserNotifications} title=${t("Until this browser allows notifications, the system popup is used.")}>${t("Allow in this browser")}</button>`;
+	if (permission === "default") return html`<button class="btn sm set-row-action" onClick=${allowBrowserNotifications} title=${t("Until this browser allows notifications, the system popup is used.")}>${t("Allow in this browser")}</button>`;
 	return html`<span class="badge" title=${permission === "unsupported" ? t("This browser does not support notifications. The system popup is used instead.") : t("This browser does not allow notifications from this page, so the system popup is used instead. To get them in the browser, allow notifications for this page in the browser's site settings.")}>${t("System popup")}</span>`;
 }
 
-/** Something shown in front of a notification setting's control: the browser's permission state, or a button that plays the chosen sound. */
+/** Something shown in front of a notification setting's control: a button that plays the chosen sound. (The browser's
+ * permission state for popups is a note under the row's description, so the choice keeps the whole column.) */
 function notificationExtra(item) {
-	if (item.id === "popupNotifications") return html`<${BrowserNotifications} on=${item.value !== "never"} />`;
 	if (item.id === "notificationSound" && item.value !== "off") return html`<button class="btn sm" onClick=${() => playNotificationSound(item.value)}>${t("Play sound")}</button>`;
 	return null;
 }

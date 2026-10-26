@@ -373,6 +373,45 @@ function applyPanel(sessionId) {
 	state.view = { ...state.view, ...panel, ...layout };
 }
 
+/**
+ * The panel follows the session that the slot on screen holds. A chat can come on screen without a switch: the first
+ * chat after the page opened (initialLoad), or a slot whose session was replaced in place (the chat on screen was
+ * deleted and its slot got a fresh chat, "Edit and resend" forked it, a followed session was reclaimed). Without this
+ * the panel stays keyed to the old session (or to none) and every workspace command of the chat on screen only changes
+ * that chat's saved panel (`onScreen: false` in workspace-host.js): nothing appears until the chat is switched to again.
+ */
+function followPanel(sessionId) {
+	if (!sessionId || sessionId === panelKey || state.switching) return;
+	if (panelKey === null) {
+		// The first chat after the page opened: its own tabs, with the panel closed as on every page open.
+		applyPanel(sessionId);
+		if (state.view.panelOpen) state.view = { ...state.view, panelOpen: false };
+		return;
+	}
+	// The same slot now holds another session. A panel that session already has (an Agent command that arrived before
+	// this snapshot) is shown; otherwise what is on screen stays where it is and now belongs to the new session.
+	if (panelStates.has(sessionId)) return applyPanel(sessionId);
+	// The session that left keeps a copy (Edit and resend and a worktree move leave the original chat in the sidebar),
+	// but with new ids for its website tabs: the desktop host keys a native view by tab id, so one id in two chats would
+	// be one page that both drive and that a close in either destroys. The copy opens them again from their addresses.
+	const leaving = panelKey;
+	const kept = withNewBrowserTabIds(panelOnScreen());
+	panelKey = sessionId;
+	rememberPanel();
+	saveStoredPanel(leaving, kept);
+}
+
+/** `panel` with new ids for its website tabs (open and recently closed), same addresses; the active tab follows. */
+function withNewBrowserTabIds(panel) {
+	const ids = new Map();
+	const renew = (tab) => {
+		if (tab?.type !== "browser") return tab;
+		if (!ids.has(tab.id)) ids.set(tab.id, `browser:${uid("b")}`);
+		return { ...tab, id: ids.get(tab.id) };
+	};
+	return { ...panel, wsTabs: panel.wsTabs.map(renew), wsClosed: (panel.wsClosed ?? []).map(renew), wsActive: ids.get(panel.wsActive) ?? panel.wsActive };
+}
+
 /** The session whose panel is on screen: its tabs are the live `state.view` values. */
 export const panelSessionId = () => panelKey;
 
@@ -699,7 +738,12 @@ export async function loadSnapshot(slot = targetSlot ?? activeSlot) {
 	if (chosen && snap.thinking) snap = { ...snap, thinking: { ...snap.thinking, level: chosen.level } };
 	runFor(id, () => {
 		const previousCwd = workspaceKey(state.snap);
+		const previousSession = state.snap?.session?.id;
 		state.snap = snap;
+		// Only a slot whose own previous session owned the panel hands it on. While a mode switch reveals another chat
+		// the panel is already the target's and the slot on screen is still the one being left: a snapshot of that slot
+		// then is not its chat being replaced, and must not take the target's tabs.
+		if (id === activeSlot && (panelKey === null || previousSession === panelKey)) followPanel(snap.session?.id);
 		const cachedGit = workspaceGitStatus.get(workspaceKey(snap));
 		if (previousCwd !== workspaceKey(snap)) state.gitStatus = cachedGit;
 		else if (state.gitStatus === undefined && cachedGit !== undefined) state.gitStatus = cachedGit;
@@ -856,10 +900,10 @@ export const TRANSCRIPT_FIRST_PAGE = 120;
 
 /** Load one session's snapshot and transcript into its bag. The first load pages (`TRANSCRIPT_FIRST_PAGE`); an explicit refresh takes the full transcript. */
 const slotLoads = new Map();
-export async function refreshSlot(slot = activeSlot, { full = false } = {}) {
-	const key = `${slot}:${full}`;
+export async function refreshSlot(slot = activeSlot, { full = false, limit = TRANSCRIPT_FIRST_PAGE } = {}) {
+	const key = `${slot}:${full}:${limit}`;
 	if (slotLoads.has(key)) return slotLoads.get(key);
-	const pending = Promise.all([loadSnapshot(slot), loadTranscript(slot, full ? {} : { limit: TRANSCRIPT_FIRST_PAGE })])
+	const pending = Promise.all([loadSnapshot(slot), loadTranscript(slot, full ? {} : { limit })])
 		.then(() => { bagOf(slot).loaded = true; })
 		.finally(() => slotLoads.delete(key));
 	slotLoads.set(key, pending);
@@ -1530,6 +1574,36 @@ export function noteFreshRow(slot, key) {
 }
 export const freshRowKey = (slot) => freshRowKeys.get(slot);
 
+// ---- Opening a chat at its last turn ------------------------------------------------------------------
+let landingSeq = 0;
+/**
+ * A task-end notification was clicked: show its chat with the start of its last turn (the message that began the final
+ * reply, or the reply itself when that turn has no message) at the top. The Transcript takes the request once that chat's
+ * turns are on screen; it wins over a remembered position and over following the bottom. `smooth`: the chat is on screen
+ * already, so the page glides there instead of opening there.
+ */
+export function openChatAtLastTurn(slot) {
+	requestLastTurnLanding(slot, { smooth: activeSlot === slot && !state.switching && document.visibilityState === "visible" });
+	return activateSlot(slot);
+}
+/**
+ * A notification of a chat that waits for a confirmation or an answer was clicked: show that chat at the bottom, where
+ * its live turn says what it waits for, even when the reader left it somewhere else (that place is not restored).
+ */
+export function openChatAtBottom(slot) {
+	requestLastTurnLanding(slot, { smooth: activeSlot === slot && !state.switching && document.visibilityState === "visible", bottom: true });
+	return activateSlot(slot);
+}
+/** Ask the Transcript to put the start of `slot`'s last turn at the top once that chat is on screen (`bottom`: its end). */
+export function requestLastTurnLanding(slot, { smooth = false, bottom = false } = {}) {
+	state.landing = { slot, nonce: ++landingSeq, smooth, bottom, until: Date.now() + 15_000 };
+	emit();
+}
+/** The Transcript placed (or gave up on) a landing request. */
+export function settleLanding(nonce) {
+	if (state.landing?.nonce === nonce) state.landing = null;
+}
+
 /** Select a real target immediately, before opening it. Synthetic slots cannot make API writes. */
 export function beginSwitch({ path = null, mode = uiMode(), name = "", sessionId, retry, fresh = null, timing = startInteraction(mode !== uiMode() ? "mode" : "session") }, seq) {
 	if (!isLatestSwitch(seq)) return null;
@@ -1565,9 +1639,12 @@ export const canSendToActive = () => !state.switching && !!activeSlot && !String
  */
 export async function activateSlot(slot, seq = nextSwitch(), pending = state.switching) {
 	if (!slot || !isLatestSwitch(seq)) return;
+	// Another chat was asked for after a notification click: that click's landing must not wait for a later visit.
+	if (state.landing && state.landing.slot !== slot) state.landing = null;
 	const bag = bagOf(slot);
 	const info = state.slots.find((item) => item.slot === slot);
 	// The right panel belongs to the chat: show that chat's own tabs (a chat that never opened one has an empty panel).
+	const leavingPanel = panelKey;
 	applyPanel(info?.sessionId ?? bag.snap?.session?.id ?? pending?.sessionId ?? null);
 	let mode = chatModeOf(bag.snap?.mode ?? info?.mode ?? pending?.mode ?? uiMode());
 	if (!bag.loaded) {
@@ -1609,6 +1686,8 @@ export async function activateSlot(slot, seq = nextSwitch(), pending = state.swi
 			if (!isLatestSwitch(seq)) return;
 			activeSlot = previousSlot;
 			state.activeSlot = previousSlot;
+			// show() already gave the panel to the chat being revealed: the chat back on screen gets its own again.
+			applyPanel(bags.get(previousSlot)?.snap?.session?.id ?? leavingPanel);
 			setChatMode(previousMode);
 			emit();
 		} });
@@ -1617,7 +1696,9 @@ export async function activateSlot(slot, seq = nextSwitch(), pending = state.swi
 	// Shown from what it held before the event stream broke: read it again behind what is on screen.
 	if (bag.stale) {
 		bag.stale = false;
-		refreshSlot(slot).catch(() => { bag.stale = true; });
+		// Read again at the size it holds: a first page would drop the older pages on screen, and with them the turn the
+		// reader is at (they came back page by page, the view showing other turns meanwhile).
+		refreshSlot(slot, bag.transcriptHasMore ? { limit: Math.max(TRANSCRIPT_FIRST_PAGE, bag.items.length) } : { full: true }).catch(() => { bag.stale = true; });
 	}
 	markActiveSeen();
 	rememberChat(slot);
@@ -1725,7 +1806,13 @@ async function initialLoad() {
 	let slot = snap.slot;
 	let mode = chatModeOf(snap.mode);
 	const view = takeRestartState(snap.session?.id);
-	if (view) state.view = { ...state.view, ...view };
+	if (view) {
+		state.view = { ...state.view, ...view };
+		// After Restart service the restored panel is the one this chat had on screen (the handoff names its session and
+		// the page stays on it): it is that chat's panel now, not one to swap for the saved copy and close as on a page open.
+		panelKey = snap.session?.id ?? null;
+		rememberPanel();
+	}
 	try {
 		const modes = initialModes ?? await api("/api/modes/state", { slot });
 		state.modeState = modes;
@@ -2276,7 +2363,10 @@ const taskTag = (slot) => `myharness-task-${slot}`;
 // A notification the service showed itself (WebHost.announceTaskEnd, same tag) opens its chat when clicked.
 setDesktopNotificationClick((tag) => {
 	const slot = String(tag || "").startsWith("myharness-task-") ? String(tag).slice("myharness-task-".length) : "";
-	if (slot && state.slots.some((s) => s.slot === slot)) activateSlot(slot);
+	const info = slot ? state.slots.find((s) => s.slot === slot) : undefined;
+	// The service's popup does not say what it was about: a chat that waits for an answer opens at the bottom, where its
+	// live turn shows what it waits for; any other chat opens at its last turn.
+	if (info) info.waiting ? openChatAtBottom(slot) : openChatAtLastTurn(slot);
 });
 /** The chat a notification is about: its name, else its first message, else its workspace. */
 function chatLabel(slot) {
@@ -2321,7 +2411,7 @@ async function notifyTaskEnd(d, slot) {
 		title: `${t(WAITING_TITLE[d.category] || TASK_END_TITLE[d.state] || N_("Task finished"))} · ${chat}`,
 		body: clip(summary, 60),
 		tag: taskTag(slot),
-		onClick: () => activateSlot(slot),
+		onClick: () => (d.kind === "waiting" ? openChatAtBottom(slot) : openChatAtLastTurn(slot)),
 	});
 	post("/api/notifications/answer", { id: d.id, shown }, slot).catch(() => {});
 }

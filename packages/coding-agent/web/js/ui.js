@@ -151,7 +151,17 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 		if (placement === "top" && top < 8) top = Math.min(a.bottom + margin, window.innerHeight - p.height - 8);
 		if (placement === "bottom" && top + p.height > window.innerHeight - 8) top = Math.max(8, a.top - p.height - margin);
 		let left = align === "end" ? a.right - p.width : a.left;
-		left = Math.max(8, Math.min(left, window.innerWidth - p.width - 8));
+		// Inside a dialog the panel stays within the dialog when it fits there: a start-aligned panel that would cross the
+		// dialog's right edge opens end-aligned (its right edge on the anchor's), an end-aligned one that would cross the
+		// left edge opens start-aligned; only then is it shifted. Outside a dialog, or wider than it, the panel is only
+		// kept on screen, as before.
+		const frame = anchor.current.closest?.(".modal")?.getBoundingClientRect();
+		const inFrame = !!frame && p.width <= frame.width - 16;
+		const lo = inFrame ? Math.max(8, frame.left + 8) : 8;
+		const hi = inFrame ? Math.min(window.innerWidth - 8, frame.right - 8) : window.innerWidth - 8;
+		if (inFrame && left + p.width > hi && a.right - p.width >= lo) left = a.right - p.width;
+		else if (inFrame && left < lo && a.left + p.width <= hi) left = a.left;
+		left = Math.max(lo, Math.min(left, hi - p.width));
 		const landed = top < a.top ? "top" : "bottom";
 		// Above the anchor the popover is pinned by its bottom edge: content that folds open or closed inside it then grows
 		// and shrinks upward in the same frame. Pinned by `top`, every height change pushed the popover over the anchor
@@ -493,6 +503,8 @@ export function useSwapGlide(key) {
  * `holdExits`: when rows arrive and others leave in the same change, the leaving rows stay present until the new ones
  * have grown in and only then fold away. Otherwise a row that replaces another in place (a new chat taking the place
  * of the blank chat left behind) grows while the other folds, the list keeps its height and the new row seems to pop up.
+ * A function `(arrived, leaving)` (the arriving rows, one leaving row) holds only the rows it accepts; every other row
+ * that leaves folds at once.
  */
 export function useRetainedRows(items, key = "path", { holdExits = false } = {}) {
 	const keyOf = typeof key === "function" ? key : (item) => item[key];
@@ -501,13 +513,16 @@ export function useRetainedRows(items, key = "path", { holdExits = false } = {})
 	const [, release] = useState(0);
 	// Worked out while rendering, so a held row never renders absent for a frame (that would start its fold).
 	const track = useRef(null);
-	if (track.current === null) track.current = { signature, keys: new Set(items.map(keyOf)), held: new Set() };
+	if (track.current === null) track.current = { signature, keys: new Set(items.map(keyOf)), held: new Set(), rows: new Map(items.map((item) => [keyOf(item), item])) };
 	if (track.current.signature !== signature) {
-		const previous = track.current.keys;
-		const keys = new Set(items.map(keyOf));
-		const arrived = holdExits && [...keys].some((id) => !previous.has(id));
-		const held = new Set(arrived ? [...previous, ...track.current.held].filter((id) => !keys.has(id)) : []);
-		track.current = { signature, keys, held };
+		const { keys: previous, rows: previousRows } = track.current;
+		const rows = new Map(items.map((item) => [keyOf(item), item]));
+		const keys = new Set(rows.keys());
+		const arrived = [...keys].filter((id) => !previous.has(id)).map((id) => rows.get(id));
+		const holds = typeof holdExits === "function" ? (id) => holdExits(arrived, previousRows.get(id)) : () => holdExits;
+		const held = new Set(arrived.length ? [...previous, ...track.current.held].filter((id) => !keys.has(id) && holds(id)) : []);
+		for (const id of held) rows.set(id, previousRows.get(id));
+		track.current = { signature, keys, held, rows };
 	}
 	const holding = track.current.held.size > 0;
 	useLayoutEffect(() => {

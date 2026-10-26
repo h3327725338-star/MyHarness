@@ -5,7 +5,9 @@
 // Files pasted with Ctrl+V join the box's own file list exactly like paperclip picks: they reach the input's attachment
 // list only when "Save quote" runs them through the composer's import pipeline, and cancelling drops them the same way.
 // "Translate" sits in the same bubble and also appears for text selected anywhere else in the app (a file preview, a
-// panel): it opens a card with the translation by the helper model of Settings → Agents → Translation.
+// panel): it opens a card with the translation by the helper model of Settings → Agents → Translation. A previewed HTML
+// page is a sandboxed frame of its own: the selection bridge html-preview.ts puts into it reports its selections here.
+// The page could post such reports itself, so their bubble stays inside the frame and needs the user's input there.
 import { html, useEffect, useMemo, useRef, useState, Icon } from "./ui.js";
 import { actions } from "./actions.js";
 import { clearDraftPreview, selectionHint, setDraftPreview } from "./quote-highlight.js";
@@ -17,8 +19,11 @@ import { TranslateCard, TRANSLATE_LEAVE_MS, animateLeave } from "./translate-car
 const QUOTABLE = ".transcript .user-text, .transcript .final";
 
 const isQuotable = (el) => !!el?.closest?.(QUOTABLE) && !!el?.closest?.(".transcript");
-/** Text typed by the user, dialogs and menus are never offered for translation; everything else on the page is. */
-const NOT_TRANSLATABLE = ".composer, .composer-input, input, textarea, select, [contenteditable='true'], .modal, .popover, .quote-note-card";
+/**
+ * Text typed by the user, dialogs and menus are never offered for translation; everything else on the page is. A Markdown
+ * file tab is editable everywhere (markdown-editor.js), but it is a document being read too, so its text is offered.
+ */
+const NOT_TRANSLATABLE = ".composer, .composer-input, input, textarea, select, [contenteditable='true']:not(.markdown-edit-block), .modal, .popover, .quote-note-card";
 const isTranslatable = (el) => !!el && !el.closest?.(NOT_TRANSLATABLE);
 
 /** The bubble sits at the mouse release point, up-right in the blank; the box hugs the passage end. Both stay in view. */
@@ -27,7 +32,8 @@ const BAR_W_BOTH = 176;
 const BAR_H = 30;
 const CARD_W = 264;
 const CARD_H = 120;
-const TRANSLATE_W = 340;
+// The translation card's width in composer.css (.quote-note-card.translate-card); a smaller value lets it stick out.
+const TRANSLATE_W = 360;
 const EDGE = 12;
 
 function clampX(x, width) {
@@ -90,6 +96,41 @@ function scrollMovesPassage(target) {
 	return !!el && !!surface && (el === surface || el.contains(surface));
 }
 
+/** Messages from the selection bridge html-preview.ts puts into a previewed HTML page (a sandboxed, opaque-origin frame). */
+const FRAME_MESSAGE = "myharness:selection";
+const previewFrameOf = (source) => (source ? [...document.querySelectorAll("iframe.html-frame")].find((frame) => frame.contentWindow === source) : null);
+
+/** Where a preview frame shows its page: `origin` is the page's (0, 0), `box` the part of the window it covers. */
+function frameArea(frame) {
+	const rect = frame.getBoundingClientRect();
+	const origin = { x: rect.left + frame.clientLeft, y: rect.top + frame.clientTop };
+	const box = {
+		left: Math.max(0, origin.x),
+		top: Math.max(0, origin.y),
+		right: Math.min(window.innerWidth, origin.x + frame.clientWidth),
+		bottom: Math.min(window.innerHeight, origin.y + frame.clientHeight),
+	};
+	return { origin, box };
+}
+
+const clampTo = (value, low, high) => Math.max(low, Math.min(high, value));
+
+/**
+ * The bubble for a previewed page's selection: placed as usual, then kept inside the frame's box (a few pixels in, the
+ * bubble's real size can differ a little from BAR_W × BAR_H). The page reports the point itself, so without this an
+ * untrusted page could put an app button over any part of the app.
+ */
+function placeBubbleInBox(x, y, box, width = BAR_W, height = BAR_H) {
+	const inset = 4;
+	const spot = placeBubbleAtPoint(x, y, width, height);
+	const left = clampTo(spot.left, box.left + inset, box.right - width - inset);
+	// An "up" bubble is drawn above its top (translateY(-100%)).
+	const top = spot.up
+		? clampTo(spot.top, box.top + height + inset, box.bottom - inset)
+		: clampTo(spot.top, box.top + inset, box.bottom - height - inset);
+	return { ...spot, left, top };
+}
+
 // The language translations go into ({ preference, target }): the last one the server named, so a new card shows it at
 // once; it is read again when a card opens (Settings may have changed it meanwhile).
 let savedLanguage = null;
@@ -100,6 +141,12 @@ export function FloatingQuoteToolbar() {
 	// The translation card: { text, status: "loading" | "done" | "error", result, entry, target, preference, model, error, leaving }.
 	const [translation, setTranslation] = useState(null);
 	const translationSeq = useRef(0);
+	// The preview frame the open translation card came from (null: the app's own text): only its page's press or Esc
+	// closes the card.
+	const cardFrame = useRef(null);
+	// A real press in a preview frame ({ frame, at }): a drag can outlast the user activation it gave (Chromium keeps it
+	// about 5 s, moving the mouse does not renew it), so the press counts for the one selection it starts.
+	const framePress = useRef({ frame: null, at: 0 });
 	const leaveTimer = useRef(0);
 	const [note, setNote] = useState("");
 	const [files, setFiles] = useState([]);
@@ -127,6 +174,7 @@ export function FloatingQuoteToolbar() {
 	const close = () => {
 		translationSeq.current += 1;
 		clearTimeout(leaveTimer.current);
+		cardFrame.current = null;
 		setTranslation(null);
 		setBar(null);
 		setDraft(null);
@@ -243,6 +291,50 @@ export function FloatingQuoteToolbar() {
 				else close();
 			}
 		};
+		// A previewed HTML page is its own document: its bridge reports presses and selections in frame coordinates. Only
+		// the preview frames of this page are listened to. The page itself can post the same messages, so they are trusted
+		// no further than this: a selection shows the Translate bubble only inside that frame's box and only right after
+		// the user's own input in the frame; the other messages only hide a bubble that came from a preview frame, or close
+		// a translation card that came from that same frame.
+		const onFrameMessage = (event) => {
+			const data = event.data;
+			if (!data || data.type !== FRAME_MESSAGE) return;
+			const frame = previewFrameOf(event.source);
+			if (!frame) return;
+			// A real press or key in the frame activates this window too (user activation reaches a frame's ancestors) and
+			// gives the frame the focus; posting messages does neither. Input elsewhere in the app leaves the focus there.
+			const focused = document.activeElement === frame;
+			const active = focused && !!navigator.userActivation?.isActive;
+			if (data.kind === "press" && active) framePress.current = { frame, at: Date.now() };
+			if (data.kind === "press" || data.kind === "escape") {
+				// A card opened from another place is not the page's to close; a click into the frame closes it anyway (this
+				// window loses the focus to the frame).
+				if (translation && cardFrame.current === frame && (data.kind === "escape" || data.button !== 2)) dismissTranslation();
+				else if (bar?.frameText) setBar(null);
+				return;
+			}
+			// The selection a press started is reported once (on release): after that the press is used up.
+			const pressed = framePress.current.frame === frame && Date.now() - framePress.current.at < 60_000;
+			if (pressed && (data.kind === "select" || data.kind === "clear")) framePress.current = { frame: null, at: 0 };
+			if (data.kind === "clear" || data.kind === "scroll") {
+				if (bar?.frameText) setBar(null);
+				return;
+			}
+			if (data.kind !== "select" || draft || translation) return;
+			if (!focused || !(active || pressed)) return;
+			const text = typeof data.text === "string" ? data.text.trim().slice(0, 6000) : "";
+			const x = Number(data.x);
+			const y = Number(data.y);
+			if (!text || !Number.isFinite(x) || !Number.isFinite(y)) return setBar(null);
+			const { origin, box } = frameArea(frame);
+			// Too small a frame to hold the bubble: none, rather than one that sticks out over the app.
+			if (box.right - box.left < BAR_W + 8 || box.bottom - box.top < BAR_H + 8) return setBar(null);
+			// A keyboard selection reports the end of its range, which may lie outside the visible page: the nearest point in.
+			const point = { x: clampTo(origin.x + x, box.left, box.right), y: clampTo(origin.y + y, box.top, box.bottom) };
+			anchor.current = null;
+			setBar({ ...placeBubbleInBox(point.x, point.y, box), quotable: false, frameText: text, frame, point });
+		};
+		window.addEventListener("message", onFrameMessage);
 		// The app losing the focus (another window, a website tab of the desktop app) closes the translation card.
 		const onBlur = () => {
 			if (translation) dismissTranslation();
@@ -255,6 +347,7 @@ export function FloatingQuoteToolbar() {
 		window.addEventListener("blur", onBlur);
 		return () => {
 			window.removeEventListener("blur", onBlur);
+			window.removeEventListener("message", onFrameMessage);
 			document.removeEventListener("mousedown", onMouseDown, true);
 			document.removeEventListener("mouseup", onMouseUp, true);
 			document.removeEventListener("selectionchange", onSelectionChange);
@@ -310,9 +403,17 @@ export function FloatingQuoteToolbar() {
 		e?.preventDefault?.();
 		e?.stopPropagation?.();
 		const sel = window.getSelection();
-		const wanted = text || sel?.toString().trim();
+		// A selection reported by a previewed page: its words and point come with the bubble (the page's own selection is
+		// out of reach here, and this page's selection may still hold an older passage).
+		const fromFrame = !text && bar?.frameText ? bar : null;
+		const wanted = text || fromFrame?.frameText || sel?.toString().trim();
 		if (!wanted) return close();
-		if (!text) {
+		if (fromFrame) {
+			anchor.current = null;
+			cardFrame.current = fromFrame.frame;
+			setPos(placeCardAtPoint(fromFrame.point.x, fromFrame.point.y, TRANSLATE_W, CARD_H));
+		} else if (!text) {
+			cardFrame.current = null;
 			const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : anchor.current;
 			anchor.current = range;
 			if (freshRelease()) setPos(placeCardAtPoint(release.current.x, release.current.y, TRANSLATE_W, CARD_H));

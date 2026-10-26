@@ -113,7 +113,7 @@ function KeyManager({ provider, onBack }) {
 	return html`<div class="stack">
 		<div class="row"><button class="btn sm ghost" onClick=${onBack}><${Icon} name="chevronLeft" size=${14} />${provider.name}</button></div>
 		<section class="set-card">
-			<div class="set-card-head"><strong class="grow">${t("API keys")}</strong><span class="dim">${t("The key in use is sent with every request to {name}.", { name: provider.name })}</span></div>
+			<div class="set-card-head"><div class="col grow"><strong>${t("API keys")}</strong><span class="set-card-desc">${t("The key in use is sent with every request to {name}.", { name: provider.name })}</span></div></div>
 			<div class="set-card-body key-list">
 				${!keys.length && !c?.hasOAuth ? html`<div class="dim pf-hint">${t("No API key saved yet.")}</div>` : null}
 				${keys.map((k) => html`<div class=${`key-row ${k.active ? "active" : ""}`} key=${k.id}>
@@ -136,7 +136,7 @@ function KeyManager({ provider, onBack }) {
 			? html`<section class="set-card">
 				<div class="set-card-head"><strong>${t("Add API key")}</strong></div>
 				<div class="set-card-body col">
-					<div class="key-add">
+					<div class="key-add stacked">
 						<input class="field" placeholder=${t("Name (optional)")} aria-label=${t("Key name")} value=${label} onInput=${(e) => setLabel(e.target.value)} />
 						<input class="field mono" type="password" autocomplete="off" placeholder=${t("Paste the API key")} aria-label=${t("API key")} value=${value} onInput=${(e) => setValue(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && value.trim() && add()} />
 						<button class="btn primary" disabled=${busy || !value.trim()} onClick=${add}>${t("Save key")}</button>

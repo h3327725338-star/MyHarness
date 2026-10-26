@@ -1,6 +1,6 @@
 // Application shell: sidebar + conversation + optional inspector panel, plus global overlays and shortcuts.
 import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, autofocusOnMount, Collapse, FoldIn, Icon, Modal, Overlay, Resizer, Spinner, usePresence, useRetainedRows } from "./ui.js";
-import { attempt, dismissToast, post, setView, state, useStore } from "./store.js";
+import { api, attempt, dismissToast, post, setView, state, useStore } from "./store.js";
 import { actions, confirmDialog, resolveConfirm } from "./actions.js";
 import { Sidebar } from "./sidebar.js";
 import { Transcript } from "./transcript.js";
@@ -21,8 +21,8 @@ import { useWorkspaceTitle } from "./workspace-title.js";
 import { WindowControls } from "./window-controls.js";
 import { AppZoomBadge } from "./app-zoom.js";
 import { SourcesPageHost } from "./sources-page.js";
-import { clip, plural } from "./util.js";
-import { t, N_, serverText } from "./i18n.js";
+import { clip, fmtBytes, plural } from "./util.js";
+import { count, t, N_, serverText } from "./i18n.js";
 
 import { eventShortcut, SHORTCUTS, shortcutFor } from "./shortcuts.js";
 
@@ -47,7 +47,7 @@ function StatusPill() {
 		return html`<span class="status-pill live" role="status" title=${serverText(snap.run.activity)}><${Spinner} /><span class="pill-text">${detail}</span></span>`;
 	}
 	if (completion) return html`<span class="status-pill" role="status" title=${t("Finishing up")}><${Spinner} /><span class="pill-text">${t("Finishing up")}</span></span>`;
-	if (memory?.phase === "warning") return html`<span class="status-pill warn memory-warn" role="status" title=${memory.error ? `${t("Last failure reason")}: ${memory.error} · ${t("Open maintenance.log for details")}` : t("Memory maintenance needs attention")}><span class="mem-left"><span class="mem-dot" aria-hidden="true"></span><${Icon} name="alertTriangle" size=${13} />${t("Memory maintenance needs attention")}</span><span class="mem-divider" aria-hidden="true"></span><button class="mem-btn retry" title=${t("Retry memory maintenance")} aria-label=${t("Retry memory maintenance")} onClick=${() => attempt(() => post("/api/memory/maintenance-retry", {}))}><${Icon} name="refresh" size=${12} />${t("Retry")}</button><button class="mem-btn dismiss" title=${t("Dismiss and archive pending memory")} aria-label=${t("Dismiss and archive pending memory")} onClick=${() => attempt(() => post("/api/memory/maintenance-dismiss", {}))}>${t("Archive")}</button></span>`;
+	if (memory?.phase === "warning") return html`<span class="status-pill warn memory-warn" role="status" title=${memory.error ? `${t("Last failure reason")}: ${memory.error} · ${t("Open maintenance.log for details")}` : t("Memory maintenance needs attention")}><span class="mem-left"><span class="mem-dot" aria-hidden="true"></span><${Icon} name="alertTriangle" size=${13} /><span class="mem-text">${t("Memory maintenance needs attention")}</span></span><span class="mem-divider" aria-hidden="true"></span><button class="mem-btn retry" title=${t("Retry memory maintenance")} aria-label=${t("Retry memory maintenance")} onClick=${() => attempt(() => post("/api/memory/maintenance-retry", {}))}><${Icon} name="refresh" size=${12} /><span class="mem-btn-text">${t("Retry")}</span></button><button class="mem-btn dismiss" title=${t("Dismiss and archive pending memory")} aria-label=${t("Dismiss and archive pending memory")} onClick=${() => attempt(() => post("/api/memory/maintenance-dismiss", {}))}><${Icon} name="folder" size=${12} /><span class="mem-btn-text">${t("Archive")}</span></button></span>`;
 	if (memory?.phase === "processing" || memory?.phase === "pending") return html`<span class="status-pill" role="status" title=${t("Memory runs in the background; you can keep working")}><${Icon} name="clock" size=${13} /><span class="pill-text">${t("Updating memory in background")}</span></span>`;
 	const last = snap.lastRun;
 	if (last && OUTCOME_UI[last.outcome]) {
@@ -169,14 +169,88 @@ export function Toasts() {
 
 export function ConfirmModal({ dialog }) {
 	const [deleteArtifacts, setDeleteArtifacts] = useState(false);
-	const [deleteMemory, setDeleteMemory] = useState(false);
-	const hasChoice = dialog.artifactChoice || dialog.memoryChoice;
 	return html`<${Modal} title=${dialog.title} onClose=${() => resolveConfirm(false)} width=${480}
-		footer=${html`<button class="btn" autofocus=${dialog.artifactChoice} onClick=${() => resolveConfirm(false)}>${dialog.cancelLabel || t("Cancel")}</button><button class=${`btn ${dialog.danger ? "danger solid" : "primary"}`} autofocus=${!dialog.artifactChoice} onClick=${() => resolveConfirm(hasChoice ? { deleteArtifacts, deleteMemory } : true)}>${dialog.confirmLabel}</button>`}>
+		footer=${html`<button class="btn" autofocus=${dialog.artifactChoice} onClick=${() => resolveConfirm(false)}>${dialog.cancelLabel || t("Cancel")}</button><button class=${`btn ${dialog.danger ? "danger solid" : "primary"}`} autofocus=${!dialog.artifactChoice} onClick=${() => resolveConfirm(dialog.artifactChoice ? { deleteArtifacts } : true)}>${dialog.confirmLabel}</button>`}>
 		<div class="pre-wrap">${dialog.message}</div>
 		${dialog.artifactChoice ? html`<label class="row"><input type="checkbox" checked=${deleteArtifacts} onChange=${(e) => setDeleteArtifacts(e.target.checked)} />${t("Also permanently delete artifacts")}</label><p class="dim">${deleteArtifacts ? t("Artifact files and their workspace/global references will be removed. Project files are not affected.") : t("Artifacts and their origin remain available in workspace/global indexes.")}</p>` : null}
-		${dialog.memoryChoice ? html`<label class="row"><input type="checkbox" checked=${deleteMemory} onChange=${(e) => setDeleteMemory(e.target.checked)} />${t("Also delete this chat's memories")}</label><p class="dim">${deleteMemory ? t("This chat's memory folder (including archives) will be permanently removed and cannot be recovered.") : t("This chat's memories stay on disk and remain usable by memory tools.")}</p>` : null}
 		${dialog.detail ? html`<pre class="git-lines">${dialog.detail}</pre>` : null}
+	<//>`;
+}
+
+/**
+ * One optional part of a chat deletion. The whole row, the drawn switch included, is clickable through one native switch
+ * button laid over it (Space and Enter work as on any button); a link in the label (`children`) sits above that button,
+ * so using the link never flips the switch. The toggle on the right only shows the state.
+ */
+function DeleteOption({ icon, label, detail, checked, disabled, onChange, children }) {
+	return html`<div class=${`del-row opt${checked ? " on" : ""}${disabled ? " off" : ""}`}>
+		<button type="button" class="del-hit" role="switch" aria-checked=${checked ? "true" : "false"} aria-label=${label} title=${detail} disabled=${disabled} onClick=${() => onChange(!checked)} />
+		<span class="del-icon"><${Icon} name=${icon} size=${16} /></span>
+		<span class="del-text"><span class="del-label">${label}${children}</span><span class="del-detail">${detail}</span></span>
+		<span class=${`toggle${checked ? " on" : ""}`} aria-hidden="true" />
+	</div>`;
+}
+
+const MEMORY_SCOPE_LABELS = { global: N_("Global"), workspace: N_("Workspace"), session: N_("This chat") };
+
+/**
+ * "Delete this chat?": the messages always go; artifacts and the memories that came only from this chat are switches
+ * with their counts (`GET /api/sessions/delete-impact`). The dialog opens at once and the counts fill in; every line is
+ * one line, so nothing moves when they arrive or a switch flips.
+ */
+export function DeleteChatModal({ dialog }) {
+	const [deleteArtifacts, setDeleteArtifacts] = useState(false);
+	const [deleteMemory, setDeleteMemory] = useState(false);
+	const [showMemories, setShowMemories] = useState(false);
+	// undefined while counting, null when the count failed (the switches still work then).
+	const [impact, setImpact] = useState(undefined);
+	useEffect(() => {
+		let live = true;
+		api(`/api/sessions/delete-impact?path=${encodeURIComponent(dialog.path)}`, { slot: "" }).then(
+			(value) => live && setImpact(value ?? null),
+			() => live && setImpact(null),
+		);
+		return () => {
+			live = false;
+		};
+	}, [dialog.path]);
+	const loading = impact === undefined;
+	const art = impact?.artifacts ?? { files: 0, bytes: 0 };
+	const owned = impact?.memories?.owned ?? [];
+	const shared = impact?.memories?.shared ?? 0;
+	// Old versions that only this chat wrote and that go with its memories even when none of them is active any more.
+	const retired = impact?.memories?.retired ?? 0;
+	// Uploads and tool outputs stay on disk: copies of this chat (forks, worktree copies) may still point at them.
+	const keptFiles = (impact?.history?.uploads?.files ?? 0) + (impact?.history?.toolResults?.files ?? 0);
+	const historyDetail = keptFiles ? t("All messages · {kept} stay", { kept: count(keptFiles, "attachment") }) : t("All messages in this chat");
+	const artifactDetail = loading ? t("Counting…") : !impact ? t("Count unavailable") : art.files ? t("{files} · {size}", { files: count(art.files, "file"), size: fmtBytes(art.bytes) }) : t("This chat saved no artifacts");
+	const memoryDetail = loading
+		? t("Counting…")
+		: !impact
+			? t("Count unavailable")
+			: owned.length
+				? shared
+					? t("{memories} · {shared} shared with other chats stay", { memories: count(owned.length, "memory", "memories"), shared })
+					: count(owned.length, "memory", "memories")
+				: retired
+					? t("{versions} in the archive", { versions: count(retired, "old version") })
+					: t("No memories came from only this chat");
+	const showLink = owned.length
+		? html`<button type="button" class="link-btn" onClick=${() => setShowMemories((open) => !open)}>${showMemories ? t("Hide list") : t("Show which")}</button>`
+		: null;
+	return html`<${Modal} title=${t("Delete this chat?")} subtitle=${t("“{title}” will be permanently deleted. This cannot be undone.", { title: dialog.title })} width=${440} class="delete-chat" onClose=${() => resolveConfirm(false)}
+		footer=${html`<button class="btn" autofocus onClick=${() => resolveConfirm(false)}>${t("Cancel")}</button><button class="btn danger solid" onClick=${() => resolveConfirm({ deleteArtifacts, deleteMemory })}>${t("Delete")}</button>`}>
+		<div class="del-rows">
+			<div class="del-row always">
+				<span class="del-icon"><${Icon} name="chat" size=${16} /></span>
+				<span class="del-text"><span class="del-label">${t("Chat history")}</span><span class="del-detail" title=${keptFiles ? t("Uploaded files and tool outputs stay on disk, because copies of this chat may still use them.") : undefined}>${historyDetail}</span></span>
+				<span class="del-pill">${t("Always deleted")}</span>
+			</div>
+			<${DeleteOption} icon="layers" label=${t("Artifacts")} detail=${artifactDetail} checked=${deleteArtifacts} disabled=${loading || (impact && art.files === 0)} onChange=${setDeleteArtifacts} />
+			<${DeleteOption} icon="brain" label=${t("Memories from this chat")} detail=${memoryDetail} checked=${deleteMemory} disabled=${loading || (impact && owned.length === 0 && !retired)} onChange=${setDeleteMemory}>${showLink}<//>
+			<${Collapse} open=${showMemories && owned.length > 0}><ul class="del-list">${owned.map((memory) => html`<li key=${memory.id}>${memory.name || memory.id}<span class="dim">${t(MEMORY_SCOPE_LABELS[memory.scope] ?? memory.scope)}</span></li>`)}</ul><//>
+		</div>
+		<p class="del-hint">${t("Files this chat wrote into your project folder are never deleted here.")}</p>
 	<//>`;
 }
 
@@ -234,7 +308,8 @@ function DialogOverlayHost() {
 	return html`<${Overlay} show=${type === "git-setup"}>${type === "git-setup" ? html`<${GitSetupDialog} />` : null}<//>
 		<${Overlay} show=${type === "confirm"}>${type === "confirm" ? html`<${ConfirmModal} dialog=${dialog} />` : null}<//>
 		<${Overlay} show=${type === "input"}>${type === "input" ? html`<${InputModal} dialog=${dialog} />` : null}<//>
-		<${Overlay} show=${type === "close-app"}>${type === "close-app" ? html`<${CloseAppModal} />` : null}<//>`;
+		<${Overlay} show=${type === "close-app"}>${type === "close-app" ? html`<${CloseAppModal} />` : null}<//>
+		<${Overlay} show=${type === "delete-chat"}>${type === "delete-chat" ? html`<${DeleteChatModal} dialog=${dialog} />` : null}<//>`;
 }
 
 function BootDialogHost() {
@@ -305,7 +380,8 @@ function useWorkspaceMaxEscape(active) {
 			if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
 			const target = event.target;
 			if (target?.closest?.("input, textarea, select, [contenteditable='true'], .xterm, [role='menu'], [aria-modal='true']")) return;
-			if (document.querySelector(".overlay-host [aria-modal='true'], .local-file-menu, .ws-menu, .popover, .lightbox-scrim, .composer.expanded")) return;
+			// The selection bubble and the translation or quote card close first (quote-toolbar.js takes this Esc).
+			if (document.querySelector(".overlay-host [aria-modal='true'], .local-file-menu, .ws-menu, .popover, .lightbox-scrim, .composer.expanded, .floating-quote-bar, .quote-note-card")) return;
 			event.preventDefault();
 			actions.toggleWorkspaceMax(false);
 		};

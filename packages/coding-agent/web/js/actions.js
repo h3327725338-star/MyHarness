@@ -1,6 +1,6 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
 import { addPendingMessage, removePendingMessage, GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, hideWhileDeleting, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, noteFreshRow, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode, verifyLiveUpdates, REQUEST_TIMEOUT } from "./store.js";
-import { expandedKey } from "./chat-modes.js";
+import { chatModeOf, expandedKey } from "./chat-modes.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
 import { loadPrefs, normPath } from "./util.js";
@@ -33,11 +33,22 @@ function releasePendingDialog(fallback) {
 }
 
 /** Promise-based confirmation modal (rendered by overlays.js). */
-export function confirmDialog({ title, message, confirmLabel = t("Confirm"), cancelLabel, danger = false, detail, artifactChoice = false, memoryChoice = false }) {
+export function confirmDialog({ title, message, confirmLabel = t("Confirm"), cancelLabel, danger = false, detail, artifactChoice = false }) {
 	return new Promise((resolve) => {
 		releasePendingDialog(false);
 		dialogResolver = resolve;
-		setView({ dialog: { type: "confirm", title, message, confirmLabel, cancelLabel, danger, detail, artifactChoice, memoryChoice } });
+		setView({ dialog: { type: "confirm", title, message, confirmLabel, cancelLabel, danger, detail, artifactChoice } });
+	});
+}
+/**
+ * "Delete this chat?" with what goes for sure and the parts the user may add, each with its count (rendered by app.js).
+ * Resolves `{ deleteArtifacts, deleteMemory }`, or false when cancelled.
+ */
+export function deleteChatDialog({ path, title }) {
+	return new Promise((resolve) => {
+		releasePendingDialog(false);
+		dialogResolver = resolve;
+		setView({ dialog: { type: "delete-chat", path, title } });
 	});
 }
 /**
@@ -487,6 +498,24 @@ export const actions = {
 	 */
 	async newSession(rootPath, { unbound = false } = {}) {
 		const mode = uiMode();
+		// The workspace the new chat goes to, when the page knows it, so the empty chat names it from the first frame.
+		const current = state.snap?.workspace;
+		const workspace = rootPath ? state.workspaces.list.find((w) => w.rootPath === rootPath) : !unbound && current?.rootPath ? current : undefined;
+		// The group the sidebar lists it in from the click on, when the page knows it (otherwise the service decides).
+		const group = unbound ? GENERAL_KEY : rootPath || workspace?.rootPath || null;
+		if (keepsNewChat({ rootPath, unbound, mode, group })) {
+			// No switch, but the click still shows the chat as a switch would: the Project sources page over it (bound to
+			// the chat on screen, so a switch closes it) closes, and its group opens.
+			const expandKey = expandedKey(mode);
+			const shown = {};
+			if (group && state.view[expandKey]?.[group] !== true) shown[expandKey] = { ...state.view[expandKey], [group]: true };
+			if (state.view.sourcesPage) shown.sourcesPage = null;
+			if (Object.keys(shown).length) setView(shown);
+			setTimeout(() => {
+				if (!composerCovered()) document.querySelector(".composer-input")?.focus();
+			}, 0);
+			return { slot: activeSlotId(), created: false };
+		}
 		const seq = nextSwitch();
 		// The empty chat is on screen before the request leaves. A new chat has nothing to read, so the click must not
 		// sit behind whatever else the service is doing (a session-list scan can hold it for a second or more). The
@@ -498,11 +527,6 @@ export const actions = {
 		// API refuses requests for it.
 		const fromSlot = activeSlotId();
 		const requestSlot = String(fromSlot ?? "").startsWith("pending:") ? "" : fromSlot;
-		// The workspace the new chat goes to, when the page knows it, so the empty chat names it from the first frame.
-		const current = state.snap?.workspace;
-		const workspace = rootPath ? state.workspaces.list.find((w) => w.rootPath === rootPath) : !unbound && current?.rootPath ? current : undefined;
-		// The group the sidebar lists it in from the click on, when the page knows it (otherwise the service decides).
-		const group = unbound ? GENERAL_KEY : rootPath || workspace?.rootPath || null;
 		const pending = beginSwitch({ mode, fresh: { workspace: workspace ? { name: workspace.name, rootPath: workspace.rootPath } : undefined, group }, retry: () => actions.newSession(rootPath, { unbound }) }, seq);
 		// That group opens at once, so its new row is seen growing in (a folded group would hide it until the answer).
 		const expandKey = expandedKey(mode);
@@ -619,7 +643,7 @@ export const actions = {
 	},
 
 	async deleteSession(path, title) {
-		const ok = await confirmDialog({ title: t("Delete this chat?"), message: t("“{title}” will be permanently deleted from disk.", { title }), confirmLabel: t("Delete"), danger: true, artifactChoice: true, memoryChoice: true });
+		const ok = await deleteChatDialog({ path, title });
 		if (!ok) return;
 		// The row leaves the sidebar at once, before the server answers and the chat on screen changes; a refusal puts
 		// the lists back.
@@ -859,7 +883,39 @@ function removeListed(path) {
 	emit();
 }
 
+/**
+ * "New chat" while the chat on screen already is that new chat: nothing was sent, run or named in it (a typed draft does
+ * not count and is kept), it is of the same mode, and it is in the place the new chat would go. The service would
+ * answer with this very chat (hub.newSession reuses an untouched one), so the click keeps it: no request, no stand-in
+ * row. A click while a new chat for the same group is still being created is that same click again.
+ *
+ * The place is the one hub.newSession works out. A chat without a workspace (`unbound`, or /new from an unbound chat)
+ * goes to MyHarness's default working directory, which is not where an unbound chat whose workspace was removed runs.
+ * /new from a workspace chat stays in its folder unless that folder is gone (then the default directory), and a
+ * workspace's own New chat goes to that folder (refused when it is gone). When the page cannot tell, the request decides.
+ */
+function keepsNewChat({ rootPath, unbound, mode, group }) {
+	const pending = state.switching;
+	if (pending) return !!(pending.fresh && !pending.error && pending.mode === mode && group && pending.freshRow && samePath(pending.freshRow.group, group));
+	if (!canSendToActive()) return false;
+	const info = state.slots.find((slot) => slot.slot === activeSlotId());
+	if (!info || chatModeOf(info.mode) !== mode || info.copy) return false;
+	if (info.firstMessage || info.name || info.active || info.completion || info.waiting || state.snap?.active || state.items.length || state.userBashOrder?.length) return false;
+	if (unbound || (!rootPath && info.unbound)) return !!info.unbound && info.atDefaultDir === true;
+	if (state.snap?.cwdMissing !== false) return false;
+	return !rootPath || (!info.unbound && samePath(info.cwd, rootPath));
+}
 const samePath = (a, b) => normPath(a).toLowerCase() === normPath(b).toLowerCase();
+
+/**
+ * Something sits over the input: Settings, the provider editor, the palette, a dialog, a page over the chat, or any
+ * other overlay or the image preview. Focusing the input then would send the user's keys into a field nobody sees.
+ */
+function composerCovered() {
+	const view = state.view;
+	if (view.settingsOpen || view.providerEditor || view.palette || view.dialog || view.sourcesPage) return true;
+	return !!document.querySelector(".overlay-host:not(.closing), .lightbox-scrim");
+}
 
 /** Read the chat lists the sidebar shows again (each workspace's that was loaded, No Folder and the Archive). */
 async function refreshSessionLists() {

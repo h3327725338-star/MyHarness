@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getSessionConversationDir, getWorkspaceSessionsDir } from "../../src/config/paths/index.ts";
 import { WorkspaceStore } from "../../src/data/workspace-store.ts";
-import { paginateSessionSummaries, parseSessionListPagination } from "../../src/modes/web/routes-sessions.ts";
+import {
+	isPathInsideRoot,
+	paginateSessionSummaries,
+	parseSessionListPagination,
+} from "../../src/modes/web/routes-sessions.ts";
 import { SessionManager } from "../../src/session/manager/index.ts";
 import {
 	appendSessionEntry,
@@ -318,5 +322,16 @@ describe("sessions-index.json persistent session list index", () => {
 		expect(plain).toEqual({ sessions: [1, 2, 3, 4, 5] });
 		expect("total" in plain).toBe(false);
 		expect(paginateSessionSummaries(summaries, { limit: 2, offset: 1 })).toEqual({ sessions: [2, 3], total: 5 });
+	});
+
+	it("matches a chat inside the sessions library with the platform separator (Windows keys use backslashes)", () => {
+		const root = join(tmpdir(), "library", "workspaces");
+		const chat = join(root, "w", "sessions", "s", "conversation", "chat.jsonl");
+		expect(isPathInsideRoot(chat, root)).toBe(true);
+		expect(isPathInsideRoot(root, root)).toBe(true);
+		// A sibling whose name only starts like the root is outside.
+		expect(isPathInsideRoot(join(`${root}-other`, "w", "chat.jsonl"), root)).toBe(false);
+		expect(isPathInsideRoot(join(tmpdir(), "elsewhere", "chat.jsonl"), root)).toBe(false);
+		if (process.platform === "win32") expect(isPathInsideRoot(chat.toUpperCase(), root)).toBe(true);
 	});
 });

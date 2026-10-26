@@ -63,9 +63,10 @@ var MANY = [];
 for (var mi = 0; mi < 30; mi++) MANY.push({ value: 'o' + mi, label: 'Option number ' + mi });
 var SMS = [{ value: 's1', label: 'A longer compact option label' }];
 var NRS = [{ value: 'n1', label: 'Narrow fit' }, { value: 'n2', label: 'x'.repeat(200) }];
+var MODALS = [{ value: 'm1', label: 'Short' }, { value: 'm2', label: 'Only when the app window is in the background' }];
 var NBS = [{ value: 'b1', label: 'One' }, { value: 'b2', label: 'Two' }, { value: 'b3', label: 'Three' }, { value: 'b4', label: 'Four' }, { value: 'b5', label: 'Five' }, { value: 'b6', label: 'Six' }];
 
-var state = { a: 'b', skips: '', long: 'long', many: 'o5', sm: 's1', off: 'y1', nr: 'n1', nb: 'b3' };
+var state = { a: 'b', skips: '', long: 'long', many: 'o5', sm: 's1', off: 'y1', nr: 'n1', nb: 'b3', modal: 'm1' };
 window.__changes = [];
 window.__clicks = 0;
 window.__set = null;
@@ -87,7 +88,11 @@ function App() {
 		card('sel-many', 700, 24, { value: state.many, options: MANY, onChange: function (v) { window.__changes.push(['many', v]); window.__set('many', v); } }),
 		card('sel-sm', 1000, 24, { value: state.sm, options: SMS, size: 'sm', onChange: function (v) { window.__changes.push(['sm', v]); window.__set('sm', v); } }, { width: '150px' }),
 		card('sel-long', 40, 520, { value: state.long, options: LONGS, onChange: function (v) { window.__changes.push(['long', v]); window.__set('long', v); } }),
-		card('sel-off', 560, 520, { value: 'y1', options: [{ value: 'y1', label: 'Nope' }], disabled: true, onChange: function () { window.__changes.push(['off', 'x']); } }));
+		card('sel-off', 560, 520, { value: 'y1', options: [{ value: 'y1', label: 'Nope' }], disabled: true, onChange: function () { window.__changes.push(['off', 'x']); } }),
+		// A dialog with a short choice 40 px from its right edge: the panel (wider than the trigger) must stay inside it.
+		h('div', { key: 'fx-modal', id: 'fx-modal', class: 'modal', style: { position: 'absolute', left: '700px', top: '620px', width: '520px', height: '72px', animation: 'none' } },
+			h('div', { style: { position: 'absolute', right: '40px', top: '20px' } },
+				h(Select, { id: 'sel-modal', ariaLabel: 'sel-modal', value: state.modal, options: MODALS, onChange: function (v) { window.__set('modal', v); } }))));
 }
 
 function NarrowApp() {
@@ -203,6 +208,7 @@ if (location.search.indexOf('mode=narrow') < 0) {
 			assert(f.pop.getAttribute('data-placement') === 'bottom', 'data-placement bottom, got ' + f.pop.getAttribute('data-placement'));
 			assert(pr.width >= sa.getBoundingClientRect().width - 0.5, 'panel is never narrower than the trigger: ' + pr.width);
 			assert(pr.width <= Math.min(420, window.innerWidth - 16) + 0.5, 'panel clamps to min(420 px, vw-16): ' + pr.width);
+			assert(Math.abs(parseFloat(f.pop.style.left) - sa.getBoundingClientRect().left) <= 1, 'outside a dialog the panel opens start-aligned: ' + f.pop.style.left + ' vs ' + sa.getBoundingClientRect().left);
 			assert(sa.getAttribute('aria-expanded') === 'true', 'aria-expanded true while open');
 			var lb = document.getElementById('sel-a-list');
 			assert(lb && lb.getAttribute('role') === 'listbox', 'role=listbox on the panel list');
@@ -411,6 +417,25 @@ if (location.search.indexOf('mode=narrow') < 0) {
 			assert(!document.querySelector('.popover.select-pop:not(.closing)'), 'a disabled trigger opens nothing');
 			assert(off.disabled === true && off.getAttribute('aria-disabled') === 'true', 'disabled trigger: real disabled + aria-disabled');
 			assert(Math.abs(parseFloat(getComputedStyle(off).opacity) - disOp) < 0.01, 'disabled trigger uses --disabled-opacity');
+
+			// 14. Inside a dialog: a start-aligned panel that would cross the dialog's right edge opens end-aligned instead
+			// (its right edge on the trigger's), so it stays within the dialog's 8 px inset.
+			var smo = document.getElementById('sel-modal');
+			var fxm = document.getElementById('fx-modal').getBoundingClientRect();
+			clickF(smo);
+			var fmo = await findPop('.popover.select-pop:not(.closing)');
+			assert(fmo, 'the dialog select never opened');
+			await wait(300);
+			var ml = parseFloat(fmo.pop.style.left);
+			var mr = ml + fmo.pop.offsetWidth;
+			var tmo = smo.getBoundingClientRect();
+			out.modal = { left: ml, right: mr, width: fmo.pop.offsetWidth, trigLeft: tmo.left, trigRight: tmo.right, frameLeft: fxm.left, frameRight: fxm.right };
+			assert(fmo.pop.offsetWidth > tmo.width + 40, 'the dialog fixture needs a panel wider than its trigger: ' + fmo.pop.offsetWidth);
+			assert(mr <= fxm.right - 8 + 0.5, 'the panel crosses the dialog edge: ' + mr + ' > ' + (fxm.right - 8));
+			assert(ml >= fxm.left + 8 - 0.5, 'the panel crosses the dialog left edge: ' + ml);
+			assert(Math.abs(mr - tmo.right) <= 1, 'the panel is end-aligned with its trigger: ' + mr + ' vs ' + tmo.right);
+		await key(smo, 'Escape');
+			assert(await gone(fmo.pop), 'dialog panel removed');
 
 			out.ok = true;
 			document.body.insertAdjacentHTML('beforeend', '<p id="ready">passed ' + JSON.stringify(out) + '</p>');

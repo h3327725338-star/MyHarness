@@ -3,21 +3,29 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { stringify as stringifyYaml } from "yaml";
 import { AutoMemoryManager } from "../src/agent/runtime/auto-memory.ts";
-import { getSessionConversationPath } from "../src/config/paths/index.ts";
+import { getSessionConversationPath, getSessionDir, parseSessionDataPath } from "../src/config/paths/index.ts";
 import { SettingsManager } from "../src/config/settings/index.ts";
+import { SessionManager } from "../src/session/manager/index.ts";
+import { readMemoryWriteCreations } from "../src/session/memory/provenance.ts";
 import {
 	archiveMemoryFile,
 	claimPendingMemory,
 	deleteMemoryPermanently,
+	deleteSessionMemories,
+	describeSessionMemories,
 	getMemoryPaths,
 	listMemoryFiles,
 	migrateLegacyMemories,
 	refreshMemoryIndexes,
 	restoreMemoryArchive,
+	withMemoryLock,
 	writeMemoryFile,
 } from "../src/session/memory/store.ts";
-import { deleteSessionFile } from "../src/session/storage/jsonl/file-operations.ts";
+import { deleteSessionFile, summarizeSessionDeletion } from "../src/session/storage/jsonl/file-operations.ts";
+import { flushAllWorkspaceIndexes } from "../src/session/storage/jsonl/sessions-index.ts";
+import { flushSessionWrites } from "../src/session/storage/jsonl/write-batch.ts";
 import type { SessionEntry } from "../src/session/types.ts";
 
 const roots: string[] = [];
@@ -303,5 +311,371 @@ describe("permanent memory deletion and pending claims", () => {
 			expect(existsSync(join(p.sessionDir, "note.md"))).toBe(!deleteMemory);
 			expect(listMemoryFiles(f.dataRoot)).toHaveLength(deleteMemory ? 0 : 1);
 		}
+	});
+});
+
+describe("deleting a chat's memories", () => {
+	/** One memory version with exactly the given frontmatter fields (undefined ones are left out). */
+	function version(id: string, fields: Record<string, string | undefined>, body = `${id} body`) {
+		const scope = id.slice(0, id.indexOf("/"));
+		const frontmatter = Object.fromEntries(
+			Object.entries({
+				id,
+				name: id.slice(scope.length + 1),
+				description: "d",
+				type: "project",
+				scope,
+				...fields,
+			}).filter(([, value]) => value !== undefined),
+		);
+		return `---\n${stringifyYaml(frontmatter).trim()}\n---\n\n${body}\n`;
+	}
+	/** Write the versions oldest first; every earlier one ends up in archive/ the way an update archives it. */
+	async function history(directory: string, id: string, versions: Array<Record<string, string | undefined>>) {
+		const file = join(directory, `${id.slice(id.indexOf("/") + 1)}.md`);
+		for (const [index, fields] of versions.entries()) {
+			if (index > 0) await archiveMemoryFile(file, "updated");
+			await writeMemoryFile(file, version(id, fields, `${id} v${index}`));
+		}
+		return file;
+	}
+	const toolResult = (timestamp: string, text: string, ids: string[]) =>
+		JSON.stringify({
+			type: "message",
+			id: `entry-${Math.random().toString(36).slice(2)}`,
+			parentId: null,
+			timestamp,
+			message: {
+				role: "toolResult",
+				toolCallId: "call",
+				toolName: "memory_write",
+				content: [{ type: "text", text }],
+				details: { mode: "write", total: ids.length, returned: ids.length, ids },
+				isError: false,
+				timestamp: Date.parse(timestamp),
+			},
+		});
+
+	it("reads only the memories this chat itself created with memory_write", async () => {
+		const f = fixture();
+		const file = getSessionConversationPath(f.dataRoot, "a", "one", "chat.jsonl");
+		mkdirSync(dirname(file), { recursive: true });
+		const header = "2026-05-01T10:00:00.000Z";
+		writeFileSync(
+			file,
+			[
+				JSON.stringify({ type: "session", version: 3, id: "one", timestamp: header, cwd: f.root }),
+				// Copied from the parent chat by a fork: older than this chat.
+				toolResult("2026-04-01T10:00:00.000Z", "已记住：global/inherited（global · project）。", [
+					"global/inherited",
+				]),
+				toolResult(
+					"2026-05-01T10:01:00.000Z",
+					"已记住：global/tool-made（global · project）。\n已更新：workspace/edited（旧版已归档）。\n已创建用户画像：global/用户画像。",
+					["global/tool-made", "workspace/edited", "global/用户画像"],
+				),
+				JSON.stringify({
+					type: "message",
+					id: "u",
+					parentId: null,
+					timestamp: header,
+					message: { role: "user", content: "已记住：global/fake（" },
+				}),
+			].join("\n"),
+		);
+		const created = await readMemoryWriteCreations(file);
+		expect([...created.keys()]).toEqual(["global/tool-made"]);
+		expect(created.get("global/tool-made")).toEqual({
+			entryIds: [expect.stringMatching(/^entry-/)],
+			chatStartedAt: Date.parse(header),
+			lastResultAt: Date.parse("2026-05-01T10:01:00.000Z"),
+		});
+		expect((await readMemoryWriteCreations(join(f.root, "missing.jsonl"))).size).toBe(0);
+	});
+
+	it("removes the chat's own and solely owned memories and keeps every memory another writer touched", async () => {
+		const f = fixture();
+		const p = getMemoryPaths({ ...f, workspaceId: "a", sessionId: "one" });
+		const one = { sourceSessionId: "one", sourceWorkspaceId: "a" };
+		await writeMemoryFile(join(p.sessionDir, "note.md"), memory("session", "note"));
+		// Extracted twice by this chat (legacy without updatedBy, then new style): owned, with its archive.
+		const owned = await history(p.globalDir, "global/owned", [
+			{ ...one, sourceEntryId: "e0" },
+			{ ...one, sourceEntryId: "e1", updatedBy: "one" },
+		]);
+		expect(listMemoryFiles(f.dataRoot).filter((entry) => entry.archived && entry.id === "global/owned")).toHaveLength(
+			1,
+		);
+		// Another memory whose file name starts like the owned one: its history is not touched.
+		const sibling = await history(p.globalDir, "global/owned-2", [
+			{ sourceSessionId: "two", sourceEntryId: "x0", updatedBy: "two" },
+			{ sourceSessionId: "two", sourceEntryId: "x1", updatedBy: "two" },
+		]);
+		const legacyOwn = await history(p.workspaceDir, "workspace/legacy-own", [{ ...one, sourceEntryId: "e2" }]);
+		// Extracted later by another chat: the source moved to that chat.
+		const laterOther = await history(p.globalDir, "global/later-other", [
+			{ ...one, sourceEntryId: "e3" },
+			{ sourceSessionId: "two", sourceEntryId: "x3", updatedBy: "two" },
+		]);
+		// Consolidated: legacy (the consolidation version keeps the previous source fields) and new style.
+		const consolidated = await history(p.globalDir, "global/consolidated", [
+			{ ...one, sourceEntryId: "e4" },
+			{ ...one, sourceEntryId: "e4" },
+		]);
+		const consolidatedNew = await history(p.workspaceDir, "workspace/consolidated-new", [
+			{ ...one, sourceEntryId: "e5", updatedBy: "one" },
+			{ ...one, sourceEntryId: "e5", updatedBy: "consolidation" },
+		]);
+		// Edited with memory_write from another chat.
+		const edited = await history(p.workspaceDir, "workspace/edited", [
+			{ ...one, sourceEntryId: "e6", updatedBy: "one" },
+			{ ...one, sourceEntryId: "e6", updatedBy: "two" },
+		]);
+		const restored = await history(p.globalDir, "global/restored", [
+			{ ...one, sourceEntryId: "e7", updatedBy: "restore" },
+		]);
+		const profile = await history(p.globalDir, "global/用户画像", [
+			{ ...one, sourceEntryId: "e8", updatedBy: "one" },
+		]);
+		// Old memory_write and old consolidation wrote no provenance fields at all; this chat started at 10:00 and its
+		// memory_write results (createdByTool below) were saved at 10:01.
+		const inCreation = { updatedAt: "2026-05-01T10:00:59.500Z" };
+		// Created with memory_write in this chat before the provenance fields existed.
+		const toolMade = await history(p.globalDir, "global/tool-made", [inCreation]);
+		// A legacy memory_write memory this chat only updated.
+		const toolUpdated = await history(p.globalDir, "global/tool-updated", [inCreation]);
+		// Created here, then rewritten without fields (old consolidation, or another chat's old memory_write edit).
+		const toolRewritten = await history(p.globalDir, "global/tool-rewritten", [
+			inCreation,
+			{ updatedAt: "2026-05-02T09:00:00.000Z" },
+		]);
+		// This chat's memory of that name is gone; another chat's old memory_write later made a new one with that slug.
+		const toolReused = await history(p.globalDir, "global/tool-reused", [{ updatedAt: "2026-05-03T09:00:00.000Z" }]);
+		// A version with no time stamp cannot be placed in this chat's creation.
+		const toolUndated = await history(p.globalDir, "global/tool-undated", [{}]);
+		// A retired history (consolidated away) that is entirely this chat's.
+		const retired = await history(p.globalDir, "global/retired", [{ ...one, sourceEntryId: "e9", updatedBy: "one" }]);
+		await archiveMemoryFile(retired, "consolidated");
+		rmSync(retired);
+		// A session memory consolidation retired: only its archived text is left in the chat's folder.
+		const retiredNote = join(p.sessionDir, "old.md");
+		await writeMemoryFile(retiredNote, memory("session", "old"));
+		await archiveMemoryFile(retiredNote, "consolidated");
+		rmSync(retiredNote);
+		const pending = join(f.dataRoot, "memory", "pending", "key", "legacy.md");
+		await writeMemoryFile(pending, version("pending/legacy", one));
+		await writeMemoryFile(
+			p.statePath,
+			JSON.stringify({
+				version: 1,
+				sessions: {
+					one: { updatedAt: "2026-01-01T00:00:00.000Z" },
+					two: { updatedAt: "2026-01-01T00:00:00.000Z" },
+				},
+				consolidation: { a: { sessionIds: ["one", "two"], pendingChanges: 2 } },
+			}),
+		);
+		await refreshMemoryIndexes(f.dataRoot);
+		const creation = (entryId: string) => ({
+			entryIds: [entryId],
+			chatStartedAt: Date.parse("2026-05-01T10:00:00.000Z"),
+			lastResultAt: Date.parse("2026-05-01T10:01:00.000Z"),
+		});
+		const provenance = {
+			createdByTool: new Map([
+				["global/tool-made", creation("c1")],
+				["global/tool-rewritten", creation("c2")],
+				["global/tool-reused", creation("c3")],
+				["global/tool-undated", creation("c4")],
+			]),
+		};
+		const location = { workspaceId: "a", sessionId: "one" };
+
+		const impact = await describeSessionMemories(f.dataRoot, location, provenance);
+		expect(impact.owned.map((entry) => `${entry.scope}:${entry.id}`).sort()).toEqual([
+			"global:global/owned",
+			"global:global/tool-made",
+			"session:session/note",
+			"workspace:workspace/legacy-own",
+		]);
+		expect(impact.owned.find((entry) => entry.id === "global/owned")?.path).toBe("memory/owned.md");
+		expect(impact.shared).toBe(7);
+		// The retired session note and the retired global history go too.
+		expect(impact.retired).toBe(2);
+
+		await withMemoryLock(f.dataRoot, () => deleteSessionMemories(f.dataRoot, location, provenance));
+		for (const gone of [owned, legacyOwn, toolMade, p.sessionDir]) expect(existsSync(gone)).toBe(false);
+		for (const kept of [
+			sibling,
+			laterOther,
+			consolidated,
+			consolidatedNew,
+			edited,
+			restored,
+			profile,
+			toolUpdated,
+			toolRewritten,
+			toolReused,
+			toolUndated,
+			pending,
+		])
+			expect(existsSync(kept)).toBe(true);
+		const remaining = listMemoryFiles(f.dataRoot);
+		expect(remaining.filter((entry) => entry.id === "global/owned")).toEqual([]);
+		expect(remaining.filter((entry) => entry.id === "global/retired")).toEqual([]);
+		expect(remaining.filter((entry) => entry.id === "global/owned-2" && entry.archived)).toHaveLength(1);
+		expect(remaining.filter((entry) => entry.id === "global/later-other" && entry.archived)).toHaveLength(1);
+		const index = JSON.parse(readFileSync(join(f.dataRoot, "memory", "index.json"), "utf8")) as {
+			entries: Array<{ id: string }>;
+		};
+		expect(index.entries.map((entry) => entry.id)).not.toContain("global/owned");
+		expect(index.entries.map((entry) => entry.id)).toContain("global/later-other");
+		const state = JSON.parse(readFileSync(p.statePath, "utf8"));
+		expect(Object.keys(state.sessions)).toEqual(["two"]);
+		expect(state.consolidation.a).toEqual({ sessionIds: ["two"], pendingChanges: 2 });
+	});
+
+	it("deletes a chat's memory_write creation through deleteSessionFile and keeps shared memories", async () => {
+		const f = fixture();
+		const p = getMemoryPaths({ ...f, workspaceId: "a", sessionId: "one" });
+		const file = getSessionConversationPath(f.dataRoot, "a", "one", "chat.jsonl");
+		mkdirSync(dirname(file), { recursive: true });
+		writeFileSync(
+			file,
+			[
+				JSON.stringify({
+					type: "session",
+					version: 3,
+					id: "one",
+					timestamp: "2026-05-01T10:00:00.000Z",
+					cwd: f.root,
+				}),
+				toolResult("2026-05-01T10:01:00.000Z", "已记住：workspace/tool-made（workspace · project）。", [
+					"workspace/tool-made",
+				]),
+			].join("\n"),
+		);
+		const toolMade = await history(p.workspaceDir, "workspace/tool-made", [
+			{ updatedAt: "2026-05-01T10:00:59.000Z" },
+		]);
+		const shared = await history(p.workspaceDir, "workspace/shared", [
+			{ sourceSessionId: "one", sourceEntryId: "e1", updatedBy: "one" },
+			{ sourceSessionId: "one", sourceEntryId: "e1", updatedBy: "consolidation" },
+		]);
+		await writeMemoryFile(join(p.sessionDir, "note.md"), memory("session", "note"));
+		expect((await deleteSessionFile(file, { permanent: true, deleteMemory: true })).ok).toBe(true);
+		expect(existsSync(toolMade)).toBe(false);
+		expect(existsSync(shared)).toBe(true);
+		expect(existsSync(dirname(dirname(file)))).toBe(false);
+		expect(listMemoryFiles(f.dataRoot).map((entry) => entry.id)).toEqual(["workspace/shared", "workspace/shared"]);
+	});
+
+	it("keeps the memories whose making a fork or worktree copy of the chat still holds", async () => {
+		const f = fixture();
+		const storage = { dataRoot: f.dataRoot };
+		const main = join(f.root, "main");
+		const worktree = join(f.root, "worktree");
+		mkdirSync(main, { recursive: true });
+		mkdirSync(worktree, { recursive: true });
+		const usage = {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const turn = (manager: SessionManager, text: string) => {
+			manager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
+			return manager.appendMessage({
+				role: "assistant",
+				content: [{ type: "text", text }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "test",
+				usage,
+				stopReason: "stop",
+				timestamp: Date.now(),
+			});
+		};
+		const remember = (manager: SessionManager, id: string) =>
+			manager.appendMessage({
+				role: "toolResult",
+				toolCallId: `call-${id}`,
+				toolName: "memory_write",
+				content: [{ type: "text", text: `已记住：${id}（global · project）。` }],
+				details: { mode: "write", total: 1, returned: 1, ids: [id] },
+				isError: false,
+				timestamp: Date.now(),
+			});
+		const parent = SessionManager.create(main, undefined, undefined, storage);
+		const forkPoint = turn(parent, "hello");
+		remember(parent, "global/before-copy");
+		const extractedFrom = turn(parent, "a fact worth keeping");
+		const parentFile = parent.getSessionFile()!;
+		flushSessionWrites(parentFile);
+		// Enter a worktree with the history, then merge back: two copies, and the original chat stays in main.
+		const inWorktree = SessionManager.create(worktree, undefined, undefined, storage);
+		inWorktree.adoptHistoryFrom(SessionManager.open(parentFile));
+		const mergedBack = SessionManager.create(main, undefined, undefined, storage);
+		mergedBack.adoptHistoryFrom(SessionManager.open(inWorktree.getSessionFile()!));
+		// The worktree chat is gone, so the merged-back copy's parent can no longer be followed back to this chat.
+		rmSync(dirname(dirname(inWorktree.getSessionFile()!)), { recursive: true, force: true });
+		remember(parent, "global/after-copy");
+		flushSessionWrites(parentFile);
+		// A fork taken before any memory was made holds none of them.
+		expect(SessionManager.open(parentFile).createBranchedSession(forkPoint)).toBeTruthy();
+		// The main workspace is listed once, so its sessions index answers for its chats; the rest are opened.
+		await SessionManager.list(main, undefined, undefined, storage);
+		flushAllWorkspaceIndexes();
+
+		const scope = parseSessionDataPath(parentFile)!;
+		const sessionId = parent.getSessionId();
+		const p = getMemoryPaths({ dataRoot: f.dataRoot, workspaceId: scope.workspaceId, sessionId });
+		const mine = { sourceSessionId: sessionId, updatedBy: sessionId };
+		const beforeCopy = await history(p.globalDir, "global/before-copy", [mine]);
+		const extracted = await history(p.globalDir, "global/extracted", [{ ...mine, sourceEntryId: extractedFrom }]);
+		const afterCopy = await history(p.globalDir, "global/after-copy", [mine]);
+		expect((await summarizeSessionDeletion(parentFile)).memories).toEqual({
+			owned: [{ id: "global/after-copy", name: "after-copy", scope: "global" }],
+			shared: 2,
+			retired: 0,
+		});
+		expect((await deleteSessionFile(parentFile, { permanent: true, deleteMemory: true })).ok).toBe(true);
+		expect(existsSync(afterCopy)).toBe(false);
+		for (const kept of [beforeCopy, extracted]) expect(existsSync(kept)).toBe(true);
+		expect(existsSync(getSessionDir(f.dataRoot, scope.workspaceId, sessionId))).toBe(false);
+	});
+
+	it("reports archived memory text that only deleting the memories removes", async () => {
+		const f = fixture();
+		const p = getMemoryPaths({ ...f, workspaceId: "a", sessionId: "one" });
+		const file = getSessionConversationPath(f.dataRoot, "a", "one", "chat.jsonl");
+		mkdirSync(dirname(file), { recursive: true });
+		writeFileSync(
+			file,
+			`${JSON.stringify({ type: "session", version: 3, id: "one", timestamp: "2026-05-01T10:00:00.000Z", cwd: f.root })}\n`,
+		);
+		const note = join(p.sessionDir, "note.md");
+		await writeMemoryFile(note, memory("session", "note"));
+		await archiveMemoryFile(note, "consolidated");
+		rmSync(note);
+		const retired = await history(p.globalDir, "global/retired", [
+			{ sourceSessionId: "one", sourceEntryId: "e1", updatedBy: "one" },
+		]);
+		await archiveMemoryFile(retired, "consolidated");
+		rmSync(retired);
+		expect((await summarizeSessionDeletion(file)).memories).toEqual({ owned: [], shared: 0, retired: 2 });
+		expect((await deleteSessionFile(file, { permanent: true, deleteMemory: true })).ok).toBe(true);
+		expect(listMemoryFiles(f.dataRoot)).toEqual([]);
+	});
+
+	it("marks a restored version as written by the restore, never by a chat", async () => {
+		const f = fixture();
+		const p = getMemoryPaths({ ...f, workspaceId: "a", sessionId: "one" });
+		const file = await history(p.globalDir, "global/note", [{ updatedBy: "one" }, { updatedBy: "two" }]);
+		const archive = listMemoryFiles(f.dataRoot).find((entry) => entry.archived)!;
+		await restoreMemoryArchive(f.dataRoot, archive.path);
+		expect(readFileSync(file, "utf8")).toContain("updatedBy: restore");
 	});
 });

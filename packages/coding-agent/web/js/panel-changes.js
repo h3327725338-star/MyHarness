@@ -262,7 +262,9 @@ export function ChangesPanel() {
 	const worktreeDirty = general ? 0 : gitStatus?.preview?.total || 0;
 	const withCount = (label, count) => (count > 0 ? `${label} ${count}` : label);
 	const scopeOptions = [
-		{ value: "session", label: withCount(t("Current conversation"), chatUncommitted) },
+		// "This chat", not "Current conversation": with both counts the English pair has to fit a 340px panel next to the
+		// diff-mode switch and Refresh (both keys read the same in Chinese).
+		{ value: "session", label: withCount(t("This chat"), chatUncommitted) },
 		{ value: "worktree", label: withCount(t("Working tree"), worktreeDirty) },
 	];
 
@@ -329,7 +331,7 @@ export function GitBar({ gitStatus, active, scope = "worktree", committable = 0 
 		return html`<div class="gitbar"><${Icon} name="gitBranch" size=${14} /><span class="grow dim">${t("This workspace is not a Git repository.")}</span><button class="btn sm" onClick=${() => actions.openGitSetup()}>${t("Set up Git")}</button></div>`;
 	}
 	const busy = active || !!gitStatus.task || !!gitTask;
-	// The Commit button commits what the tab shows: on "Current conversation" only this chat's own files (nothing when it
+	// The Commit button commits what the tab shows: on "This chat" only this chat's own files (nothing when it
 	// has none left), on "Working tree" everything uncommitted in the folder.
 	const conversationScope = scope === "session";
 	const commitTitle = conversationScope

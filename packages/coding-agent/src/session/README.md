@@ -20,12 +20,12 @@
 | `storage/jsonl/parse-cache.ts` | 按文件字节预算（32 MiB）淘汰的解析缓存，文件身份/大小/修改时间校验，完整追加前缀增量续读；恢复诊断文件重新读取 |
 | `storage/jsonl/write-batch.ts` | user/assistant 消息 75ms / 256KiB 合批 durable append；关键条目、读操作、正常关闭、轮次结束和 bridge 公告边界 flush |
 | `storage/jsonl/tail-window.ts` | 有明确完整性与缺失父节点标记的原始尾窗，仅预览/诊断，不可替代完整会话或模型上下文 |
-| `storage/jsonl/file-operations.ts` | `deleteSessionFile()`，删除聊天时保留独立 memory 目录 |
+| `storage/jsonl/file-operations.ts` | `deleteSessionFile()`：删除聊天全有或全无（要删的部分先改名移进 `<data>/trash/`，有文件被别的程序占用就什么都不删并返回 `code: "in-use"`；勾了删记忆而记忆锁正被提取或整理占着时同样什么都不删，返回 `code: "memory-busy"`），默认保留产出、上传附件、工具结果和 memory 目录，勾选时连带删除只属于这次聊天的记忆；`summarizeSessionDeletion()` 给删除确认框计数 |
 | `storage/jsonl/sessions-index.ts` | 每个 Workspace 会话目录下的持久列表边车（`.sessions-index.json`）：写入时标脏、读取时刷新，供列表扫描用 |
 | `history/records.ts`、`history/index-store.ts` | 历史检索的派生记录：用户消息与回复正文（不含工具输出、思考、附件），带 entry id、时间、是否在当前分支；内存缓存＋会话 `metadata/history-index.json`，每次按文件 inode/大小/mtime/头部哈希校验，失配即重建 |
 | `history/search.ts`、`history/read.ts`、`history/candidates.ts` | 本地关键词＋中文相邻字搜索（不调模型、可取消、分片让出事件循环）；按消息读前后文（沿该消息自己的分支）或当前分支尾部；按工作区/模式/归档定候选范围，`findSessionFileById()` 按 id 定位 |
 | `history/handoff-store.ts`、`history/continuation.ts` | 交接摘要 `metadata/handoff.json` 的读写与状态（missing/current/behind/stale）；“在新会话继续”的背景文本（摘要＋未覆盖消息，无摘要时用最近消息） |
-| `memory/store.ts` | Data 内总层/Workspace/Conversation 记忆、归档、引用索引、迁移和恢复 |
+| `memory/store.ts`、`memory/provenance.ts` | Data 内总层/Workspace/Conversation 记忆、归档、引用索引、迁移和恢复；删除聊天时判定只属于它的记忆（`provenance.ts` 从对话 JSONL 读出它用 memory_write 新建的记忆） |
 | `migrations/index.ts` | 条目版本迁移到当前版本 |
 | `migrations/storage.ts` | 旧会话目录迁入数据目录 |
 | `migrations/data-framework.ts` | 会话迁入 `data/workspaces/<workspace-id>/sessions/<session-id>/` 布局 |

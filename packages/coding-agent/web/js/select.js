@@ -15,6 +15,9 @@ let uidSeq = 0;
  * - onChange(newValue)
  * - ariaLabel, id, class: as on the native control; `size` is "md" (32 px) or "sm" (28 px)
  * - placeholder: shown when nothing is selected; disabled; fitContent: shrink the trigger to its content (W30)
+ *
+ * Next to the trigger sits `.select-sizer`: every option label, hidden and on top of each other (base.css). It takes no
+ * room unless a container sizes itself on it, as the settings rows do, so their column stays put whatever is chosen.
  */
 export function Select({ value, options = [], onChange, ariaLabel, id, class: cls = "", size = "md", placeholder, disabled = false, fitContent = true }) {
 	const anchor = useRef(null);
@@ -151,6 +154,7 @@ export function Select({ value, options = [], onChange, ariaLabel, id, class: cl
 			<span class=${`select-value truncate ${chosen || shownText ? "" : "select-placeholder"}`}>${shownLabel}</span>
 			<${Chevron} />
 		</button>
+		<span class="select-sizer" aria-hidden="true">${options.map((opt, index) => html`<span key=${index} data-label=${String(opt.label ?? opt.value)} />`)}</span>
 		<${Popover} anchor=${anchor} open=${open} onClose=${closeList} placement="bottom" align="start" minWidth=${panelWidth} class="select-pop">
 			<div class="pop-scroll select-options" ref=${listRef} id=${uid} role="listbox" aria-label=${ariaLabel}>
 				${rows.map((row) => {

@@ -4,6 +4,6 @@
 
 查询使用 `listMemoryFilesAsync(dataRoot, { workspaceId?, sessionId? })`，在遍历前限定目录范围，不先读全树再过滤；全局查询同样异步读正文。同步扫描可给 `listMemoryFiles` 传入 `metadataCache`，按 mtime/ctime/size/inode 复用 id/name，不保留正文，删除文件时移除缓存。每次遍历独立复用祖先路径检查，不跨请求跳过 symlink/junction 校验。
 
-正文按归属只存一份；全局和 Workspace 索引只引用文件。自动 Recall 不调用全树汇总查询，不加载 archive、pending、兄弟对话或其他 Workspace；跨项目与 pending 可见性只走工具（`memory_search` / `memory_get`）与 `readCrossScopeMemoryEntries`，且只读。删除聊天默认保留其 memory 目录（确认框勾选才连带清除）；移除工作区仍只取消登记。
+正文按归属只存一份；全局和 Workspace 索引只引用文件。自动 Recall 不调用全树汇总查询，不加载 archive、pending、兄弟对话或其他 Workspace；跨项目与 pending 可见性只走工具（`memory_search` / `memory_get`）与 `readCrossScopeMemoryEntries`，且只读。删除聊天默认保留其 memory 目录；确认框勾选“同时删除这次对话的记忆”时，`deleteSessionMemories`（调用方持有 memory lock）删掉这次对话自己的 memory 目录，以及 `describeSessionMemories` 判定只属于它的 global/Workspace 记忆（连同归档）：每个版本都由它写下才算——新版本看 frontmatter `updatedBy`（写入的对话 session id、`consolidation` 或 `restore`），没有这个字段的旧版本看 `sourceSessionId` 是它、或这次对话用 memory_write 新建（`provenance.ts` 从对话 JSONL 读出，从父对话复制来的条目不算），且各旧版本的 `sourceEntryId` 不重复。别的对话、整理或恢复动过的、常驻画像和 `pending/` 一律保留；同时清掉 `state.json` 里这次对话的提取游标与整理记账。移除工作区仍只取消登记。
 
 彻底删除（`deleteMemoryPermanently`）连正文带全部归档一起清除、刷新索引，不可恢复；归档文件本身不许直接删。更新和整理替代前仍先保存完整旧文件到同层 archive；恢复先归档当前版本，不删除恢复来源。认领（`claimPendingMemory`）把 `pending/` 条目搬进目标工作区并重写归属 id，是一次移动而非复制。所有写入、删除、认领与恢复拒绝 symlink/junction，并使用 Data memory lock；索引可重建。旧 Agent memory 按来源标记复制迁移，原文件不删除，匹配不唯一的 project 进入 pending。更改归属、保留规则或迁移格式时同步 STORAGE/settings/web-ui，并运行 auto-memory、memory-storage、memory-intelligence、session-artifacts 测试。

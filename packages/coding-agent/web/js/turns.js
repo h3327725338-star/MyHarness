@@ -1,7 +1,7 @@
 // Transcript model: wire items -> turns, with tool calls translated into plain-language actions.
 // Three information layers: turn summary -> readable steps -> raw tool details.
 import { yieldToMain } from "./scheduling.js";
-import { N_, count, t } from "./i18n.js";
+import { N_, count, getLang, t } from "./i18n.js";
 import { basename, clip, firstLine, shellOutcome, shortPath } from "./util.js";
 
 const TENSES = {
@@ -334,10 +334,11 @@ export const turnsProbe = { builds: 0 };
 /**
  * Turns cache hit check (the cache entry itself lives in the session bag, see store.js). A cached build still
  * describes exactly these items only while every source reference is unchanged: the same items array, the same
- * toolRuns object, the same cwd. Returns the cached turns on a hit, null when the caller must build.
+ * toolRuns object, the same cwd, and the same UI language (the built rows carry translated verbs). Returns the cached
+ * turns on a hit, null when the caller must build.
  */
 export function cachedTurns(cache, items, toolRuns, cwd) {
-	return cache && cache.items === items && cache.toolRuns === toolRuns && cache.cwd === cwd ? cache.turns : null;
+	return cache && cache.items === items && cache.toolRuns === toolRuns && cache.cwd === cwd && cache.lang === getLang() ? cache.turns : null;
 }
 
 /**

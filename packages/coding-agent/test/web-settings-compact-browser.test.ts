@@ -102,6 +102,21 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 					{ value: "websocket-cached", label: "WebSocket (cached)" },
 				],
 			},
+			{
+				// The longest choices of the settings (English ~1.6x the Chinese): they must show whole, and switching
+				// between them must not move the row.
+				id: "popupNotifications",
+				section: "Notifications",
+				label: "Task completion notification",
+				description: "Choose when to be notified after a task completes, fails or is interrupted.",
+				type: "enum",
+				value: "always",
+				options: [
+					{ value: "never", label: "Never" },
+					{ value: "unfocused", label: "Only when the app window is in the background" },
+					{ value: "always", label: "Always, except the chat you are viewing" },
+				],
+			},
 		];
 		try {
 			for (const dir of ["js", "vendor", "css"])
@@ -117,14 +132,14 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 			server.mount({ prefix: "/test/", directory: root });
 			writeFileSync(
 				join(root, "index.html"),
-				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/overlays.css"><div id="app"></div><img src="/hold" hidden><script type="module" src="/test/test.js"></script>',
+				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/composer.css"><link rel="stylesheet" href="/css/overlays.css"><div id="app"></div><img src="/hold" hidden><script type="module" src="/test/test.js"></script>',
 			);
 			writeFileSync(
 				join(root, "test.js"),
 				`
 import {h,render} from '/vendor/preact.js';
 import {SettingsModal} from '/js/overlays-settings.js';
-import {set,setView} from '/js/store.js';
+import {set,setView,state} from '/js/store.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const app=document.getElementById('app');
 const rect=el=>el.getBoundingClientRect();
@@ -133,6 +148,11 @@ const rowWith=needle=>{const rows=[...document.querySelectorAll('.set-row')];con
 const right=el=>Math.round(rect(el).right);
 const rightsEqual=(els,what)=>{const rs=els.map(right);if(new Set(rs).size>1)throw Error(what+' right edges differ: '+rs);};
 const widthsEqual=(els,what)=>{const ws=els.map(e=>Math.round(rect(e).width));if(new Set(ws).size>1)throw Error(what+' widths differ: '+ws);};
+const setItem=(id,value)=>set({settings:{...state.settings,items:state.settings.items.map(i=>i.id===id?{...i,value}:i)}});
+const openPanel=async(trigger)=>{trigger.click();await wait(250);const p=document.querySelector('.popover.select-pop:not(.closing)');if(!p)throw Error('select panel did not open: '+trigger.textContent.trim());return p;};
+const closePanel=async(trigger)=>{trigger.click();await wait(250);};
+const insideModal=(p,what)=>{const m=rect(document.querySelector('.settings-modal'));const r=rect(p);if(r.left<m.left+7.5||r.right>m.right-7.5)throw Error(what+' menu leaves the settings dialog: '+Math.round(r.left)+'..'+Math.round(r.right)+' vs '+Math.round(m.left)+'..'+Math.round(m.right));};
+const placeholderFits=(el)=>{const cs=getComputedStyle(el);const c=document.createElement('canvas').getContext('2d');c.font=(cs.fontStyle+' '+cs.fontWeight+' '+cs.fontSize+' '+cs.fontFamily).replace(/\\s+/g,' ').trim();const need=c.measureText(el.placeholder).width;const room=el.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);if(need>room+1)throw Error('placeholder cut: "'+el.placeholder+'" needs '+Math.round(need)+' has '+Math.round(room));};
 const numWidth=el=>{const w=rect(el).width;if(w<76||w>84)throw Error('number box not 76-84px: '+Math.round(w)+' ('+(el.getAttribute('aria-label')||el.className)+')');};
 const runChecks=async()=>{
  setView({settingsSection:'agent'});await wait(150);
@@ -168,17 +188,42 @@ const runChecks=async()=>{
   if(!measured.options.some(o=>/cached|缓存/.test(o.textContent)))throw Error('transport select lost its cached option');
   if(w>measured.longest+60)throw Error('transport select wider than content+60: '+Math.round(w));
   if(w>=col-1)throw Error('transport select still fills the column: '+Math.round(w));
-  if(sel.scrollWidth>sel.clientWidth+1)throw Error('transport select clipped: '+sel.textContent.trim());}
+  if(sel.scrollWidth>sel.clientWidth+1)throw Error('transport select clipped: '+sel.textContent.trim());
+  // Its menu is wider than "Auto" and the trigger sits near the dialog's edge: it opens end-aligned, inside the dialog.
+  const pop=await openPanel(sel);insideModal(pop,'transport');
+  if(Math.abs(rect(pop).right-rect(sel).right)>1)throw Error('transport menu not end-aligned: '+Math.round(rect(pop).right)+' vs '+Math.round(rect(sel).right));
+  await closePanel(sel);}
+ setView({settingsSection:'safety'});await wait(150);
+ const notifyRow=()=>{const r=[...document.querySelectorAll('.set-row')].find(r=>r.querySelector('.select-like')&&/Task completion|任务完成/.test(r.querySelector('.set-label')?.textContent||''));if(!r)throw Error('missing row: task completion notification');return r;};
+ // The column follows the longest choice, not the current one. (The row height is compared between the choices that
+ // are on: outside the desktop app a browser-permission note sits under the description while notifications are on.)
+ {let first=null;let onHeight=null;
+  for(const value of ['always','unfocused','never']){
+   setItem('popupNotifications',value);await wait(150);
+   const row=notifyRow();const v=row.querySelector('.set-control > .select-like .select-value');
+   if(v.scrollWidth>v.clientWidth+1)throw Error('notification choice clipped ('+value+'): '+v.textContent+' '+v.scrollWidth+'>'+v.clientWidth);
+   const g=[rect(row).width,rect(row.querySelector('.set-text')).width,rect(row.querySelector('.set-control')).width].map(Math.round).join();
+   if(first===null)first=g;else if(g!==first)throw Error('the row moved when the choice changed to '+value+': '+first+' -> '+g);
+   if(value!=='never'){const h=Math.round(rect(row).height);if(onHeight===null)onHeight=h;else if(h!==onHeight)throw Error('the row height changed with the choice: '+onHeight+' -> '+h);}
+   if(row.querySelector('.set-control .btn, .set-control .badge'))throw Error('the browser permission is drawn in the control column');
+  }
+  setItem('popupNotifications','always');await wait(150);
+  const sel=notifyRow().querySelector('.set-control > .select-like');
+  const pop=await openPanel(sel);insideModal(pop,'notification');await closePanel(sel);}
  setView({settingsSection:'shortcuts'});await wait(150);
 	 const si=[...document.querySelectorAll('[data-shortcut-editor]')];
 	 if(si.length!==7)throw Error('shortcut editors not seven: '+si.length);
 	 widthsEqual(si,'shortcut editors');rightsEqual(si,'shortcut editors');
 	 const sw=rect(si[0]).width;if(sw<110||sw>160)throw Error('shortcut editor width outside 110-160: '+Math.round(sw));
-	 const overflowPages=['appearance','agent','search','network','shortcuts','providers'];
+	 const overflowPages=['appearance','agent','search','network','shortcuts','providers','safety'];
 	 for(const p of overflowPages){
 	  setView({settingsSection:p});await wait(250);
 	  const body=document.querySelector('.settings-body');if(!body)throw Error('settings body missing on '+p);
 	  if(body.scrollWidth>body.clientWidth+1)throw Error('horizontal overflow in settings-body on '+p);
+	  // A dropdown row keeps the shared column as its floor and grows to its longest choice, never past 340px.
+	  for(const c of body.querySelectorAll('.set-row:not(.wide) > .set-control:has(> .select-sizer)')){const w=rect(c).width;if(w<207.5||w>340.5)throw Error('dropdown column outside 208-340px on '+p+': '+Math.round(w));}
+	  for(const v of body.querySelectorAll('.set-control > .select-like .select-value'))if(v.scrollWidth>v.clientWidth+1)throw Error('dropdown value clipped on '+p+': '+v.textContent);
+	  for(const i of body.querySelectorAll('input[placeholder]'))if(!i.value&&rect(i).width>0)placeholderFits(i);
 	  for(const c of document.querySelectorAll('.set-card')){
 	   if(c.scrollWidth>c.clientWidth+1)throw Error('horizontal overflow in a card on '+p);
 	   const cr=rect(c);

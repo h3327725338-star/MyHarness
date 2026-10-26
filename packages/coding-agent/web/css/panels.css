@@ -45,7 +45,7 @@
    uncovers it at the edge instead of stretching it; the box's own background fills an uncovered strip. */
 .desktop-browser-shot { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; object-fit: cover; object-position: left top; user-select: none; pointer-events: none; }
 .panel-close { position: absolute; top: 10px; right: 10px; z-index: 15; background: var(--bg-panel); }
-.panel-toolbar { display: flex; align-items: center; gap: 6px; height: 44px; min-height: 44px; box-sizing: border-box; padding: 0 var(--pad-panel); padding-right: calc(var(--pad-panel) + 30px); flex: none; border-bottom: 1px solid var(--border); }
+.panel-toolbar { display: flex; align-items: center; gap: 6px; height: 44px; min-height: 44px; box-sizing: border-box; padding: 0 var(--pad-panel); flex: none; border-bottom: 1px solid var(--border); }
 .panel-toolbar .panel-title { font-weight: 600; font-size: var(--fs-body); color: var(--text); }
 /* Every bar of the panel starts and ends on the panel's inset. An icon button has no frame, so at either end of a bar
    it hangs into the inset by the space around its glyph: the glyph, not its invisible box, ends on the line. */
@@ -62,7 +62,7 @@
 /* The browser's own notice lies over its toolbar for a few seconds: the page below never moves, and nothing of the page
    is covered (the native view would have to hide under it). Opaque, because the toolbar's controls are behind it. */
 .ws-browser-bar { position: relative; }
-.notice.ws-notice { position: absolute; top: 5px; bottom: 5px; left: var(--pad-panel); right: calc(var(--pad-panel) + 30px); z-index: 3; margin: 0; padding: 0 2px 0 10px; white-space: nowrap; background: linear-gradient(var(--warn-soft), var(--warn-soft)), var(--bg-raised); box-shadow: var(--shadow-pop); animation: pop-in var(--t-pop) var(--ease-out) both; }
+.notice.ws-notice { position: absolute; top: 5px; bottom: 5px; left: var(--pad-panel); right: var(--pad-panel); z-index: 3; margin: 0; padding: 0 2px 0 10px; white-space: nowrap; background: linear-gradient(var(--warn-soft), var(--warn-soft)), var(--bg-raised); box-shadow: var(--shadow-pop); animation: pop-in var(--t-pop) var(--ease-out) both; }
 .notice.ws-notice.closing { animation: pop-out var(--t-close) var(--ease-out) both; pointer-events: none; }
 .modal-body .notice { margin: 4px 0; }
 

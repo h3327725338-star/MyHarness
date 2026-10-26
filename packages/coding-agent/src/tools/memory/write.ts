@@ -285,9 +285,11 @@ async function applyMemoryWriteItem(
 		triggers,
 		workspaceId: scope === "global" ? undefined : context.workspaceId,
 		sessionId: scope === "session" ? context.sessionId : undefined,
+		// An update keeps where the memory came from; a new memory came from this chat.
 		sourceEntryId: previous?.sourceEntryId,
-		sourceWorkspaceId: previous?.sourceWorkspaceId,
-		sourceSessionId: previous?.sourceSessionId,
+		sourceWorkspaceId: previous ? previous.sourceWorkspaceId : context.workspaceId,
+		sourceSessionId: previous ? previous.sourceSessionId : context.sessionId,
+		updatedBy: context.sessionId,
 	};
 	if (previous) await archiveMemoryFile(previous.filePath, "updated");
 	await writeMemoryFile(filePath, serializeMemory(entry));
