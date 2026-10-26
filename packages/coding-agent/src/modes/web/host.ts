@@ -1875,6 +1875,8 @@ export class WebHost {
 		}
 		const running = session.isStreaming || session.isCompacting;
 		if (!running && this.completionPromise) await this.completionPromise;
+		// run_finished can reach the page while the settled run still holds prompt admission (its trace is finishing).
+		if (!running) await session.waitForSettlingRun();
 		const streamingBehavior: "followUp" | "steer" | undefined =
 			running && !interrupt ? (mode === "followUp" ? "followUp" : "steer") : undefined;
 		await new Promise<void>((resolve, reject) => {

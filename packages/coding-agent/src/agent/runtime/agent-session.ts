@@ -509,6 +509,8 @@ export class AgentSession {
 	private _promptAdmissionPromise: Promise<void> | undefined;
 	private _resolvePromptAdmission: (() => void) | undefined;
 	private _emittingAgentSettled = false;
+	/** The run holding prompt admission has published agent_settled and is only finishing (trace) before releasing it. */
+	private _runSettling = false;
 	private _abortRequested = false;
 	/** Wakes the final answer's wait for background Explore batches (see _holdForBackgroundExplore). */
 	private _wakeBackgroundWait: (() => void) | undefined;
@@ -1638,6 +1640,16 @@ export class AgentSession {
 		return this._isAgentRunActive;
 	}
 
+	/**
+	 * Wait until a run that already published agent_settled releases prompt admission. Hosts see that run as finished
+	 * (agent_settled, then their own completion) a moment before admission is free, and a prompt sent in that window
+	 * was refused as "already preparing or processing". Never waits on a run that has not settled yet. Must not be
+	 * awaited from an agent_settled handler: admission is released only after those handlers return.
+	 */
+	async waitForSettlingRun(): Promise<void> {
+		while (this._runSettling && this._promptAdmissionPromise) await this._promptAdmissionPromise;
+	}
+
 	/** Whether the session has no active agent run, retry, auto-compaction, queued continuation or sub-agent work. */
 	get isIdle(): boolean {
 		return this.isForegroundIdle && !this._backgroundWork.hasPendingWork;
@@ -2012,6 +2024,7 @@ export class AgentSession {
 		} finally {
 			if (this._promptAdmissionPromise === admissionPromise) {
 				this._promptAdmissionPromise = undefined;
+				this._runSettling = false;
 				const resolve = this._resolvePromptAdmission;
 				this._resolvePromptAdmission = undefined;
 				resolve?.();
@@ -2123,6 +2136,7 @@ export class AgentSession {
 			}
 			// A run the fallback model took over hands the session back to the main model for the next task.
 			await this._modelFallback.endRun(!runFailed && this._runStateTracker.terminal?.state === "completed");
+			this._runSettling = true;
 			this._emittingAgentSettled = true;
 			this._endOperation(operationId);
 			try {

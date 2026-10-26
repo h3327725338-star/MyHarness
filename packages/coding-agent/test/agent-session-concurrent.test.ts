@@ -357,6 +357,52 @@ describe("AgentSession concurrent prompt guard", () => {
 		await expect(session.prompt("Second message")).resolves.not.toThrow();
 	});
 
+	it("lets a prompt sent once the run settled wait for its admission instead of being refused", async () => {
+		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: "Test", tools: [] },
+			streamFunction: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: createAssistantMessage("") });
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Done") });
+				});
+				return stream;
+			},
+		});
+		const settingsManager = SettingsManager.create(tempDir, tempDir);
+		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
+		const modelRuntime = getModelRuntime(await createModelRegistry(authStorage, tempDir));
+		registerManualTestProvider(modelRuntime, model);
+		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settingsManager,
+			cwd: tempDir,
+			modelRuntime,
+			resourceLoader: createTestResourceLoader(),
+		});
+
+		// A host reacts to agent_settled (its completion, then run_finished) while the run still holds admission.
+		let immediate: Promise<void> | undefined;
+		let waited: Promise<void> | undefined;
+		const unsubscribe = session.subscribe((event) => {
+			if (event.type !== "agent_settled" || immediate) return;
+			immediate = session.prompt("Too early");
+			immediate.catch(() => {});
+			waited = session.waitForSettlingRun().then(() => session.prompt("Second message"));
+		});
+		await session.prompt("First message");
+		unsubscribe();
+
+		await expect(immediate).rejects.toThrow("Agent is already preparing or processing a prompt.");
+		await expect(waited).resolves.toBeUndefined();
+		// Nothing is pending, so it returns at once.
+		await expect(session.waitForSettlingRun()).resolves.toBeUndefined();
+	});
+
 	it("should wait for queued agent events before emitting tool_call", async () => {
 		const model = getModel("anthropic", "claude-sonnet-4-5")!;
 		const tool = {
