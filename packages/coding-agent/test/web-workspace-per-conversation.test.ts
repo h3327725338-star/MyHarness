@@ -139,8 +139,9 @@ try{
  setView({chatMode:'coding'});
  setView({changesScope:'session'});
  render(h(ChangesPanel,{}),document.getElementById('app'));
- await wait(80);
  const scopeButton=(label)=>[...document.querySelectorAll('.panel-toolbar .segmented button')].find(b=>b.textContent.trim().startsWith(label));
+ // The counts render a moment after the panel; a fixed short wait read them too early on a slow runner.
+ for(const end=Date.now()+4000;Date.now()<end&&!(scopeButton('Current conversation')?.textContent.trim()==='Current conversation 3'&&scopeButton('Working tree')?.textContent.trim()==='Working tree 2');)await wait(20);
  must(!!scopeButton('Current conversation'),'the Changes panel lost its conversation scope');
  must(scopeButton('Current conversation')?.textContent.trim()==='Current conversation 3','the conversation scope does not carry how much of this chat is uncommitted: '+scopeButton('Current conversation')?.textContent);
  must(scopeButton('Working tree')?.textContent.trim()==='Working tree 2','the worktree scope does not carry the uncommitted count: '+scopeButton('Working tree')?.textContent);
