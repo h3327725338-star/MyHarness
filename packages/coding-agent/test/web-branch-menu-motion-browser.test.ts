@@ -88,7 +88,7 @@ if (location.search.indexOf('mode=reduced') >= 0) {
 			var chip = document.querySelector('.branch-chip');
 			assert(chip, 'branch chip missing');
 
-			// 1. Open: pop-in at --t-pop with --ease-out, 4 px slide from the anchor side, fixed 330 x 480, no self-managed classes.
+			// 1. Open: pop-in at --t-pop with --ease-out, 4 px slide from the anchor side, fixed 420 x 560, no self-managed classes.
 			chip.click();
 			var a = await findPop('.branch-pop');
 			assert(a, 'branch popover never mounted');
@@ -118,8 +118,8 @@ if (location.search.indexOf('mode=reduced') >= 0) {
 			assert(out.openAtMount.shift === (placed === 'top' ? 4 : -4), '--pop-shift must follow the landed side (' + placed + '), got ' + out.openAtMount.shift);
 			assert(tyOf(csA.transform) >= (placed === 'top' ? -0.5 : -4.5) && tyOf(csA.transform) <= (placed === 'top' ? 4.5 : 0.5), 'entrance must slide from the landed side (translateY 0..' + (placed === 'top' ? '4' : '-4') + '), got ' + csA.transform);
 			assert(!a.pop.className.includes('leaving'), 'the self-managed leaving class must be gone, cls=' + a.pop.className);
-			assert(out.openAtMount.width === 330, 'branch popover must stay 330 wide, got ' + out.openAtMount.width);
-			assert(out.openAtMount.maxHeight === '480px', 'branch popover must keep maxHeight 480px, got ' + out.openAtMount.maxHeight);
+			assert(out.openAtMount.width === 420, 'branch popover must stay 420 wide, got ' + out.openAtMount.width);
+			assert(out.openAtMount.maxHeight === '560px', 'branch popover must keep maxHeight 560px, got ' + out.openAtMount.maxHeight);
 
 			// The branch list and the search box behave as before.
 			assert(await until(function () { return document.querySelectorAll('.branch-row').length === 3; }, 5000), 'branch rows never rendered');
@@ -244,7 +244,7 @@ function serveFixture(root: string, gitState: { current: string }) {
 		],
 	}));
 	server.route("GET", "/api/git/worktrees", () => ({
-		worktrees: [{ path: "C:/fixture", isMain: true, current: true }],
+		worktrees: [{ path: "C:/fixture", branch: "main", isMain: true, current: true }],
 	}));
 	server.route("GET", "/api/git/status", () => ({
 		gitAvailable: true,

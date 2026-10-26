@@ -665,7 +665,7 @@ export function Sidebar() {
 				<div class=${`collapse ${otherOpen ? "open" : ""}`} inert=${!otherOpen}>
 					<div class="collapse-inner">${otherOpen ? html`
 						${inCopy ? renderGroups(otherList, otherSessionsOf) : null}
-						${unboundOther?.length || inCopy ? html`<${Workspace} general workspace=${{ rootPath: `${GENERAL_KEY}:other`, name: t("Default") }} isCurrent=${false} open=${expanded[`${GENERAL_KEY}:other`] === undefined ? true : !!expanded[`${GENERAL_KEY}:other`]} sessions=${unboundOther} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${false} expandKey=${expandKey} />` : null}
+						${unboundOther?.length || inCopy ? html`<${Workspace} general workspace=${{ rootPath: `${GENERAL_KEY}:other`, name: inCopy ? t("Default") : t("Default (copies)") }} isCurrent=${false} open=${expanded[`${GENERAL_KEY}:other`] === undefined ? true : !!expanded[`${GENERAL_KEY}:other`]} sessions=${unboundOther} filter=${filter} currentFile=${shownFile} slotsByFile=${slotsByFile} drafts=${drafts} hasUnreadResult=${false} expandKey=${expandKey} />` : null}
 						${!inCopy ? renderGroups(otherList, otherSessionsOf) : null}` : null}</div>
 				</div>
 			</div>` : null}

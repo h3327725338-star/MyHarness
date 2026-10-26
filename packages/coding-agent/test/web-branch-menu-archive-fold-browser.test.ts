@@ -62,9 +62,6 @@ var sampleFold = function (header, ms) {
 		var chip = await find('.branch-chip');
 		assert(chip, 'branch chip missing');
 		chip.click();
-		var head = await find('.branch-wt-heading', 4000);
-		assert(head, 'worktree section heading missing');
-		if (head.getAttribute('aria-expanded') !== 'true') head.click();
 		var header = null;
 		for (var i = 0; i < 200 && !header; i++) {
 			header = Array.from(document.querySelectorAll('button.branch-wt-group')).filter(function (b) {
@@ -94,7 +91,7 @@ var sampleFold = function (header, ms) {
 		var first = copyRows[0].getBoundingClientRect();
 		var second = copyRows[1].getBoundingClientRect();
 		// The capped list must scroll, not shrink its rows to fit: each row keeps the main copy row's height.
-		var mainHeight = document.querySelector('.branch-copies:not(.branch-copies-long) .branch-copy').getBoundingClientRect().height;
+		var mainHeight = document.querySelector('.branch-list .branch-row').getBoundingClientRect().height;
 		out.rowHeight = Math.round(first.height * 10) / 10;
 		assert(
 			first.height >= mainHeight - 0.5 && second.top >= first.bottom - 0.5,

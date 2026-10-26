@@ -258,20 +258,38 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .branch-chip.wt { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
 .wt-tag { flex: none; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent); font-size: var(--fs-mini); line-height: 15px; }
 .popover.branch-pop { padding: 3px; overflow-y: auto; }
-.branch-list { max-height: 171px; overflow-y: auto; scrollbar-gutter: stable; }
-.branch-copy-region { max-height: 236px; overflow-y: auto; scrollbar-gutter: stable; }
-.branch-row { cursor: pointer; }
-.branch-row.hi { background: var(--surface-hover); color: var(--text); }
-.branch-row.active { color: var(--text); font-weight: 600; }
+/* One list: a branch per row, and a branch checked out in a copy shows the copy in the same row (name, then branch
+   and folder on a second line). Folded sub-agent and archived groups sit below it, then the two footer actions. */
+.branch-list { max-height: 300px; overflow-y: auto; scrollbar-gutter: stable; }
+.branch-copy-region { max-height: 200px; overflow-y: auto; scrollbar-gutter: stable; border-top: 1px solid var(--border); margin-top: 3px; padding-top: 2px; }
+.branch-row { cursor: pointer; min-height: 30px; }
+.branch-row.hi, .branch-row.asking { background: var(--surface-hover); color: var(--text); }
+.branch-row.active { color: var(--text); }
+.branch-row.active .branch-name { font-weight: 600; }
 .branch-row[aria-disabled="true"] { cursor: default; }
 .branch-ico { flex: none; color: var(--text-3); }
-.branch-name { flex: 0 1 auto; }
+.branch-info { flex: 1; gap: 1px; }
+.branch-name { line-height: 1.3; }
+.branch-sub { font-size: var(--fs-xs); line-height: 1.3; }
 .branch-time { flex: none; font-size: var(--fs-xs); }
 .branch-check { flex: none; color: var(--accent); }
-.branch-del { width: 22px; height: 22px; flex: none; margin: -2px -4px -2px 0; color: var(--text-3); opacity: 0; transition: opacity var(--t-fast), color var(--t-fast); }
-.branch-row:hover .branch-del, .branch-row.hi .branch-del, .branch-del:focus-visible { opacity: 1; }
-.branch-del:hover { color: var(--danger); }
+/* A row's own buttons appear while it is pointed at (or has the keyboard) and take the place of its time. */
+.branch-row-actions { display: none; flex: none; align-items: center; margin: -2px -4px -2px 0; }
+.branch-row:hover .branch-row-actions, .branch-row.hi .branch-row-actions, .branch-row:focus-within .branch-row-actions { display: flex; }
+.branch-row:hover .branch-time, .branch-row.hi .branch-time, .branch-row:focus-within .branch-time { display: none; }
+.branch-row-actions .icon-btn { flex: none; color: var(--text-3); }
+.branch-row-actions .icon-btn:hover:not(:disabled) { color: var(--text); }
+.branch-row-actions .branch-del:hover:not(:disabled) { color: var(--danger); }
 .branch-confirm { flex: none; height: 20px; padding: 0 7px; border-radius: var(--r-pill); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-xs); font-weight: 600; animation: fade-in var(--t-fast) var(--ease) both; }
+/* Deleting: one panel folds open right under the row, says what would be lost and offers a single red button. */
+.branch-ask { display: flex; flex-direction: column; gap: 6px; margin: 2px 4px 6px 29px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--text-2); overflow-wrap: anywhere; }
+.branch-ask strong { color: var(--text); font-size: var(--fs-code); font-weight: 600; }
+.branch-ask-loss { margin: 0; padding: 0; list-style: none; color: var(--danger); }
+.branch-ask-loss li::before { content: "\00B7  "; }
+.branch-ask-note { color: var(--warn); }
+.branch-ask .branch-form { flex-wrap: wrap; justify-content: flex-end; padding: 2px 0 0; }
+.branch-ask-open { margin-right: auto; }
+.branch-rename { padding: 2px 4px 6px 29px; }
 .branch-note { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: var(--fs-xs); }
 .branch-delete-panel { flex-direction: column; align-items: stretch; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
 /* Live counts while archived copies are deleted: one narrow bar (deleted part, then kept part) plus "processed / total, left". */
@@ -285,40 +303,27 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .branch-delete-details summary { cursor: pointer; color: var(--text-3); }
 .branch-delete-details .pre-wrap { max-height: 120px; overflow-y: auto; margin-top: 4px; }
 .branch-foot { border-top: 1px solid var(--border); margin-top: 3px; padding-top: 3px; }
+.branch-foot-actions { display: flex; gap: 4px; }
+.branch-foot-actions > .pop-item { flex: 1 1 0; min-width: 0; }
 .branch-new { color: var(--text-2); }
 .branch-new.hi { background: var(--surface-hover); color: var(--text); }
 .branch-form { display: flex; gap: 6px; padding: 4px 6px 2px; }
 .branch-hint { padding: 2px 8px 6px; font-size: var(--fs-xs); }
-.branch-wt { border-top: 1px solid var(--border); margin-top: 3px; padding-top: 2px; }
-.branch-wt-heading { width: 100%; }
-.branch-wt-heading .dim { font-size: var(--fs-xs); }
-.branch-wt-heading .chev { flex: none; transform: rotate(-90deg); transition: transform var(--t-base) var(--ease); }
-.branch-wt-heading[aria-expanded="true"] .chev { transform: rotate(0deg); }
-.branch-wt-row { display: flex; align-items: center; gap: 10px; padding: 2px 8px 6px; }
-.branch-wt-text { gap: 1px; min-width: 0; font-size: var(--fs-code); color: var(--text); }
-.branch-wt-text .dim { font-size: var(--fs-xs); line-height: 1.35; }
 .branch-copies { display: flex; flex-direction: column; padding-bottom: 2px; }
-/* A long copy group is many times taller than the 236 px region that holds it, so the shared 260 ms fold would fill
+/* A long copy group is many times taller than the region that holds it, so the shared 260 ms fold would fill
    everything you can see within the first frame and read as an instant pop. Capping a long list keeps that fold over
    the height you actually see, like .branch-list scrolling inside the popover; short groups keep scrolling as a whole. */
 .branch-copies-long { max-height: 160px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 /* Rows in a capped column would otherwise shrink to fit the max-height and overlap instead of scrolling. */
 .branch-copies-long > * { flex-shrink: 0; }
-.branch-copy { color: var(--text-2); }
-.branch-copy-actions { display: flex; flex: none; opacity: 0; }
-.branch-copy:hover .branch-copy-actions, .branch-copy:focus-within .branch-copy-actions, .branch-copy-target .branch-copy-actions { opacity: 1; }
+.branch-copy { color: var(--text-2); cursor: default; }
+/* A copy just created (the chat is moving into it) stays marked until the menu closes. */
 .branch-copy-target { background: var(--accent-soft); outline: 1px solid var(--accent); outline-offset: -1px; }
-.branch-copy-actions .icon-btn { flex: none; }
-.branch-copy-info { flex: 1; min-width: 0; gap: 2px; }
-.branch-copy > svg { flex: none; }
-.branch-copy-path { font-size: var(--fs-xs); }
-.branch-copy.active { color: var(--text); }
-.branch-copy-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
-/* The one state a copy row shows: work main does not have yet, or merged (a read-only record). Same pill as .wt-tag. */
-.copy-state { flex: none; padding: 0 5px; border-radius: var(--r-pill); font-size: var(--fs-mini); line-height: 15px; }
+/* The one state a copy row shows: archived, merged (a read-only record) or the work main does not have yet. */
+.copy-state { flex: none; padding: 0 5px; border-radius: var(--r-pill); background: var(--surface-hover); color: var(--text-3); font-size: var(--fs-mini); font-weight: 400; line-height: 15px; white-space: nowrap; }
 .copy-state.warn { background: var(--warn-soft); color: var(--warn); }
 .copy-state.ok { background: var(--ok-soft); color: var(--ok); }
-.branch-wt-action { width: 100%; color: var(--text); }
+.branch-wt-action { color: var(--text); }
 .branch-wt-action > svg { flex: none; color: var(--accent); }
 .branch-wt-action:disabled { color: var(--text-3); }
 .branch-wt-action:disabled > svg { color: var(--text-3); }

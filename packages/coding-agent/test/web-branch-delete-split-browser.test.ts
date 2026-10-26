@@ -17,6 +17,8 @@ it
 		const deleted = new Set<string>();
 		const requests: Array<{ kind: string; name?: unknown; path?: unknown; force?: unknown; slot?: string }> = [];
 		let copyDeleted = false;
+		let cleanDeleted = false;
+		let cleanDirty = false;
 		let protectedChecks = false;
 		const browser = new LocalBrowser({
 			kind: installed.find((item) => item.kind === "chrome")?.kind ?? installed[0]!.kind,
@@ -35,6 +37,9 @@ it
 						subject: "workspace snapshot",
 						committedAt: 4,
 					},
+					...(cleanDeleted
+						? []
+						: [{ name: "clean-copy", worktreePath: "C:/copies/clean", commit: "f", committedAt: 3 }]),
 					{ name: "stale", commit: "c", subject: "stale", committedAt: 3 },
 					{ name: "denied", commit: "d", subject: "locked", committedAt: 2 },
 					{ name: "unknown", commit: "e", subject: "unknown failure", committedAt: 1 },
@@ -54,8 +59,11 @@ it
 			}));
 			server.route("GET", "/api/git/worktrees", () => ({
 				worktrees: [
-					{ path: "C:/fixture", isMain: true, current: true },
+					{ path: "C:/fixture", branch: "main", isMain: true, current: true },
 					...(copyDeleted ? [] : [{ path: "C:/copies/task-copy", branch: "task-copy" }]),
+					...(cleanDeleted
+						? []
+						: [{ path: "C:/copies/clean", branch: "clean-copy", changes: cleanDirty ? 2 : 0, ahead: 0 }]),
 					{ path: "C:/copies/locked", branch: "locked-copy" },
 					{ path: "C:/copies/unknown", branch: "unknown-copy" },
 					...(protectedChecks
@@ -74,6 +82,10 @@ it
 				protectedChecks = true;
 				return { ok: true };
 			});
+			server.route("POST", "/api/test/dirty", () => {
+				cleanDirty = true;
+				return { ok: true };
+			});
 			server.route("POST", "/api/test/reset-copy", () => {
 				copyDeleted = false;
 				return { ok: true };
@@ -83,6 +95,14 @@ it
 				requests.push({ ...payload, kind: "branch", slot: String(req.headers["x-myharness-slot"] ?? "") });
 				await new Promise((resolve) => setTimeout(resolve, 100));
 				const name = String(payload.name ?? "");
+				if (
+					name === "clean-copy" &&
+					payload.force === true &&
+					(payload as { deleteWorktrees?: boolean }).deleteWorktrees === true
+				) {
+					cleanDeleted = true;
+					return { ok: true };
+				}
 				if (
 					name === "task-copy" &&
 					payload.force === true &&
@@ -145,6 +165,7 @@ const branchPanel=()=>document.querySelector('[aria-label="删除分支？"]');
 const copyPanel=()=>document.querySelector('[aria-label="删除副本？"]');
 const button=(el,text)=>[...(el?.querySelectorAll('button')||[])].find(b=>b.textContent===text);
 const requests=()=>fetch('/api/test/requests').then(r=>r.json());
+const copyRow=path=>document.querySelector('.branch-row[data-copy-path="'+path+'"]');
 const safeBranch=async(name)=>{row(name).querySelector('.branch-del').click();await wait(100);if(!branchPanel())row(name).querySelector('.branch-confirm').click();};
 try {
  setView({motion:'on',lang:'zh-CN'}); setLang('zh-CN');
@@ -160,58 +181,58 @@ try {
  ]){set({gitStatus:status});await until(()=>document.title===title);}
  document.getElementById('app').style.cssText='position:fixed;bottom:20px;left:20px';
  render(h(BranchChip,{gitStatus:{branch:'main'}}),document.getElementById('app'));await wait(50);
- document.querySelector('.branch-chip').click();await until(()=>document.querySelectorAll('.branch-row').length===5);
+ document.querySelector('.branch-chip').click();await until(()=>row('task-copy')&&row('clean-copy')&&row('stale')&&copyRow('C:/copies/locked'));
  check(!row('main').querySelector('.branch-del'),'current branch offers deletion');
- // Occupied branch opens a real cascade confirmation without sending a doomed safe-delete request.
- await safeBranch('task-copy');
- await until(()=>branchPanel()?.textContent.includes('永久丢失'));
- check(button(branchPanel(),'强制删除分支及副本')?.classList.contains('solid'),'cascade force button is not prominent');
- check(!button(branchPanel(),'强制删除分支及副本').disabled,'cascade button disabled');
- check((await requests()).length===0,'opening cascade confirmation writes prematurely');
- const forceRow=row('task-copy').querySelector('.branch-confirm');
- forceRow.dispatchEvent(new MouseEvent('mouseout',{bubbles:true}));await wait(100);
- check(forceRow.textContent==='强制删除分支及副本','force button disappears when mouse leaves');
- check(document.activeElement===button(branchPanel(),'取消'),'confirmation must focus the safe option');
- let history=await requests();
- // Go-to is read-only. It clears a hiding search, opens the copy group, highlights and focuses the right copy.
- const search=document.querySelector('.pop-search input');search.value='stale';search.dispatchEvent(new Event('input',{bubbles:true}));await wait(50);
- button(branchPanel(),'去对应副本').click();await until(()=>document.querySelector('.branch-copy-target'));
- await until(()=>document.activeElement===document.querySelector('.branch-copy-target'));
- check(search.value===''&&document.querySelector('.branch-wt-heading').getAttribute('aria-expanded')==='true','go-to does not reveal the copy list');
- check(document.querySelector('.branch-copy-target').dataset.copyPath==='C:/copies/task-copy','go-to highlights wrong copy');
- check((await requests()).length===0,'go-to performs a write');
- const target=document.querySelector('.branch-copy-target');check(getComputedStyle(target.querySelector('.branch-copy-actions')).opacity==='1','target copy controls remain hidden');
- const cascade=button(branchPanel(),'强制删除分支及副本');cascade.click();cascade.click();
- await until(()=>!row('task-copy')&&!branchPanel()&&document.querySelectorAll('.branch-copy').length===2);
- history=await requests();check(history.length===1&&history[0].kind==='branch'&&history[0].force===true&&history[0].deleteWorktrees===true,'cascade must be one explicit backend request');
- check(!state.toasts.some(t=>t.type==='error'&&t.message.includes('副本仍')),'cascade emitted an occupied error toast');
- // Unmerged branch: cancellation sends nothing, running tasks disable force, retry is explicit and confirmed.
+ check(row('task-copy').querySelector('.branch-sub')?.textContent.includes('task-copy'),'a copy row does not name its folder');
+ // A copy and its branch: one question under the row that names what would be lost, a single red button, Cancel first.
+ row('task-copy').querySelector('.branch-del').click();await until(()=>copyPanel()?.textContent.includes('读不到'));
+ check(row('task-copy').parentElement.contains(copyPanel()),'the question does not open under its row');
+ check(copyPanel().querySelectorAll('.danger.solid').length===1&&button(copyPanel(),'丢弃并删除')?.classList.contains('solid'),'the question must offer exactly one red button');
+ check(button(copyPanel(),'打开这个副本')&&!button(copyPanel(),'去对应副本'),'a copy holding work must offer to open it, nothing else');
+ await until(()=>document.activeElement===button(copyPanel(),'取消'));
+ check((await requests()).length===0,'opening the question writes');
+ button(copyPanel(),'取消').click();await until(()=>!copyPanel());
+ check((await requests()).length===0&&row('task-copy'),'cancel deletes');
+ row('task-copy').querySelector('.branch-del').click();await until(()=>button(copyPanel(),'丢弃并删除'));
+ button(copyPanel(),'丢弃并删除').click();
+ await until(()=>!row('task-copy')&&!copyPanel());
+ let history=await requests();check(history.length===1&&history[0].kind==='branch'&&history[0].name==='task-copy'&&history[0].force===true&&history[0].deleteWorktrees===true,'copy and branch must go in one explicit backend request');
+ check(!state.toasts.some(t=>t.type==='error'),'deleting a copy and its branch raised an error toast');
+ // A clean copy says nothing is lost. If it changed after the question opened, the click only updates the question.
+ row('clean-copy').querySelector('.branch-del').click();await until(()=>copyPanel()?.textContent.includes('不会丢'));
+ check(!button(copyPanel(),'打开这个副本')&&button(copyPanel(),'删除'),'a clean copy question is wrong');
+ await fetch('/api/test/dirty',{method:'POST',headers:{'x-myharness-web':'1'}});
+ button(copyPanel(),'删除').click();await until(()=>copyPanel()?.textContent.includes('有了变化')&&copyPanel().textContent.includes('2 个未提交的改动'));
+ check((await requests()).length===1&&row('clean-copy'),'a copy that changed after the question was deleted anyway');
+ button(copyPanel(),'丢弃并删除').click();await until(()=>!row('clean-copy')&&!copyPanel());
+ history=await requests();check(history.length===2&&history[1].name==='clean-copy'&&history[1].deleteWorktrees===true,'confirming the updated question did not delete');
+ // Unmerged branch: Git refuses the safe delete; the panel explains it, cancel sends nothing, force is one explicit click.
  await safeBranch('stale');await until(()=>branchPanel()?.textContent.includes('尚未合并的提交'));
- button(branchPanel(),'强制删除分支').click();await wait(50);
- let count=(await requests()).length;button(branchPanel(),'取消').click();await wait(50);
- check(!branchPanel()&&(await requests()).length===count&&row('stale'),'cancel force deletes the unmerged branch');
+ check(!branchPanel().querySelector('.c-danger'),'the refusal is shown as red text');
+ let count=(await requests()).length;button(branchPanel(),'取消').click();await until(()=>!branchPanel());
+ check(!branchPanel()&&(await requests()).length===count&&row('stale'),'cancel deletes the unmerged branch');
  await safeBranch('stale');await until(()=>branchPanel()?.textContent.includes('尚未合并的提交'));
- button(branchPanel(),'强制删除分支').click();await wait(50);
  set({snap:{...state.snap,active:true}});await wait(50);
- check(button(branchPanel(),'强制删除分支').disabled&&row('stale').querySelector('.branch-confirm').disabled,'running task permits branch force deletion');
+ check(button(branchPanel(),'强制删除分支').disabled,'running task permits branch force deletion');
  set({snap:{...state.snap,active:false}});await wait(50);
  button(branchPanel(),'强制删除分支').click();await until(()=>!row('stale')&&!branchPanel());
+ history=await requests();check(history.at(-1).name==='stale'&&history.at(-1).force===true&&!history.at(-1).deleteWorktrees,'force is not explicit or touches copies');
  // Permission and unknown failures are explained inline, preserve details, and do not pretend force fixes them.
  await safeBranch('denied');await until(()=>branchPanel()?.textContent.includes('访问权限'));
  check(!button(branchPanel(),'强制删除分支')&&button(branchPanel(),'重试删除'),'permission error wrongly offers force');
  check(branchPanel().querySelector('details').textContent.includes('Permission denied'),'permission details lost');
- button(branchPanel(),'取消').click();await wait(50);
+ button(branchPanel(),'取消').click();await until(()=>!branchPanel());
  await safeBranch('unknown');await until(()=>branchPanel()?.textContent.includes('暂时无法确定具体原因'));
  check(!button(branchPanel(),'强制删除分支')&&button(branchPanel(),'重试删除'),'unknown error wrongly offers force');
  check(branchPanel().querySelector('details').textContent.includes('731'),'unknown error details lost');
- button(branchPanel(),'取消').click();await wait(50);
+ button(branchPanel(),'取消').click();await until(()=>!branchPanel());
+ // Copies whose branch the list does not have still get a row, and their failures are explained the same way.
  for (const path of ['C:/copies/locked','C:/copies/unknown']) {
-  const copy=[...document.querySelectorAll('.branch-copy')].find(r=>r.dataset.copyPath===path);
-  copy.querySelector('[aria-label="删除副本"]').click();await wait(50);button(copyPanel(),'删除').click();
+  copyRow(path).querySelector('.branch-del').click();await until(()=>button(copyPanel(),'丢弃并删除'));button(copyPanel(),'丢弃并删除').click();
   await until(()=>copyPanel()?.querySelector('[role="alert"]'));
   check(!button(copyPanel(),'强制删除副本')&&button(copyPanel(),'重试删除'),'non-dirty copy error wrongly offers force: '+path);
   check(copyPanel().querySelector('details').textContent.includes(path.includes('locked')?'locked':'732'),'copy details lost');
-  button(copyPanel(),'取消').click();await wait(50);
+  button(copyPanel(),'取消').click();await until(()=>!copyPanel());
  }
  history=await requests();check(history.every(r=>['branch','copy'].includes(r.kind)&&r.slot==='slot'),'deletion misrouted to another chat or go-to wrote state');
  // The alternate /git -> Worktrees entry must use the same copy-only confirmation and friendly force retry.
@@ -245,19 +266,12 @@ try {
  check(document.querySelector('.cp-row.sel .cp-label')?.textContent==='取消','alternate force confirmation not safe by default');
  cpRow('强制删除副本').click();await until(()=>cpRow('unknown-copy')&&!cpRow('task-copy'));
  history=await requests();check(history.at(-1).kind==='copy'&&history.at(-1).force===true&&history.at(-1).slot==='slot','alternate force does not target just the selected copy');
- // Protected main/current targets must explain why their copy cannot be deleted, not point at a missing button.
+ // The main copy and the copy this chat runs in never offer deletion.
  render(null,document.getElementById('app'));
  await fetch('/api/test/protected',{method:'POST',headers:{'x-myharness-web':'1'}});
  render(h(BranchChip,{gitStatus:{branch:'main'}}),document.getElementById('app'));await wait(50);
- document.querySelector('.branch-chip').click();await until(()=>row('protected-main'));
- for (const name of ['protected-main','protected-current']) {
-  await safeBranch(name);await until(()=>button(branchPanel(),'去对应副本'));
-  count=(await requests()).length;button(branchPanel(),'去对应副本').click();await until(()=>document.querySelector('.branch-copy-target')?.dataset.copyBranch===name&&document.querySelector('.branch-hint')?.textContent.includes('主副本本身必须保留'));
-  const protectedRow=document.querySelector('.branch-copy-target');check(protectedRow?.dataset.copyBranch===name,'protected go-to picked wrong copy');
-  const trash=protectedRow.querySelector('[aria-label="删除副本"]');check(!trash||trash.disabled,'protected copy permits deletion');
-  check((await requests()).length===count,'protected go-to performs a deletion');
-  button(branchPanel(),'取消').click();await wait(50);
- }
+ document.querySelector('.branch-chip').click();await until(()=>row('protected-main')&&row('protected-current'));
+ for (const name of ['protected-main','protected-current']) check(!row(name).querySelector('.branch-del'),'protected copy offers deletion: '+name);
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error){document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.stack+'</p>');}
 `,

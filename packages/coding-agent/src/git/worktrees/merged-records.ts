@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { resolvePath } from "../../utils/paths.ts";
 import { worktreeId } from "./display-name.ts";
 
@@ -17,12 +17,44 @@ function copyRootParts(agentDir: string, path: string): [string, string] | undef
 	return [parts[0]!, parts[1]!];
 }
 
+/** Answers of `linkedWorktreeAt` per folder; a copy appears or goes away rarely, so a short reuse is plenty. */
+const linkedProbes = new Map<string, { linked: boolean; at: number }>();
+const LINKED_PROBE_MS = 15_000;
+
 /**
- * Whether `path` lies inside a worktree copy that MyHarness created (`<agentDir>/worktrees/<repo>/<branch>`).
- * Lexical path check only: no Git call and no filesystem access, so it is cheap enough for every sidebar row.
+ * Whether `path` lies inside a linked Git worktree anywhere on disk: the nearest `.git` above it is a file pointing
+ * into `<repo>/.git/worktrees/` (a submodule's `.git` file points into `.git/modules/` and is not a copy). No Git call.
+ */
+function linkedWorktreeAt(path: string): boolean {
+	const key = resolvePath(path);
+	const cached = linkedProbes.get(key);
+	if (cached && Date.now() - cached.at < LINKED_PROBE_MS) return cached.linked;
+	let linked = false;
+	for (let dir = key; ; ) {
+		const marker = join(dir, ".git");
+		try {
+			if (statSync(marker).isFile())
+				linked = /^gitdir:.*[\\/]worktrees[\\/][^\\/]+\s*$/m.test(readFileSync(marker, "utf8"));
+			break;
+		} catch {
+			const parent = dirname(dir);
+			if (parent === dir) break;
+			dir = parent;
+		}
+	}
+	if (linkedProbes.size > 500) linkedProbes.clear();
+	linkedProbes.set(key, { linked, at: Date.now() });
+	return linked;
+}
+
+/**
+ * Whether `path` lies inside a worktree copy: one MyHarness created (`<agentDir>/worktrees/<repo>/<branch>`, a lexical
+ * check) or any other linked worktree, such as one made with `git worktree add` in a folder of the user's choosing.
+ * The second check reads at most a few `.git` markers and reuses its answer briefly, so every sidebar row can ask.
  */
 export function isWorktreeCopyPath(agentDir: string, path: string): boolean {
-	return copyRootParts(agentDir, path) !== undefined;
+	if (!path) return false;
+	return copyRootParts(agentDir, path) !== undefined || linkedWorktreeAt(path);
 }
 
 export interface WorktreeMergedRecord {

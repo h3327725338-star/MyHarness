@@ -8,7 +8,7 @@ import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/b
 
 const installed = detectInstalledBrowsers();
 
-// A long archived list leaves the branch popover at its 480px cap, and the clear button sits at the end of the capped
+// A long archived list leaves the branch popover at its 560px cap, and the clear button sits at the end of the capped
 // copies region. The confirmation the button adds below the region therefore starts outside the popover's visible box:
 // without scrolling it into view the click looked dead because the confirm button was never on screen.
 const indexHtml =
@@ -46,9 +46,6 @@ var inside = function (box, host) { return box.top >= host.top - 1 && box.bottom
 		var chip = await find('.branch-chip');
 		assert(chip, 'branch chip missing');
 		chip.click();
-		var head = await find('.branch-wt-heading', 4000);
-		assert(head, 'worktree section heading missing');
-		if (head.getAttribute('aria-expanded') !== 'true') head.click();
 		var header = await byText('button.branch-wt-group', /Archived/i, 4000);
 		assert(header, 'archived group header missing');
 		if (header.getAttribute('aria-expanded') !== 'true') header.click();

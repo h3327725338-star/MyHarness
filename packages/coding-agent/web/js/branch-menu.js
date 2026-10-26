@@ -1,7 +1,7 @@
 // The branch chip above the input and its popover: search the local branches, switch, create and delete them, and move
 // this chat into an isolated copy of the repository (a Git worktree) or back to the main copy. Every action calls the
 // server's Git routes (routes-git.ts), which use Git's own rules; nothing here decides what Git allows.
-import { html, useEffect, useMemo, useRef, useState, afterPaint, Chevron, Collapse, COLLAPSE_MS, FoldIn, Icon, Popover, Spinner, Toggle, useHeightGlide } from "./ui.js";
+import { html, useEffect, useMemo, useRef, useState, Chevron, Collapse, COLLAPSE_MS, FoldIn, Icon, Popover, Spinner, Toggle, useHeightGlide } from "./ui.js";
 import { api, attempt, loadGitStatus, post, REQUEST_TIMEOUT, set, state, toast, useStore } from "./store.js";
 import { rankSearch } from "./search.js";
 import { relTime } from "./util.js";
@@ -139,10 +139,59 @@ export function BranchChip({ gitStatus }) {
 			${linked ? html`<span class="wt-tag">${t("worktree")}</span>` : null}
 			<${Chevron} />
 		</button>
-		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="start" width=${330} maxHeight=${480} class="branch-pop">
+		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement="top" align="start" width=${420} maxHeight=${560} class="branch-pop">
 			<${BranchMenu} key=${slot} gitStatus=${gitStatus} branchSource=${branchSource} slot=${slot} close=${() => setOpen(false)} />
 		<//>
 	</span>`;
+}
+
+/** What a row is called: a copy by its name (alias or branch); the main copy and plain branches by their branch. */
+const entryLabel = ({ branch, copy }) => (copy && !copy.isMain ? copyLabel(copy) : branch?.name || copyLabel(copy));
+/** The second line of a row with a copy: where the copy is, after its branch when the row shows an alias instead. */
+function entrySub({ copy: w }) {
+	if (!w) return "";
+	if (w.isMain) return w.branch ? `${t("Main copy")} · ${shortPath(w.path)}` : shortPath(w.path);
+	const branch = w.branch || t("detached HEAD");
+	return copyLabel(w) === branch ? shortPath(w.path) : `${branch} · ${shortPath(w.path)}`;
+}
+
+/** The one state a copy shows: archived, merged into main, or the work main does not have yet (counted when known). */
+function CopyState({ w, archived = false }) {
+	if (archived) {
+		return html`<span class="copy-state" title=${w.archivedAt ? t("Archived {when}: kept on disk, nothing deleted", { when: relTime(w.archivedAt) }) : t("Kept on disk, nothing deleted")}>${t("Archived")}</span>`;
+	}
+	if (w.merged) return html`<span class="copy-state ok" title=${t("Merged into main; kept as a read-only record")}>${t("Merged")}</span>`;
+	if (!holdsWork(w)) return null;
+	const parts = w.changes === undefined || w.ahead === undefined
+		? []
+		: [w.changes ? t("{n} open changes", { n: w.changes }) : "", w.ahead ? t("{n} commits not in main", { n: w.ahead }) : ""].filter(Boolean);
+	return html`<span class="copy-state warn" title=${workText(w)}>${parts.length ? parts.join(" · ") : t("Unmerged")}</span>`;
+}
+
+/** What deleting a copy that holds work throws away, one line each, in the words the confirmation shows. */
+function lossLines(w) {
+	if (w.changes === undefined || w.ahead === undefined) return [t("Its changes could not be read, so it is treated as holding work.")];
+	return [
+		w.changes > 0 ? t("{n} uncommitted changes will be lost for good", { n: w.changes }) : "",
+		w.ahead > 0 ? t("{n} commits are not in main yet; they will be hard to get back", { n: w.ahead }) : "",
+	].filter(Boolean);
+}
+
+/**
+ * Puts the keyboard on a panel's safe option once it is on screen. A fold keeps its content hidden (and unfocusable)
+ * until its first frame is painted, so this tries again for a few frames; the panel is followed into view meanwhile.
+ */
+function focusSafeOption(panel) {
+	let tries = 0;
+	let frame = 0;
+	const step = () => {
+		const cancel = panel()?.querySelector(".branch-delete-cancel");
+		cancel?.focus({ preventScroll: true });
+		frame = document.activeElement !== cancel && tries++ < 10 ? requestAnimationFrame(step) : 0;
+	};
+	step();
+	const stopFollow = followIntoView(panel);
+	return () => { cancelAnimationFrame(frame); stopFollow(); };
 }
 
 function BranchMenu({ gitStatus, branchSource, slot, close }) {
@@ -163,14 +212,14 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const deletePending = useRef(false);
 	const [creating, setCreating] = useState(false);
 	const [newName, setNewName] = useState("");
+	// The row whose "Delete?" pill waits for a second click: a branch without a copy, or an archived copy.
 	const [confirm, setConfirm] = useState("");
-	// Refusals and force confirmation stay visible until cancelled or successfully deleted; pointer movement never clears them.
-	const [branchDeletion, setBranchDeletion] = useState(null);
+	// The delete panel open under one row: `{ key, kind, branch, copy, failure, changed }`. `kind` is "copy" (a copy
+	// and its branch, asked before anything happens), "branch" (a branch without a copy, shown once Git refused it) or
+	// "archived" (an archived copy alone, shown once Git refused it). It stays until cancelled or deleted.
+	const [ask, setAsk] = useState(null);
 	const [removing, setRemoving] = useState("");
-	const [worktreesOpen, setWorktreesOpen] = useState(linked);
 	const [agentsOpen, setAgentsOpen] = useState(false);
-	// The active copies fold like the sub-agent group does; archived ones start folded so a long list stays readable.
-	const [mineOpen, setMineOpen] = useState(true);
 	const [archivedOpen, setArchivedOpen] = useState(false);
 	// The clear-archived confirmation lives in the store, not in this menu: closing the popover while copies are being
 	// deleted must neither lose the outcome (the toast points back to it) nor allow a second clear to start.
@@ -182,15 +231,8 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const [fresh, setFresh] = useState("");
 	const [naming, setNaming] = useState(null);
 	const [displayName, setDisplayName] = useState("");
-	const [confirmCopy, setConfirmCopy] = useState("");
-	const [discarding, setDiscarding] = useState(false);
-	const [deletingCopy, setDeletingCopy] = useState(null);
-	const [copyFailure, setCopyFailure] = useState(null);
-	const [targetCopy, setTargetCopy] = useState(null);
-	const deletionPanel = useRef(null);
-	const copyDeletionPanel = useRef(null);
+	const askPanel = useRef(null);
 	const archiveClearPanel = useRef(null);
-	const copies = useRef(null);
 	// The archived rows shrink with the shared motion when a clear removes some of them.
 	const glide = useHeightGlide();
 	const archivedEnd = useRef(null);
@@ -302,35 +344,12 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	const cancelArchiveClear = () => set({ archiveClear: null, worktreeClear: null });
 	useEffect(() => {
 		load();
-		// Opening the branch popover expresses intent; avoid prefetching every Chat at startup.
+		// Opening the branch popover expresses intent; avoid prefetching every Chat at startup. A cached list shows at
+		// once while this read (always a real one) replaces it.
 		loadWorktrees().then(() => {
 			archiveTimer.current = setTimeout(() => syncArchive(), 2000);
 		});
 	}, []);
-	useEffect(() => {
-		if (worktreesOpen) loadWorktrees();
-	}, [worktreesOpen]);
-	useEffect(() => {
-		if (!branchDeletion) return;
-		// A refusal adds the panel after the request; reveal it and put the keyboard on the safe option.
-		deletionPanel.current?.scrollIntoView({ block: "nearest" });
-		deletionPanel.current?.querySelector(".branch-delete-cancel")?.focus({ preventScroll: true });
-	}, [branchDeletion]);
-	useEffect(() => {
-		if (!targetCopy || !worktreesOpen || !worktrees) return;
-		// Collapse mounts its children after the parent effect can run; wait for its mount/paint and observe late lists.
-		const reveal = () => {
-			const row = [...(copies.current?.querySelectorAll("[data-copy-path]") || [])].find((el) => sameCopyPath(el.dataset.copyPath, targetCopy.path) || el.dataset.copyBranch === targetCopy.branch);
-			if (!row) return;
-			row.scrollIntoView({ block: "nearest", behavior: "smooth" });
-			row.focus({ preventScroll: true });
-			observer.disconnect();
-		};
-		const observer = new MutationObserver(reveal);
-		observer.observe(list.current.closest(".branch-menu"), { childList: true, subtree: true });
-		const cancelPaint = afterPaint(reveal);
-		return () => { observer.disconnect(); cancelPaint(); };
-	}, [targetCopy, worktreesOpen, worktrees]);
 	useEffect(() => {
 		if (!archivedOpen) return undefined;
 		// The opened group is taller than what is left of the copies region: its end (the clear button) is kept in view
@@ -345,32 +364,45 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	}, [clearRunning]);
 	const clearSettled = !!archiveClear && !archiveClear.running;
 	useEffect(() => {
+		// The confirmation folds in below the capped copies region: followed into view, or the click looks dead. It also
+		// takes the keyboard on its safe option, when it opens and again when a clear ends (the confirm button was
+		// disabled meanwhile, so the focus had nowhere to stay).
 		if (!clearSettled) return undefined;
-		// The confirmation folds in below the capped copies region and the popover's own edge: it is followed into view as
-		// it opens, or the click looks dead. It also takes the keyboard on its safe option, when it opens and again when a
-		// clear ends (the confirm button was disabled meanwhile, so the focus had nowhere to stay).
-		// The fold keeps it hidden (and unfocusable) until its first frame is painted, so try again for a few frames.
-		let tries = 0;
-		let frame = 0;
-		const focusSafe = () => {
-			const cancel = archiveClearPanel.current?.querySelector(".branch-delete-cancel");
-			cancel?.focus({ preventScroll: true });
-			frame = document.activeElement !== cancel && tries++ < 10 ? requestAnimationFrame(focusSafe) : 0;
-		};
-		focusSafe();
-		const stopFollow = followIntoView(() => archiveClearPanel.current);
-		return () => { cancelAnimationFrame(frame); stopFollow(); };
+		return focusSafeOption(() => archiveClearPanel.current);
 	}, [clearSettled, archiveClear?.stage]);
+	// A delete panel opens under its row (or changes after a refusal): show it whole and put the keyboard on Cancel.
 	useEffect(() => {
-		if (!deletingCopy) return;
-		copyDeletionPanel.current?.scrollIntoView({ block: "nearest" });
-		copyDeletionPanel.current?.querySelector(".branch-delete-cancel")?.focus({ preventScroll: true });
-	}, [deletingCopy, copyFailure]);
+		if (!ask) return undefined;
+		return focusSafeOption(() => askPanel.current);
+	}, [ask?.key, ask?.failure, ask?.changed]);
 
-	const branches = useMemo(() => rankSearch((data?.branches || []).filter((b) => b.current || !isSubagentBranch(b.name)), query, { names: (b) => [b.name] }), [data, query]);
-	const exact = branches.some((b) => b.name === query.trim());
-	// Rows the keyboard moves over: the branches, then "New branch".
-	const rows = data ? [...branches.map((b) => ({ kind: "branch", branch: b })), { kind: "new" }] : [];
+	const copiesList = worktrees?.list || [];
+	const main = copiesList.find((w) => w.isMain);
+	// One row per branch, and a branch checked out in a copy shows that copy in the same row: a copy and its branch are
+	// one thing to the user. Copies on a detached HEAD get a row of their own; sub-agent and archived copies wait in
+	// their folded groups below. Without a search: the current row, the main copy, copies with work, clean copies,
+	// merged copies, then the other branches in the server's order.
+	const entries = useMemo(() => {
+		const byBranch = new Map(copiesList.filter((w) => w.branch).map((w) => [w.branch, w]));
+		const out = [];
+		const shown = new Set();
+		for (const b of data?.branches || []) {
+			const copy = byBranch.get(b.name);
+			if (copy) shown.add(copy.path);
+			if (!b.current && (isSubagentBranch(b.name) || copy?.archived || copy?.subagent)) continue;
+			out.push({ key: `b:${b.name}`, branch: b, copy });
+		}
+		// A copy no listed branch points at (a detached HEAD, or a branch the list does not have) still gets its row.
+		for (const w of copiesList) if (!shown.has(w.path) && !w.archived && !w.subagent) out.push({ key: `w:${w.path}`, copy: w });
+		const rank = ({ branch: b, copy: w }) => (b ? b.current : w?.current) ? 0 : w?.isMain ? 1 : !w ? 5 : w.merged ? 4 : holdsWork(w) ? 2 : 3;
+		const ordered = out.map((entry, index) => ({ entry, index }))
+			.sort((a, b) => rank(a.entry) - rank(b.entry) || a.index - b.index)
+			.map(({ entry }) => entry);
+		return rankSearch(ordered, query, { names: (entry) => [entryLabel(entry), entry.branch?.name || "", entry.copy?.path || ""] });
+	}, [data, worktrees, query]);
+	const exact = entries.some((entry) => entry.branch?.name === query.trim());
+	// Rows the keyboard moves over: the list, then "New branch".
+	const rows = data ? [...entries, { kind: "new" }] : [];
 	useEffect(() => setSel(0), [query]);
 	useEffect(() => {
 		list.current?.querySelector(`[data-row="${sel}"]`)?.scrollIntoView({ block: "nearest" });
@@ -435,97 +467,6 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 			return { detail: e.rawMessage || e.message || String(e), status: e.status };
 		}
 	};
-	const cancelBranchDeletion = () => { setBranchDeletion(null); setConfirm(""); };
-	const prepareForceBranch = (branch) => {
-		if (running || busy || deletePending.current || branch.current) return;
-		setConfirm("");
-		setBranchDeletion((previous) => ({ branch, failure: previous?.branch.name === branch.name ? previous.failure : null, forceConfirm: true }));
-	};
-	const remove = async (branch, force = false, retry = false) => {
-		if (running || busy || deletePending.current || branch.current) return;
-		if (force && (!branchDeletion?.forceConfirm || branchDeletion.branch.name !== branch.name)) return prepareForceBranch(branch);
-		if (!force && !retry && branch.worktreePath) {
-			setBusy(`d:${branch.name}`);
-			const listing = await api("/api/git/worktrees", { slot }).catch(() => null);
-			setBusy("");
-			if (listing) setWorktrees({ list: listing.worktrees || [] });
-			const copy = listing?.worktrees?.find((w) => sameCopyPath(w.path, branch.worktreePath));
-			const protectedCopy = !listing || copy?.isMain || copy?.current || copy?.locked;
-			const failure = protectedCopy
-				? { ...explainDeleteFailure({ detail: !listing ? "Cannot reach the MyHarness server" : copy?.locked ? "The worktree is locked." : "The main worktree cannot be deleted." }, "copy"), occupied: true, worktreePath: branch.worktreePath }
-				: explainDeleteFailure({ detail: `used by worktree at '${branch.worktreePath}'` }, "branch");
-			setConfirm("");
-			setBranchDeletion({ branch, failure, forceConfirm: !protectedCopy });
-			return;
-		}
-		if (!force && !retry && confirm !== branch.name) {
-			cancelBranchDeletion();
-			return setConfirm(branch.name);
-		}
-		setConfirm("");
-		deletePending.current = true;
-		setBusy(`d:${branch.name}`);
-		const cascade = force && branchDeletion?.failure?.occupied && branchDeletion.failure.canForce;
-		const err = await tryPost("/api/git/branches/delete", { name: branch.name, ...(force ? { force: true } : {}), ...(cascade ? { deleteWorktrees: true } : {}) });
-		deletePending.current = false;
-		setBusy("");
-		if (err) {
-			const failure = { ...err, ...explainDeleteFailure(err, "branch", force) };
-			setBranchDeletion({ branch, failure, forceConfirm: force && !!failure.canForce });
-			toast(failure.message, "error", 9000);
-			return;
-		}
-		cancelBranchDeletion();
-		setTargetCopy(null);
-		if (cascade) {
-			setDeletingCopy(null);
-			setCopyFailure(null);
-			setNaming(null);
-			await Promise.all([load(true), loadWorktrees()]);
-			await done(t("Deleted branch {branch}", { branch: branch.name }));
-			return;
-		}
-		// The row folds away first, then the list is read again.
-		setRemoving(branch.name);
-		setTimeout(async () => {
-			await load(true);
-			setRemoving("");
-		}, COLLAPSE_MS);
-		toast(t("Deleted branch {branch}", { branch: branch.name }), "info", 3500);
-		if (worktrees) loadWorktrees();
-		await done();
-	};
-	const goToCopy = async () => {
-		if (!branchDeletion || busy) return;
-		const { branch, failure } = branchDeletion;
-		// Navigation is read-only: clear the branch search, reveal copies and focus the matching row, never delete anything.
-		setQuery("");
-		setWorktreesOpen(true);
-		setTargetCopy({ branch: branch.name, path: failure?.worktreePath || branch.worktreePath });
-		await loadWorktrees();
-	};
-	const copiesList = worktrees?.list || [];
-	const main = copiesList.find((w) => w.isMain);
-	// The main copy is always first; copies the user made follow (current, with work, clean, merged last); sub-agent
-	// copies sit in their own group at the bottom, folded by default.
-	const rank = (w) => (w.current ? 0 : w.merged ? 3 : holdsWork(w) ? 1 : 2);
-	// A group with a long list grows far taller than the copies region can show, which would make the shared fold fill
-	// the visible area in the first frame; capping the list lets the fold ease over the height you can actually see.
-	const copiesClass = (rows) => `branch-copies${rows.length > 12 ? " branch-copies-long" : ""}`;
-	const mine = copiesList.filter((w) => !w.isMain && !w.subagent && !w.archived).sort((a, b) => rank(a) - rank(b));
-	const agentCopies = copiesList.filter((w) => !w.isMain && w.subagent && !w.archived);
-	// Newest archived copy first: the copy finished most recently is the one worth checking first.
-	const archivedCopies = copiesList
-		.filter((w) => !w.isMain && w.archived)
-		.sort((a, b) => String(b.archivedAt || "").localeCompare(String(a.archivedAt || "")));
-	const isTarget = (w) => !!targetCopy && (sameCopyPath(w.path, targetCopy.path) || w.branch === targetCopy.branch);
-	const targetWorktree = targetCopy && copiesList.find(isTarget);
-	const targetProtection = targetWorktree?.isMain || targetWorktree?.current
-		? explainDeleteFailure({ detail: "The main worktree cannot be deleted." }, "copy").message
-		: "";
-	useEffect(() => {
-		if (targetWorktree?.subagent) setAgentsOpen(true);
-	}, [targetWorktree]);
 
 	// The copy gets its formal name from the main Agent once the chat is in it; until then the branch name stands in.
 	// A name the user typed in the meantime is never replaced, and a busy or failed request keeps the temporary name.
@@ -561,8 +502,7 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		}
 		const path = created.worktree.path;
 		setFresh(path);
-		setWorktreesOpen(true);
-		await loadWorktrees(true);
+		await Promise.all([loadWorktrees(true), load(true)]);
 		carryDraftFrom(state.snap?.session?.id);
 		const entered = await attempt(() =>
 			post("/api/git/worktrees/enter", { path, carryHistory: true }, undefined, { timeoutMs: REQUEST_TIMEOUT.session }),
@@ -582,56 +522,84 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 	};
 	const backToMain = () => main && enterCopy(main.path, t("Back in the main copy"), true);
 
-	const deleteCopy = async (w, force = false) => {
-		if (!w || w.isMain || w.current || running || busy || deletePending.current) return;
+	// Deleting asks once, in a panel under the row that says what would be lost; nothing else in the menu moves.
+	// A copy and its branch go together. A branch without a copy, or an archived copy, uses the "Delete?" pill and only
+	// opens the panel when Git refuses, with the stronger option Git allows.
+	const askDelete = (target) => {
+		if (disabled) return;
+		setNaming(null);
+		if (target.kind !== "copy") {
+			setAsk(null);
+			return setConfirm(target.key);
+		}
+		setConfirm("");
+		setAsk({ ...target, failure: null, changed: false });
+	};
+	const cancelAsk = () => { setAsk(null); setConfirm(""); };
+	const runDelete = async (target, force = false) => {
+		if (running || busy || deletePending.current) return;
+		const { key, kind, branch, copy } = target;
+		setConfirm("");
 		deletePending.current = true;
-		setBusy(`delete:${w.path}`);
-		const err = await tryPost("/api/git/worktrees/delete", { path: w.path, ...(force ? { force: true } : {}) });
+		setBusy(key);
+		let err = null;
+		let now = copy;
+		// The panel showed the copy as it was when the menu read it. Read it again: if its work changed since, show the
+		// new state and let the user decide again instead of deleting something the panel did not mention.
+		if (kind === "copy" && !force) {
+			const listing = await api("/api/git/worktrees", { slot, timeoutMs: REQUEST_TIMEOUT.worktrees }).catch(() => null);
+			if (!listing) err = { detail: "Cannot reach the MyHarness server" };
+			else {
+				setWorktrees({ list: listing.worktrees || [] });
+				now = listing.worktrees?.find((w) => sameCopyPath(w.path, copy.path));
+				if (now && (holdsWork(now) !== holdsWork(copy) || now.changes !== copy.changes || now.ahead !== copy.ahead)) {
+					deletePending.current = false;
+					setBusy("");
+					setAsk({ ...target, copy: now, failure: null, changed: true });
+					return;
+				}
+			}
+		}
+		// A copy that is no longer listed is already gone: nothing to delete, the lists are read again below.
+		if (!err && (!copy || now)) {
+			err = kind === "branch"
+				? await tryPost("/api/git/branches/delete", { name: branch.name, ...(force ? { force: true } : {}) })
+				: kind === "copy" && branch
+					// The server removes the copy (with its files) and then the branch, after refusing the main and the
+					// current copy and a locked one; the panel already named what that throws away.
+					? await tryPost("/api/git/branches/delete", { name: branch.name, force: true, deleteWorktrees: true })
+					: await tryPost("/api/git/worktrees/delete", { path: copy.path, ...(force || (kind === "copy" && holdsWork(now)) ? { force: true } : {}) });
+		}
 		deletePending.current = false;
 		setBusy("");
 		if (err) {
-			const failure = { ...err, ...explainDeleteFailure(err, "copy", force) };
-			setConfirmCopy("");
-			setDiscarding(false);
-			setDeletingCopy(w);
-			setCopyFailure(failure);
-			// Unknown, permission, locked and busy errors do NOT mean dirty; force cannot be offered for them.
+			const failure = { ...err, ...explainDeleteFailure(err, kind === "branch" ? "branch" : "copy", force) };
+			setAsk({ ...target, copy: now || copy, failure, changed: false });
 			toast(failure.message, "error", 9000);
 			return;
 		}
-		setCopyFailure(null);
-		setDeletingCopy(null);
-		setConfirmCopy("");
-		setDiscarding(false);
-		setTargetCopy(null);
-		if (naming?.path === w.path) setNaming(null);
-		await load(true);
-		await done(t("Copy deleted"));
-	};
-	const cancelCopyDeletion = () => {
-		setDeletingCopy(null);
-		setCopyFailure(null);
-		setDiscarding(false);
-		setConfirmCopy("");
-	};
-	// A merged or clean copy is deleted after one confirming click; a copy that holds work opens the choices panel.
-	// An archived copy no longer carries change counts (reading them cost two Git processes per archived copy), so
-	// "unknown" there must not open the choices panel: a plain delete is refused by Git when the copy is dirty, and
-	// the failure path then offers the explicit force confirmation.
-	const askDeleteCopy = (w) => {
-		if (!w.archived && holdsWork(w)) {
-			setConfirmCopy("");
-			setCopyFailure(null);
-			setDiscarding(false);
-			setDeletingCopy(w);
+		setAsk(null);
+		setFresh("");
+		if (naming && copy && sameCopyPath(naming.path, copy.path)) setNaming(null);
+		toast(kind === "branch" ? t("Deleted branch {branch}", { branch: branch.name })
+			: kind === "copy" && branch ? t("Deleted the copy and branch {branch}", { branch: branch.name })
+			: t("Copy deleted"), "info", 3500);
+		window.dispatchEvent(new CustomEvent("myharness:git-changed", { detail: { slot } }));
+		loadGitStatus();
+		if (kind === "archived") {
+			const listing = await api("/api/git/worktrees", { slot, timeoutMs: REQUEST_TIMEOUT.worktrees }).catch(() => null);
+			if (listing) glide.run(() => setWorktrees({ list: listing.worktrees || [] }));
 			return;
 		}
-		if (confirmCopy === w.path) return deleteCopy(w);
-		cancelCopyDeletion();
-		setConfirmCopy(w.path);
+		// The row folds away first, then both lists are read again.
+		setRemoving(key);
+		setTimeout(async () => {
+			await Promise.all([load(true), loadWorktrees(true)]);
+			setRemoving("");
+		}, COLLAPSE_MS);
 	};
-	const mergeFirst = async (w) => {
-		cancelCopyDeletion();
+	const openCopyFirst = async (w) => {
+		cancelAsk();
 		if (await enterCopy(w.path)) toast(t("Use “Merge into main” above the input when the copy is ready."), "info", 6000);
 	};
 
@@ -661,7 +629,14 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		}
 	};
 
-	const activate = (row) => (row.kind === "new" ? startNew() : switchTo(row.branch));
+	const activate = (row) => {
+		if (row.kind === "new") return startNew();
+		const { branch, copy } = row;
+		if (copy?.isMain && linked) return backToMain();
+		if (branch) return switchTo(branch);
+		if (copy && !copy.current) return enterCopy(copy.path);
+		close();
+	};
 	const onSearchKey = (event) => {
 		if (event.isComposing || disabled || !rows.length) return;
 		if (event.key === "ArrowDown") return event.preventDefault(), setSel((sel + 1) % rows.length);
@@ -669,85 +644,171 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 		if (event.key === "Enter") return event.preventDefault(), rows[sel] && activate(rows[sel]);
 	};
 	const disabled = running || !!busy || !data;
+
+	const askPanelFor = (a) => {
+		const w = a.copy;
+		const work = a.kind === "copy" && !!w && holdsWork(w);
+		const failure = a.failure;
+		const title = a.kind === "branch"
+			? t("Delete branch “{branch}”?", { branch: a.branch.name })
+			: a.kind === "copy" && a.branch ? t("Delete this copy and its branch?") : t("Delete this copy?");
+		const deleting = busy === a.key;
+		const red = (label, onClick) => html`<button class="btn sm danger solid" disabled=${disabled} onClick=${onClick}>${deleting ? html`<${Spinner} size=${12} />` : null}${label}</button>`;
+		return html`<div ref=${askPanel} class="branch-ask" role="group" aria-label=${a.kind === "branch" ? t("Delete branch?") : t("Delete copy?")}>
+			<strong>${title}</strong>
+			${a.changed ? html`<div class="branch-ask-note">${t("It changed after the menu opened. Check it again.")}</div>` : null}
+			${failure
+				? html`<div role="alert">${failure.message}</div>
+					${failure.detail ? html`<details class="branch-delete-details"><summary>${t("Error details")}</summary><div class="pre-wrap">${failure.detail}</div></details>` : null}`
+				: a.kind !== "copy" ? null
+				: work ? html`<ul class="branch-ask-loss">${lossLines(w).map((line) => html`<li>${line}</li>`)}</ul>`
+				: html`<div class="dim">${w.merged ? t("Its work is already in main; nothing is lost.") : t("Nothing is lost: no uncommitted changes, and its commits are already in main.")}</div>`}
+			<div class="branch-form">
+				${work && !w.current ? html`<button class="btn sm branch-ask-open" disabled=${disabled} onClick=${() => openCopyFirst(w)}>${t("Open this copy")}</button>` : null}
+				<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${cancelAsk}>${t("Cancel")}</button>
+				${failure
+					? failure.canForce
+						? red(a.kind === "branch" ? t("Force delete branch") : t("Force delete copy"), () => runDelete(a, true))
+						: red(t("Retry delete"), () => runDelete(a))
+					: red(work ? t("Discard and delete") : t("Delete"), () => runDelete(a))}
+			</div>
+		</div>`;
+	};
+	const namingFormFor = (w) => (naming && sameCopyPath(naming.path, w.path)
+		? html`<form class="branch-form branch-rename" onSubmit=${(e) => { e.preventDefault(); saveName(); }}><input class="field sm grow" maxlength="80" aria-label=${t("Copy display name")} value=${displayName} autofocus onInput=${(e) => setDisplayName(e.target.value)} /><button class="btn sm" type="submit" disabled=${!!busy || !displayName.trim()}>${t("Save")}</button><button class="btn sm" type="button" disabled=${disabled} onClick=${() => suggestName(naming)}>${busy === "name" ? html`<${Spinner} size=${12} />` : t("AI name")}</button><button class="icon-btn sm" type="button" aria-label=${t("Cancel")} onClick=${() => setNaming(null)}><${Icon} name="x" size=${13} /></button></form>`
+		: null);
+	// The buttons a row shows while it is pointed at (they take the place of its time): enter, start, rename, copy path,
+	// delete, as far as they apply. Clicks here never reach the row, which would switch or enter.
+	const rowActions = (target, { archived = false } = {}) => {
+		const w = target.copy;
+		const copy = !!w && !w.isMain;
+		const deletable = !w?.isMain && !(target.branch?.worktreePath && !w) && !(target.branch?.current || w?.current);
+		return html`<div class="branch-row-actions" onClick=${(e) => e.stopPropagation()}>
+			${copy && !w.current ? html`<button class="icon-btn sm" disabled=${disabled} title=${t("Enter to edit")} aria-label=${t("Enter to edit")} onClick=${() => enterCopy(w.path)}><${Icon} name="arrowRight" size=${13} /></button>` : null}
+			${archived
+				? html`<button class="icon-btn sm" disabled=${!!busy} title=${t("Restore copy")} aria-label=${t("Restore copy")} onClick=${() => restoreCopy(w)}><${Icon} name="undo" size=${13} /></button>`
+				: copy ? html`<button class="icon-btn sm" disabled=${!!busy} title=${t("Start copy")} aria-label=${t("Start copy")} onClick=${() => startCopy(w)}><${Icon} name="play" size=${13} /></button>
+					<button class="icon-btn sm" disabled=${!!busy} title=${t("Rename copy")} aria-label=${t("Rename copy")} onClick=${() => { setAsk(null); setNaming(w); setDisplayName(w.displayName || w.branch || ""); }}><${Icon} name="edit" size=${13} /></button>` : null}
+			${w ? html`<button class="icon-btn sm" title=${t("Copy path")} aria-label=${t("Copy path")} onClick=${() => copyPath(w)}><${Icon} name="copy" size=${13} /></button>` : null}
+			${deletable && confirm !== target.key && ask?.key !== target.key ? html`<button class="icon-btn sm branch-del" disabled=${disabled} title=${copy ? t("Delete copy") : t("Delete branch")} aria-label=${copy ? t("Delete copy") : t("Delete branch {branch}", { branch: target.branch?.name || "" })} onClick=${() => askDelete(target)}><${Icon} name="trash" size=${13} /></button>` : null}
+		</div>`;
+	};
+	const confirmPill = (target) => (confirm === target.key
+		? html`<button class="branch-confirm" disabled=${disabled} onClick=${(e) => (e.stopPropagation(), runDelete(target))}>${t("Delete?")}</button>`
+		: null);
+
+	const entryRow = (entry, i) => {
+		const { branch: b, copy: w } = entry;
+		const isCopy = !!w && !w.isMain;
+		const current = b ? b.current : !!w?.current;
+		const target = { key: entry.key, kind: isCopy ? "copy" : "branch", branch: b, copy: w };
+		const sub = entrySub(entry);
+		const rowBusy = busy === entry.key || (b && busy === `b:${b.name}`) || (w && (busy === `w:${w.path}` || busy === `start:${w.path}`));
+		const icon = !w ? (b?.worktreePath ? "layers" : "gitBranch") : w.isMain ? "folder" : "layers";
+		return html`<${Collapse} key=${entry.key} open=${removing !== entry.key}>
+			<div data-row=${i} role="option" aria-selected=${current} data-copy-path=${w?.path} data-copy-branch=${w?.branch}
+				class=${`pop-item branch-row ${sel === i ? "hi" : ""} ${current ? "active" : ""} ${ask?.key === entry.key ? "asking" : ""} ${fresh && w && sameCopyPath(w.path, fresh) ? "branch-copy-target" : ""} ${known.current && b && !known.current.has(b.name) ? "fade-in" : ""}`}
+				onMouseMove=${() => sel !== i && setSel(i)} onClick=${() => !disabled && activate(entry)} aria-disabled=${disabled && !current}
+				title=${w ? w.path : b?.subject ? `${b.name} — ${b.subject}` : b?.name}>
+				<${Icon} name=${icon} size=${13} class="branch-ico" />
+				<span class="col branch-info">
+					<span class="branch-name truncate">${entryLabel(entry)}</span>
+					${sub ? html`<span class="dim truncate branch-sub">${sub}</span>` : null}
+				</span>
+				${isCopy ? html`<${CopyState} w=${w} />` : null}
+				${confirmPill(target) || (b?.committedAt ? html`<span class="dim branch-time">${relTime(b.committedAt)}</span>` : null)}
+				${rowBusy ? html`<${Spinner} size=${13} />` : current ? html`<${Icon} name="check" size=${14} class="branch-check" />` : null}
+				${rowActions(target)}
+			</div>
+			<${FoldIn} content=${ask?.key === entry.key ? askPanelFor(ask) : null} />
+			${w ? namingFormFor(w) : null}
+		<//>`;
+	};
+	// Rows of the folded groups below the list: sub-agent copies (deleted like any copy) and archived copies.
+	const groupRow = (w, archived = false) => {
+		const target = { key: `w:${w.path}`, kind: archived ? "archived" : "copy", branch: w.branch ? { name: w.branch } : null, copy: w };
+		const rowBusy = busy === target.key || busy === `w:${w.path}` || busy === `start:${w.path}` || busy === `archive:${w.path}`;
+		return html`<div key=${w.path}>
+			<div data-copy-path=${w.path} data-copy-branch=${w.branch} class=${`pop-item branch-row branch-copy ${ask?.key === target.key ? "asking" : ""}`} title=${w.path}>
+				<${Icon} name="layers" size=${13} class="branch-ico" />
+				<span class="col branch-info">
+					<span class="branch-name truncate">${copyLabel(w)}</span>
+					<span class="dim truncate branch-sub">${shortPath(w.path)}</span>
+				</span>
+				<${CopyState} w=${w} archived=${archived} />
+				${confirmPill(target)}
+				${rowBusy ? html`<${Spinner} size=${13} />` : null}
+				${rowActions(target, { archived })}
+			</div>
+			<${FoldIn} content=${ask?.key === target.key ? askPanelFor(ask) : null} />
+			${namingFormFor(w)}
+		</div>`;
+	};
+	// A group with a long list grows far taller than the region can show, which would make the shared fold fill the
+	// visible area in the first frame; capping the list lets the fold ease over the height you can actually see.
+	const copiesClass = (rows) => `branch-copies${rows.length > 12 ? " branch-copies-long" : ""}`;
+	const agentCopies = copiesList.filter((w) => !w.isMain && w.subagent && !w.archived);
+	// Newest archived copy first: the copy finished most recently is the one worth checking first.
+	const archivedCopies = copiesList
+		.filter((w) => !w.isMain && w.archived)
+		.sort((a, b) => String(b.archivedAt || "").localeCompare(String(a.archivedAt || "")));
 	// The archived group's clear button only opens the confirmation. While that confirmation is open the button folds
 	// aside: two red buttons with the same words, one right under the other, read as "the click opened a second clear
 	// button" instead of "confirm this clear".
 	const archivedClearTrigger = html`<div class="branch-archive-end" ref=${archivedEnd}><${Collapse} open=${!archiveClear}>
 		<div class="branch-form"><button class="btn sm danger" disabled=${disabled} onClick=${() => setArchiveClear({})}>${t("Clear archived copies")}</button></div>
 	<//></div>`;
-
-	const copyRow = (w, archived = false) => {
-		const work = holdsWork(w);
-		const highlighted = isTarget(w) || (!!fresh && sameCopyPath(w.path, fresh));
-		const rowBusy = busy === `w:${w.path}` || busy === `delete:${w.path}` || busy === `start:${w.path}`;
-		return html`<div key=${w.path} data-copy-path=${w.path} data-copy-branch=${w.branch} tabindex=${isTarget(w) ? "-1" : undefined}
-			class=${`pop-item branch-copy ${w.current ? "active" : ""} ${highlighted ? "branch-copy-target" : ""}`} title=${w.path}>
-			<${Icon} name=${w.isMain ? "folder" : "layers"} size=${13} />
-			<span class="col branch-copy-info">
-				<span class="branch-copy-title"><span class="truncate">${copyLabel(w)}</span>${archived
-					? html`<span class="copy-state" title=${w.archivedAt ? t("Archived {when}: kept on disk, nothing deleted", { when: relTime(w.archivedAt) }) : t("Kept on disk, nothing deleted")}>${t("Archived")}</span>`
-					: w.merged
-						? html`<span class="copy-state ok" title=${t("Merged into main; kept as a read-only record")}>${t("Merged")}</span>`
-						: work ? html`<span class="copy-state warn" title=${workText(w)}>${t("Unmerged")}</span>` : null}</span>
-				<span class="dim truncate branch-copy-path">${shortPath(w.path)}</span>
-			</span>
-			${confirmCopy === w.path ? html`<button class="branch-confirm" disabled=${disabled} onClick=${() => deleteCopy(w)}>${t("Delete?")}</button>` : null}
-			${rowBusy ? html`<${Spinner} size=${13} />` : w.current ? html`<${Icon} name="check" size=${14} class="branch-check" />` : null}
-			<div class="branch-copy-actions">
-				${w.current ? null : html`<button class="icon-btn sm" disabled=${disabled} title=${w.isMain && linked ? t("Back to the main copy") : t("Enter to edit")} aria-label=${w.isMain && linked ? t("Back to the main copy") : t("Enter to edit")} onClick=${() => (w.isMain && linked ? backToMain() : enterCopy(w.path))}><${Icon} name="arrowRight" size=${13} /></button>`}
-				${archived
-					? html`<button class="icon-btn sm" disabled=${!!busy} title=${t("Restore copy")} aria-label=${t("Restore copy")} onClick=${() => restoreCopy(w)}><${Icon} name="undo" size=${13} /></button>`
-					: !w.isMain ? html`<button class="icon-btn sm" disabled=${!!busy} title=${t("Start copy")} aria-label=${t("Start copy")} onClick=${() => startCopy(w)}><${Icon} name="play" size=${13} /></button>
-				<button class="icon-btn sm" disabled=${!!busy} title=${t("Rename copy")} aria-label=${t("Rename copy")} onClick=${() => { setNaming(w); setDisplayName(w.displayName || w.branch || ""); }}><${Icon} name="edit" size=${13} /></button>` : null}
-				<button class="icon-btn sm" title=${t("Copy path")} aria-label=${t("Copy path")} onClick=${() => copyPath(w)}><${Icon} name="copy" size=${13} /></button>
-				${!w.isMain && confirmCopy !== w.path ? html`<button class="icon-btn sm" disabled=${disabled || w.current} title=${w.current ? t("Return to the main copy before deleting this one") : t("Delete copy")} aria-label=${t("Delete copy")} onClick=${() => askDeleteCopy(w)}><${Icon} name="trash" size=${13} /></button>` : null}
-			</div>
-		</div>`;
-	};
+	const newRow = rows.length - 1;
 
 	return html`<div class="branch-menu" role="dialog" aria-label=${t("Branches")}>
-		<div class="pop-search"><${Icon} name="search" size=${13} /><input autofocus value=${query} placeholder=${t("Search branches")} aria-label=${t("Search branches")}
+		<div class="pop-search"><${Icon} name="search" size=${13} /><input autofocus value=${query} placeholder=${t("Search branches and copies")} aria-label=${t("Search branches and copies")}
 			onInput=${(e) => setQuery(e.target.value)} onKeyDown=${onSearchKey} /></div>
 		${running ? html`<div class="branch-note dim">${t("Branches can be changed when the agent is idle")}</div>` : null}
-		<div class="pop-group">${t("Local branches")}</div>
-		<div class="pop-scroll branch-list" ref=${list} role="listbox" aria-label=${t("Local branches")}>
-			${error ? html`<div class="branch-note c-danger">${error}</div>` : !data ? html`<div class="branch-note dim"><${Spinner} /> ${t("Loading…")}</div>` : !branches.length ? html`<div class="branch-note dim">${t("No branch matches")}</div>` : null}
-			${branches.map((b, i) => {
-				const rowBusy = busy === `b:${b.name}` || busy === `d:${b.name}` || busy === `w:${b.worktreePath}`;
-				const elsewhere = b.worktreePath && !b.current;
-				return html`<${Collapse} key=${b.name} open=${removing !== b.name}>
-					<div data-row=${i} role="option" aria-selected=${b.current} class=${`pop-item branch-row ${sel === i ? "hi" : ""} ${b.current ? "active" : ""} ${known.current && !known.current.has(b.name) ? "fade-in" : ""}`}
-						onMouseMove=${() => sel !== i && setSel(i)} onClick=${() => !disabled && switchTo(b)} aria-disabled=${disabled && !b.current}>
-						<${Icon} name=${elsewhere ? "layers" : "gitBranch"} size=${13} class="branch-ico" />
-						<span class="branch-name truncate" title=${b.subject ? `${b.name} — ${b.subject}` : b.name}>${b.name}</span>
-						${elsewhere ? html`<span class="badge" title=${b.worktreePath}>${t("worktree")}</span>` : null}
-						<span class="grow" />
-						${confirm === b.name
-							? html`<button class="branch-confirm" disabled=${disabled} onClick=${(e) => (e.stopPropagation(), remove(b))}>${t("Delete?")}</button>`
-							: branchDeletion?.branch.name === b.name && branchDeletion.failure?.canForce
-								? html`<button class="branch-confirm" disabled=${disabled} onClick=${(e) => (e.stopPropagation(), branchDeletion.forceConfirm ? remove(b, true) : prepareForceBranch(b))}>${t(branchDeletion.failure?.occupied ? "Force delete branch and copies" : "Force delete branch")}</button>`
-								: html`<span class="dim branch-time">${relTime(b.committedAt)}</span>`}
-						${rowBusy ? html`<${Spinner} size=${13} />` : b.current ? html`<${Icon} name="check" size=${14} class="branch-check" />` : confirm !== b.name && branchDeletion?.branch.name !== b.name ? html`<button class="icon-btn sm branch-del" title=${t("Delete branch")} aria-label=${t("Delete branch {branch}", { branch: b.name })} disabled=${disabled} onClick=${(e) => (e.stopPropagation(), remove(b))}><${Icon} name="trash" size=${13} /></button>` : null}
-					</div>
-				<//>`;
-			})}
+		<div class="pop-scroll branch-list" ref=${list} role="listbox" aria-label=${t("Branches")}>
+			${error ? html`<div class="branch-note c-danger">${error}</div>` : !data ? html`<div class="branch-note dim"><${Spinner} /> ${t("Loading…")}</div>` : !entries.length ? html`<div class="branch-note dim">${t("No branch matches")}</div>` : null}
+			${worktrees?.error ? html`<div class="branch-note c-danger">${worktrees.error}</div>` : null}
+			${entries.map(entryRow)}
 		</div>
-		${branchDeletion ? html`<div ref=${deletionPanel} class="branch-note branch-delete-panel" role="group" aria-label=${t("Delete branch?")}>
-			<strong>${t("Delete branch “{branch}”?", { branch: branchDeletion.branch.name })}</strong>
-			${branchDeletion.failure ? html`<div class="c-danger" role="alert">${branchDeletion.failure.message}</div>` : null}
-			${!branchDeletion.failure?.occupied && (branchDeletion.failure?.canForce || branchDeletion.forceConfirm) ? html`<div>${t("Force deletion only removes this branch, never a copy. Work that has not been merged elsewhere may no longer be reachable from a branch. Cancel if you want to keep it.")}</div>` : null}
-			${!branchDeletion.failure?.occupied && branchDeletion.forceConfirm ? html`<div>${t("Confirm force deletion of this branch?")}</div>` : null}
-			${branchDeletion.failure?.detail ? html`<details class="branch-delete-details"><summary>${t("Error details")}</summary><div class="pre-wrap">${branchDeletion.failure.detail}</div></details>` : null}
-			<div class="branch-form">
-				${branchDeletion.failure?.canForce || branchDeletion.forceConfirm ? html`<button class="btn sm danger solid" disabled=${disabled} onClick=${() => branchDeletion.forceConfirm ? remove(branchDeletion.branch, true) : prepareForceBranch(branchDeletion.branch)}>${t(branchDeletion.failure?.occupied ? "Force delete branch and copies" : "Force delete branch")}</button>` : !branchDeletion.failure?.occupied ? html`<button class="btn sm" disabled=${disabled} onClick=${() => remove(branchDeletion.branch, false, true)}>${t("Retry delete")}</button>` : null}
-				${branchDeletion.failure?.occupied ? html`<button class="btn sm" disabled=${!!busy} onClick=${goToCopy}>${t("Go to the copy")}</button>` : null}
-				<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${cancelBranchDeletion}>${t("Cancel")}</button>
-			</div>
+		${agentCopies.length || archivedCopies.length ? html`<div class="branch-copy-region">
+			${agentCopies.length ? html`<button class="pop-group branch-wt-group" aria-expanded=${agentsOpen} onClick=${() => setAgentsOpen(!agentsOpen)}>
+				<${Chevron} /><span>${t("Sub-agent copies")}</span><span class="badge">${agentCopies.length}</span></button>
+				<${Collapse} open=${agentsOpen}><div class=${copiesClass(agentCopies)}>${agentCopies.map((w) => groupRow(w))}</div><//>` : null}
+			<${FoldIn} content=${archivedCopies.length ? html`<button class="pop-group branch-wt-group" aria-expanded=${archivedOpen} onClick=${() => setArchivedOpen(!archivedOpen)}>
+				<${Chevron} /><span>${t("Archived copies")}</span><span class="badge">${archivedCopies.length}</span></button>
+				<${Collapse} open=${archivedOpen}>
+					<div ref=${glide.ref} class=${copiesClass(archivedCopies)}>${archivedCopies.map((w) => groupRow(w, true))}</div>
+					${archivedClearTrigger}
+				<//>` : null} />
 		</div>` : null}
+		<${FoldIn} content=${archiveClear ? html`<div ref=${archiveClearPanel} class="branch-note branch-delete-panel" role="group" aria-label=${t("Clear archived copies?")}>
+			${archiveClear.stage === "force"
+				? html`<strong>${t("Uncommitted changes remain in {copies}", { copies: count(archiveClear.dirty.length, "copy") })}</strong>
+					<div>${t("Force deleting removes them together with their uncommitted changes and new files. This cannot be undone.")}</div>`
+				: html`<strong>${t("Delete all {copies}?", { copies: count(archivedCopies.length, "archived copy", "archived copies") })}</strong>
+					<div>${t("Their folders are removed from disk. This is the only action that deletes archived work; archiving itself never does.")}</div>`}
+			<${ArchiveClearProgress} />
+			${archiveClear.error ? html`<div class="c-danger" role="alert">${archiveClear.error}</div>` : null}
+			${archiveClear.other.length ? html`<div class="c-danger" role="alert">${t("{copies} could not be deleted for another reason, such as a file still in use. Close the programs using them, then try again.", { copies: count(archiveClear.other.length, "copy") })}</div>
+				<details class="branch-delete-details"><summary>${t("Error details")}</summary><div class="pre-wrap">${archiveClear.other.map((failure) => `${failure.path}\n  ${failure.error}`).join("\n")}</div></details>` : null}
+			<div class="branch-form">
+				${archiveClear.stage === "force"
+					? html`<button class="btn sm danger solid" disabled=${disabled} onClick=${clearArchived}>${clearRunning ? html`<${Spinner} size=${12} />${t("Deleting…")}` : t("Force delete {copies} and discard changes", { copies: count(archiveClear.dirty.length, "copy") })}</button>`
+					: html`<button class="btn sm danger" disabled=${disabled || !archivedCopies.length} onClick=${clearArchived}>${clearRunning ? html`<${Spinner} size=${12} />${t("Deleting…")}` : t("Delete {copies}", { copies: count(archivedCopies.length, "copy") })}</button>`}
+				<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${cancelArchiveClear}>${t("Cancel")}</button>
+			</div>
+		</div>` : null} />
 		<div class="branch-foot">
-			<button data-row=${rows.length - 1} class=${`pop-item branch-new ${data && sel === rows.length - 1 ? "hi" : ""}`} disabled=${disabled} onClick=${startNew} onMouseMove=${() => sel !== rows.length - 1 && setSel(rows.length - 1)} aria-expanded=${creating}>
-				<${Icon} name="plus" size=${13} /><span class="truncate">${query.trim() && !exact ? t("New branch “{name}”", { name: query.trim() }) : t("New branch")}</span>
-			</button>
+			<div class="branch-foot-actions">
+				<button data-row=${newRow} class=${`pop-item branch-new ${data && sel === newRow ? "hi" : ""}`} disabled=${disabled} onClick=${startNew} onMouseMove=${() => sel !== newRow && setSel(newRow)} aria-expanded=${creating}>
+					<${Icon} name="plus" size=${13} /><span class="truncate">${query.trim() && !exact ? t("New branch “{name}”", { name: query.trim() }) : t("New branch")}</span>
+				</button>
+				${linked
+					? html`<button class="pop-item branch-wt-action" disabled=${disabled || !main} onClick=${backToMain} title=${t("This chat and its draft move back to the main copy")}>
+						<${Icon} name="arrowLeft" size=${13} /><span class="truncate">${t("Back to the main copy")}</span>${main && busy === `w:${main.path}` ? html`<${Spinner} size=${13} />` : null}</button>`
+					: html`<button class="pop-item branch-wt-action" disabled=${disabled || !worktrees || !!worktrees.error} onClick=${createAndEnter}
+						title=${t("A new branch from {branch} in its own folder; this chat and its draft move into it", { branch: gitStatus.branch || "HEAD" })}>
+						<${Icon} name="layers" size=${13} /><span class="truncate">${t("Create and enter a copy")}</span>${busy === "copy" ? html`<${Spinner} size=${13} />` : null}</button>`}
+			</div>
 			<${Collapse} open=${creating}>
 				<form class="branch-form" onSubmit=${(e) => (e.preventDefault(), create())}>
 					<input class="field sm grow" value=${newName} placeholder=${t("branch name")} aria-label=${t("Branch name")} autofocus
@@ -755,72 +816,6 @@ function BranchMenu({ gitStatus, branchSource, slot, close }) {
 					<button class="btn sm primary" type="submit" disabled=${disabled || !newName.trim()}>${busy === "create" ? html`<${Spinner} size=${12} />` : null}${t("Create")}</button>
 				</form>
 				<div class="branch-hint dim">${t("Starts from the commit checked out now and switches to it.")}</div>
-			<//>
-		</div>
-		<div class="branch-wt">
-			<button class="pop-item branch-wt-heading" aria-expanded=${worktreesOpen} onClick=${() => setWorktreesOpen(!worktreesOpen)}>
-				<${Chevron} /><span>${t("Worktree")}</span>
-			</button>
-			<${Collapse} open=${worktreesOpen}>
-			${linked
-				? html`<button class="pop-item branch-wt-action" disabled=${disabled || !main} onClick=${backToMain} title=${t("This chat and its draft move back to the main copy")}>
-					<${Icon} name="arrowLeft" size=${13} /><span class="truncate">${t("Back to the main copy")}</span><span class="grow" />${main && busy === `w:${main.path}` ? html`<${Spinner} size=${13} />` : null}</button>`
-				: html`<button class="pop-item branch-wt-action" disabled=${disabled || !worktrees || !!worktrees.error} onClick=${createAndEnter}
-					title=${t("A new branch from {branch} in its own folder; this chat and its draft move into it", { branch: gitStatus.branch || "HEAD" })}>
-					<${Icon} name="layers" size=${13} /><span class="truncate">${t("Create and enter a copy")}</span><span class="grow" />${busy === "copy" ? html`<${Spinner} size=${13} />` : null}</button>`}
-			${worktrees?.error ? html`<div class="branch-note c-danger">${worktrees.error}</div>` : null}
-			${targetCopy ? html`<div class="branch-hint">${targetProtection || t("Review the copy for “{branch}” below. Nothing is deleted by going here.", { branch: targetCopy.branch })}</div>` : null}
-			<div class="branch-copy-region" ref=${copies}>
-				${!worktrees ? html`<div class="branch-note dim"><${Spinner} />${t("Loading…")}</div>` : null}
-				${main ? html`<div class="branch-copies">${copyRow(main)}</div>` : null}
-				${mine.length ? html`<button class="pop-group branch-wt-group" aria-expanded=${mineOpen} onClick=${() => setMineOpen(!mineOpen)}>
-					<${Chevron} /><span>${t("My copies")}</span><span class="badge">${mine.length}</span></button>
-					<${Collapse} open=${mineOpen}><div class=${copiesClass(mine)}>${mine.map((w) => copyRow(w))}</div><//>` : null}
-				${agentCopies.length ? html`<button class="pop-group branch-wt-group" aria-expanded=${agentsOpen} onClick=${() => setAgentsOpen(!agentsOpen)}>
-					<${Chevron} /><span>${t("Sub-agent copies")}</span><span class="badge">${agentCopies.length}</span></button>
-					<${Collapse} open=${agentsOpen}><div class=${copiesClass(agentCopies)}>${agentCopies.map((w) => copyRow(w))}</div><//>` : null}
-				<${FoldIn} content=${archivedCopies.length ? html`<button class="pop-group branch-wt-group" aria-expanded=${archivedOpen} onClick=${() => setArchivedOpen(!archivedOpen)}>
-					<${Chevron} /><span>${t("Archived copies")}</span><span class="badge">${archivedCopies.length}</span></button>
-					<${Collapse} open=${archivedOpen}>
-						<div ref=${glide.ref} class=${copiesClass(archivedCopies)}>${archivedCopies.map((w) => copyRow(w, true))}</div>
-						${archivedClearTrigger}
-					<//>` : null} />
-			</div>
-			<${FoldIn} content=${archiveClear ? html`<div ref=${archiveClearPanel} class="branch-note branch-delete-panel" role="group" aria-label=${t("Clear archived copies?")}>
-				${archiveClear.stage === "force"
-					? html`<strong>${t("Uncommitted changes remain in {copies}", { copies: count(archiveClear.dirty.length, "copy") })}</strong>
-						<div>${t("Force deleting removes them together with their uncommitted changes and new files. This cannot be undone.")}</div>`
-					: html`<strong>${t("Delete all {copies}?", { copies: count(archivedCopies.length, "archived copy", "archived copies") })}</strong>
-						<div>${t("Their folders are removed from disk. This is the only action that deletes archived work; archiving itself never does.")}</div>`}
-				<${ArchiveClearProgress} />
-				${archiveClear.error ? html`<div class="c-danger" role="alert">${archiveClear.error}</div>` : null}
-				${archiveClear.other.length ? html`<div class="c-danger" role="alert">${t("{copies} could not be deleted for another reason, such as a file still in use. Close the programs using them, then try again.", { copies: count(archiveClear.other.length, "copy") })}</div>
-					<details class="branch-delete-details"><summary>${t("Error details")}</summary><div class="pre-wrap">${archiveClear.other.map((failure) => `${failure.path}\n  ${failure.error}`).join("\n")}</div></details>` : null}
-				<div class="branch-form">
-					${archiveClear.stage === "force"
-						? html`<button class="btn sm danger solid" disabled=${disabled} onClick=${clearArchived}>${clearRunning ? html`<${Spinner} size=${12} />${t("Deleting…")}` : t("Force delete {copies} and discard changes", { copies: count(archiveClear.dirty.length, "copy") })}</button>`
-						: html`<button class="btn sm danger" disabled=${disabled || !archivedCopies.length} onClick=${clearArchived}>${clearRunning ? html`<${Spinner} size=${12} />${t("Deleting…")}` : t("Delete {copies}", { copies: count(archivedCopies.length, "copy") })}</button>`}
-					<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${cancelArchiveClear}>${t("Cancel")}</button>
-				</div>
-			</div>` : null} />
-			${deletingCopy ? html`<div ref=${copyDeletionPanel} class="branch-note branch-delete-panel" role="group" aria-label=${t("Delete copy?")}>
-				<strong>${t("Delete copy “{name}”?", { name: copyLabel(deletingCopy) })}</strong>
-				${copyFailure
-					? html`<div class="c-danger" role="alert">${copyFailure.message}</div><details class="branch-delete-details"><summary>${t("Error details")}</summary><div class="pre-wrap">${copyFailure.detail}</div></details>
-						${copyFailure.canForce ? html`<div>${t("Force delete permanently discards this copy's folder, including uncommitted changes and new files. Its branch is kept. Cancel if you want to keep the files.")}</div>` : null}
-						${copyFailure.canForce && discarding ? html`<div class="c-danger">${t("Confirm force deletion of this copy and all uncommitted changes inside it?")}</div>` : null}
-						<div class="branch-form">${copyFailure.canForce
-							? html`<button class=${`btn sm danger ${discarding ? "solid" : ""}`} disabled=${disabled || deletingCopy.current} onClick=${() => (discarding ? deleteCopy(deletingCopy, true) : setDiscarding(true))}>${busy === `delete:${deletingCopy.path}` ? html`<${Spinner} size=${13} />` : t("Force delete copy")}</button>`
-							: html`<button class="btn sm danger" disabled=${disabled || deletingCopy.current} onClick=${() => deleteCopy(deletingCopy)}>${t("Retry delete")}</button>`}<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${cancelCopyDeletion}>${t("Cancel")}</button></div>`
-					: html`<div>${workText(deletingCopy)}</div>
-						${discarding ? html`<div class="c-danger" role="alert">${t("Discarding permanently deletes the copy's folder and its uncommitted changes. Its branch and commits are kept. Discard?")}</div>` : null}
-						<div class="branch-form">
-							<button class="btn sm primary" disabled=${disabled} onClick=${() => mergeFirst(deletingCopy)}>${t("Merge it now")}</button>
-							<button class=${`btn sm danger ${discarding ? "solid" : ""}`} disabled=${disabled || deletingCopy.current} onClick=${() => (discarding ? deleteCopy(deletingCopy, deletingCopy.changes !== 0) : setDiscarding(true))}>${busy === `delete:${deletingCopy.path}` ? html`<${Spinner} size=${13} />` : discarding ? t("Confirm discard") : t("Discard and delete")}</button>
-							<button class="btn sm branch-delete-cancel" disabled=${!!busy} onClick=${cancelCopyDeletion}>${t("Cancel")}</button>
-						</div>`}
-			</div>` : null}
-			${naming ? html`<form class="branch-form" onSubmit=${(e) => { e.preventDefault(); saveName(); }}><input class="field sm grow" maxlength="80" aria-label=${t("Copy display name")} value=${displayName} onInput=${(e) => setDisplayName(e.target.value)} /><button class="btn sm" type="submit" disabled=${!!busy || !displayName.trim()}>${t("Save")}</button><button class="btn sm" type="button" disabled=${disabled} onClick=${() => suggestName(naming)}>${busy === "name" ? html`<${Spinner} size=${12} />` : t("AI name")}</button><button class="icon-btn sm" type="button" aria-label=${t("Cancel")} onClick=${() => setNaming(null)}><${Icon} name="x" size=${13} /></button></form>` : null}
 			<//>
 		</div>
 	</div>`;

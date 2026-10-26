@@ -137,6 +137,15 @@ describe("worktree copies: activity, merge back and records", () => {
 		expect(isWorktreeCopyPath(agentDir, join(agentDir, "worktrees", "repo"))).toBe(false);
 		expect(isWorktreeCopyPath(agentDir, join(tmpdir(), "elsewhere", "repo"))).toBe(false);
 
+		// A worktree added by hand in a folder of the user's choosing is a copy too; the main checkout is not.
+		const repo = createRepository();
+		const outside = join(repo.root, "..", "outside-copy");
+		git(repo.root, ["worktree", "add", "-b", "by-hand", outside]);
+		mkdirSync(join(outside, "src"));
+		expect(isWorktreeCopyPath(repo.agentDir, outside)).toBe(true);
+		expect(isWorktreeCopyPath(repo.agentDir, join(outside, "src"))).toBe(true);
+		expect(isWorktreeCopyPath(repo.agentDir, repo.root)).toBe(false);
+
 		const tempRoot = mkdtempSync(join(process.env.MYHARNESS_TEMP_DIR ?? tmpdir(), "myharness-merged-"));
 		tempRoots.push(tempRoot);
 		const records = new WorktreeMergedRecords(tempRoot);
