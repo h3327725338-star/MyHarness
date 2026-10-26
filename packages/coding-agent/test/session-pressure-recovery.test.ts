@@ -48,6 +48,14 @@ async function waitForFile(path: string, timeoutMs = 45_000): Promise<void> {
 	}
 }
 
+async function waitForLines(path: string, lines: number, timeoutMs = 45_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!existsSync(path) || readFileSync(path, "utf8").split("\n").filter(Boolean).length < lines) {
+		if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${lines} lines in ${path}`);
+		await delay(10);
+	}
+}
+
 async function waitForClose(child: ReturnType<typeof spawn>): Promise<void> {
 	if (child.exitCode !== null) return;
 	await new Promise<void>((resolveClose, reject) => {
@@ -144,9 +152,11 @@ describe("Session persistence and process recovery pressure", () => {
 		);
 		const workers = await Promise.all(workerPromises);
 
-		await delay(100);
+		// Kill mid-write, but only after a few messages landed: on a slow runner a fixed delay could kill a worker
+		// before its first append, leaving nothing to recover.
+		await waitForLines(workers[1]!.file, 6);
 		terminateTree(workers[1]!.child.pid);
-		await delay(120);
+		await waitForLines(workers[4]!.file, 6);
 		terminateTree(workers[4]!.child.pid);
 		await Promise.all(workers.map(({ child }) => waitForClose(child)));
 

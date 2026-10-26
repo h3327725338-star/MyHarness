@@ -32,6 +32,7 @@ import {
 	locateDriveFolder,
 	releaseWorkspaceRoot,
 } from "../src/sync/workspace-location.ts";
+import { resolveCanonicalPath } from "../src/utils/paths.ts";
 
 class FakePort implements WorkspaceFilePort {
 	readonly manifests = new Map<string, Uint8Array>();
@@ -458,7 +459,7 @@ describe("Workspace file sync channel", () => {
 		}
 
 		expect(WorkspaceStore.create(b.agentDir, b.dataRoot).getById("ws1")!.rootPath).toBe(
-			join(driveRoot, "Study", "OS"),
+			resolveCanonicalPath(join(driveRoot, "Study", "OS")),
 		);
 		const status = b.engine.status().workspaces.find((item) => item.workspaceId === "ws1");
 		expect(status?.source).toBe("drive");
@@ -620,7 +621,8 @@ describe("Workspace file location and occupancy", () => {
 		const declared = join(root, "My Drive");
 		mkdirSync(declared, { recursive: true });
 		const rootsFound = discoverDriveRoots({ MYHARNESS_DRIVE_ROOTS: `${declared};${join(root, "missing")}` });
-		expect(rootsFound.some((candidate) => candidate.path === declared)).toBe(true);
+		// Roots are canonicalized: an 8.3 temp path (RUNNER~1 on CI) comes back under its long name.
+		expect(rootsFound.some((candidate) => candidate.path === resolveCanonicalPath(declared))).toBe(true);
 		expect(rootsFound.some((candidate) => candidate.path === join(root, "missing"))).toBe(false);
 	});
 
@@ -789,7 +791,7 @@ describe("Workspace file location and occupancy", () => {
 
 		const bound = WorkspaceStore.create(b.agentDir, b.dataRoot).getById("ws1")!.rootPath;
 		expect(bound).not.toBe(b.workspaceRoot);
-		expect(bound.startsWith(join(b.root, "managed"))).toBe(true);
+		expect(bound.startsWith(resolveCanonicalPath(join(b.root, "managed")))).toBe(true);
 		expect(readFileSync(join(bound, "note.txt"), "utf8")).toBe("from desktop");
 	});
 

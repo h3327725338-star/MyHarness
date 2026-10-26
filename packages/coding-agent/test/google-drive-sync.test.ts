@@ -10,6 +10,7 @@ import { detectExternalSyncRisk, SyncEngine } from "../src/sync/engine.ts";
 import { SyncService } from "../src/sync/service.ts";
 import { SyncLocalStore } from "../src/sync/store.ts";
 import type { DrivePort, RemoteFile, RemoteFolder } from "../src/sync/types.ts";
+import { resolveCanonicalPath } from "../src/utils/paths.ts";
 
 class FakeDrive implements DrivePort {
 	readonly folders = new Map<string, Map<string, Uint8Array>>();
@@ -469,7 +470,8 @@ describe("Google Drive sync engine", () => {
 
 		const restored = WorkspaceStore.create(b.agentDir, b.dataRoot).getById("ws1");
 		expect(restored).toBeTruthy();
-		expect(restored!.rootPath).toBe(folderB);
+		// Drive roots are canonicalized (an 8.3 temp path such as RUNNER~1 resolves to its long name).
+		expect(restored!.rootPath).toBe(resolveCanonicalPath(folderB));
 		expect(b.engine.status().pendingBindings).toHaveLength(0);
 	});
 

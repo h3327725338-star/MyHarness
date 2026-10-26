@@ -93,7 +93,8 @@ const drag=async(from,to,zone)=>{
 try {
 	mark('grid');
 	const mount=document.getElementById('app');
-	setView({panelOpen:true,wsTabs:[{id:'browser:new',type:'browser',url:''}],wsActive:'browser:new'});
+	// The group motion is checked below; "system" would follow the runner (GitHub's Windows images report reduced motion).
+	setView({motion:'on',panelOpen:true,wsTabs:[{id:'browser:new',type:'browser',url:''}],wsActive:'browser:new'});
 	render(h(BrowserPanel,{tabId:'browser:new',url:''}),mount);
 	check(await until(()=>tiles().length===4),'the empty tab did not show 3 shortcuts and the add tile: '+tiles().length);
 	check(tiles().map(label).join(',')==='Alpha,Beta,Gamma,Add shortcut','wrong tiles: '+tiles().map(label).join(','));
