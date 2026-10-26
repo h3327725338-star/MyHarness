@@ -26,6 +26,7 @@
 | `terminal.ts` | Terminal 面板的真实 Shell（伪终端） |
 | `folder-dialog.ts` | 调用系统的文件夹选择窗口 |
 | `routes-core.ts`、`routes-sessions.ts`、`routes-files.ts`、`routes-git.ts`、`routes-settings.ts`、`routes-providers.ts`、`routes-accounts.ts`、`routes-mail.ts`、`routes-terminal.ts`、`routes-modes.ts` | 各组 API 路由 |
+| `git-ci-follow-up.ts`、`git-records.ts` | Push 之后的后台 CI 跟进（不占用 Chat 和 Git 任务；Push 提示词要求 CI 通过时在 Chat 里修复、只提交修复改到的文件、再 Push，最多 3 轮）与服务端自己写入的结果卡片 |
 | `session-changes.ts` | 从会话条目收集文件差异（供变更展示用） |
 | `session-ownership.ts` | 未提交文件归哪个对话：最新一次改动说了算（谁最后改的谁提交） |
 | `change-claims.ts`、`changes-stats.ts` | 变更认领登记与 worktree 变更统计/列表缓存（numstat 解析、行数与二进制判断） |

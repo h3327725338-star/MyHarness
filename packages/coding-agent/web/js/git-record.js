@@ -45,14 +45,18 @@ export function GitRecord({ result, task, children, activity }) {
 		</div>`;
 	}
 
+	// Cards the browser made hold text already in the interface language; cards the server wrote (a CI result after a
+	// push) hold English that is shown in the interface language here. Text with no translation stays as it is.
+	const title = serverText(result.title, result.title);
+	const detail = result.detail ? serverText(result.detail, result.detail) : "";
 	return html`<div class=${`strip git-result ${result.tone} fade-in`} role=${result.tone === "error" ? "alert" : "status"}>
 		<div class="strip-line">
 			<${Icon} name=${{ ok: "checkCircle", info: "info", warn: "alertTriangle", error: "alertCircle" }[result.tone]} size=${14} />
-			<strong class="strip-title">${result.title}</strong>
+			<strong class="strip-title">${title}</strong>
 			${result.hash ? html`<code class="strip-hash">${result.hash}</code>` : null}
-			${result.detail ? html`<span class="strip-detail truncate" title=${result.detail}>${result.detail}</span>` : null}
+			${detail ? html`<span class="strip-detail truncate" title=${detail}>${detail}</span>` : null}
 			<span class="grow" />
-			${result.fix ? html`<button class="link-btn" onClick=${() => actions.send(result.fix.prompt)}>${result.fix.label}</button>` : null}
+			${result.fix ? html`<button class="link-btn" onClick=${() => actions.send(result.fix.prompt)}>${serverText(result.fix.label, result.fix.label)}</button>` : null}
 			${toggleBtn}
 		</div>
 		<${Collapse} open=${open}><pre class="strip-lines">${result.tone === "ok" && result.hash ? gitDetailNodes(result.lines) : result.lines}</pre><//>

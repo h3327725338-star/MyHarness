@@ -33,7 +33,10 @@ import type {
 	CompactionSettings,
 	DefaultProjectTrust,
 	FallbackModelSettings,
+	GitCommitSettings,
 	GitIntegrationSettings,
+	GitOperationMode,
+	GitPushSettings,
 	NotificationSound,
 	PackageSource,
 	PopupNotificationSettings,
@@ -66,7 +69,10 @@ export type {
 	CompactionSettings,
 	DefaultProjectTrust,
 	FallbackModelSettings,
+	GitCommitSettings,
 	GitIntegrationSettings,
+	GitOperationMode,
+	GitPushSettings,
 	NotificationSound,
 	PackageSource,
 	PopupNotificationSettings,
@@ -1134,6 +1140,39 @@ export class SettingsManager {
 	setCommitDescriptionSettings(settings: CommitDescriptionSettings): void {
 		this.globalSettings.commitDescription = { ...this.globalSettings.commitDescription, ...settings };
 		for (const key of ["provider", "model", "thinkingLevel"] as const) this.markModified("commitDescription", key);
+		this.save();
+	}
+
+	/** How /commit runs; `instructions` is undefined while the built-in default applies. */
+	getGitCommitSettings(): { mode: GitOperationMode; skipHooks: boolean; instructions?: string } {
+		const { mode, skipHooks, instructions } = this.globalSettings.gitCommit ?? {};
+		return {
+			mode: mode === "direct" ? "direct" : "instructions",
+			skipHooks: skipHooks === true,
+			...(typeof instructions === "string" ? { instructions } : {}),
+		};
+	}
+
+	/** Pass `instructions: undefined` explicitly to go back to the built-in default instructions. */
+	setGitCommitSettings(settings: Partial<GitCommitSettings>): void {
+		this.globalSettings.gitCommit = { ...this.globalSettings.gitCommit, ...settings };
+		for (const key of Object.keys(settings)) this.markModified("gitCommit", key);
+		this.save();
+	}
+
+	/** How /push runs; `instructions` is undefined while the built-in default applies. */
+	getGitPushSettings(): { mode: GitOperationMode; instructions?: string } {
+		const { mode, instructions } = this.globalSettings.gitPush ?? {};
+		return {
+			mode: mode === "direct" ? "direct" : "instructions",
+			...(typeof instructions === "string" ? { instructions } : {}),
+		};
+	}
+
+	/** Pass `instructions: undefined` explicitly to go back to the built-in default instructions. */
+	setGitPushSettings(settings: Partial<GitPushSettings>): void {
+		this.globalSettings.gitPush = { ...this.globalSettings.gitPush, ...settings };
+		for (const key of Object.keys(settings)) this.markModified("gitPush", key);
 		this.save();
 	}
 

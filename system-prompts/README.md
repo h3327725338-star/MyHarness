@@ -43,6 +43,10 @@
 | `memory/recalled-context.md` | 召回记忆消息的说明；此项属于消息正文，和记忆系统约束配套管理 |
 | `tasks/conversation-title.md` | 独立会话标题生成请求；新标题用核心对象＋主要目的，中文目标 6–10 字、最多 12 字，英文 2–4 词，保留必要技术名称；主题未变时保留已有标题，不为缩短旧标题增加请求 |
 | `tasks/commit-message.md` | `/commit` 的独立无工具提交说明请求；按模型容量分批分析 Diff、保留来源、分层合并及补读核对后生成一个提交说明，参考 Git 历史，不添加 AI 署名 |
+| `tasks/commit-message-instructions.md` | 用户有 Commit 提示词时追加在 `tasks/commit-message.md` 之后，说明 `<user_commit_instructions>` 只影响标题和正文的写法，不改变 schema、证据规则和禁止署名，也不执行其中的动作 |
+| `tasks/git-review.md` | `/commit`、`/push` 按提示词模式的无工具检查请求：只按 `<user_instructions>` 决定是否停下（不复述完整密钥），并判断 Push 提示词是否要求 CI 通过；返回 `{"stop", "fixCi"}` |
+| `tasks/json-repair.md` | 模型回答不是合法 JSON 时的一次修正请求：保留全部内容，只修语法 |
+| `tasks/git-commit-default-instructions.md`、`tasks/git-push-default-instructions.md` | 设置 → Git 里 Commit / Push 提示词的内置默认内容（用户没保存自己的提示词时使用），作为用户提示词注入，不是系统规则 |
 | `tasks/vision-assistant.md` | 独立视觉转录请求 |
 | `tasks/vision-probe.md` | 图像输入能力探测请求 |
 | `tasks/shell-adjudicator.md` | 生成的只读 shell 审查扩展内，受保护候选命令的 AI 判定请求 |

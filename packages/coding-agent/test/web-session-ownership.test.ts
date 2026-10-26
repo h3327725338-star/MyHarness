@@ -168,7 +168,10 @@ describe("a commit limited to a conversation's own files", () => {
 				sessionId: "chat-a",
 				// A chat that recorded no change: both working-tree files belong to someone else.
 				sessionManager: { getCwd: () => repo, getBranch: () => [] },
-				settingsManager: { isProjectTrusted: () => true },
+				settingsManager: {
+					isProjectTrusted: () => true,
+					getGitCommitSettings: () => ({ mode: "instructions", skipHooks: false, instructions: "" }),
+				},
 			},
 		};
 		registerGitRoutes(

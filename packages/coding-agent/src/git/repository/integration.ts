@@ -388,6 +388,7 @@ export async function createGitCommitForPathsAsync(
 	message: string,
 	timeoutMs?: number,
 	signal?: AbortSignal,
+	options: { noVerify?: boolean } = {},
 ): Promise<GitCommandResult & { commitHash?: string }> {
 	if (paths.length === 0) {
 		return {
@@ -415,7 +416,8 @@ export async function createGitCommitForPathsAsync(
 	const headBefore = await runGitAsync(repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"], undefined, signal);
 	const commitResult = await runGitAsync(
 		repositoryRoot,
-		["commit", "-m", message, "--", ...filteredPaths],
+		// --no-verify only when the user turned on "Skip Git hooks" for direct commits (Settings → Git).
+		["commit", ...(options.noVerify ? ["--no-verify"] : []), "-m", message, "--", ...filteredPaths],
 		timeoutMs ?? GIT_COMMIT_TIMEOUT_MS,
 		signal,
 	);

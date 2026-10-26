@@ -28,6 +28,27 @@ export interface CommitDescriptionSettings {
 }
 
 /**
+ * How /commit and /push run. "direct": plain Git (a commit message from the file list, no model, no repair; a push with
+ * no CI follow-up). "instructions": the user's own instructions drive the model work (checks before the operation, the
+ * commit description, CI after a push).
+ */
+export type GitOperationMode = "direct" | "instructions";
+
+/** /commit (Settings → Git). Missing `instructions` means the built-in default instructions. */
+export interface GitCommitSettings {
+	mode?: GitOperationMode;
+	/** Direct mode only: commit with `--no-verify`. */
+	skipHooks?: boolean;
+	instructions?: string;
+}
+
+/** /push (Settings → Git). Missing `instructions` means the built-in default instructions. */
+export interface GitPushSettings {
+	mode?: GitOperationMode;
+	instructions?: string;
+}
+
+/**
  * Selection translation (the Web UI's "Translate" on selected text): its own helper model, empty provider/model means
  * "use the main model". `targetLanguage` is a BCP 47 tag, or "auto" for the interface language.
  */
@@ -316,6 +337,8 @@ export interface Settings {
 	contextWindow?: ContextWindowSettings;
 	branchSummary?: BranchSummarySettings;
 	commitDescription?: CommitDescriptionSettings;
+	gitCommit?: GitCommitSettings; // Global only: how /commit runs
+	gitPush?: GitPushSettings; // Global only: how /push runs
 	translation?: TranslationSettings;
 	worktreeNaming?: WorktreeNamingSettings;
 	retry?: RetrySettings;

@@ -29,6 +29,28 @@ export type GitPushTaskPhase =
 
 export interface GitPushTaskHost {
 	updatePhase: (phase: GitPushTaskPhase, activity: string) => void;
+	/**
+	 * Checked after the fast-forward checks and before anything is pushed (the user's push instructions). A `stop`
+	 * blocks the push with that reason; a thrown error fails it. Omitted: nothing is checked.
+	 */
+	reviewBeforePush?: (repository: GitPushRepositoryState, signal: AbortSignal) => Promise<{ stop?: string }>;
+}
+
+/** Everything the CI lookup of one pushed commit needs, so it can run after the push request has answered. */
+export interface GitPushCiWatchTarget {
+	repositoryRoot: string;
+	/** The branch on the remote; GitHub reports runs under this name, not the local branch's. */
+	remoteBranch: string;
+	remoteUrl: string;
+	commitSha: string;
+}
+
+export interface GitPushExecuteOptions {
+	/**
+	 * false: answer as soon as the remote holds the commit (`status: "pushed"` with a `ciTarget`), and leave CI to
+	 * `watchCi`. Default true: wait for the CI result as before.
+	 */
+	waitForCi?: boolean;
 }
 
 export interface GitPushWorkingTreeState {
@@ -62,6 +84,11 @@ export interface GitPushCiSummary {
 }
 
 export type GitPushWorkflowResult =
+	| {
+			status: "pushed";
+			repository: GitPushRepositoryState;
+			ciTarget: GitPushCiWatchTarget;
+	  }
 	| {
 			status: "no-push-needed";
 			message: "没有需要 Push 的 commit";
@@ -316,7 +343,11 @@ export class GitPushUseCase {
 		this.sleep = options.sleep ?? defaultSleep;
 	}
 
-	async execute(cwd: string, signal: AbortSignal = new AbortController().signal): Promise<GitPushWorkflowResult> {
+	async execute(
+		cwd: string,
+		signal: AbortSignal = new AbortController().signal,
+		options: GitPushExecuteOptions = {},
+	): Promise<GitPushWorkflowResult> {
 		let repository: GitPushRepositoryState | undefined;
 		let remoteMayHaveChanged = false;
 		try {
@@ -378,13 +409,43 @@ export class GitPushUseCase {
 			}
 
 			this.host.updatePhase("validating", "正在确认 Push 目标和待推送 commit");
+			if (this.host.reviewBeforePush) {
+				let review: { stop?: string };
+				try {
+					review = await this.host.reviewBeforePush(currentRepository, signal);
+				} catch (error) {
+					if (signal.aborted) throw error;
+					// The instructions could not be checked (no model, network): nothing is pushed unchecked.
+					return {
+						status: "failed",
+						reason: `没能按你的 Push 提示词检查这次 Push，未执行 Push：${error instanceof Error ? error.message : String(error)}`,
+						repository: currentRepository,
+						remoteMayHaveChanged: false,
+					};
+				}
+				if (review.stop) {
+					return {
+						status: "blocked",
+						reason: `你的 Push 提示词阻止了这次 Push：${review.stop}`,
+						repository: currentRepository,
+						remoteMayHaveChanged: false,
+					};
+				}
+			}
+			// The commit that was checked is the one pushed: a commit another chat makes meanwhile moves HEAD, not this.
+			const pushedSha = currentRepository.localSha;
 			this.host.updatePhase(
 				"pushing",
 				`正在 Push ${currentRepository.branch} → ${currentRepository.remote}/${currentRepository.remoteBranch}`,
 			);
 			const pushed = await this.gitRunner(
 				currentRepository.repositoryRoot,
-				["push", "--no-follow-tags", currentRepository.remote, `HEAD:refs/heads/${currentRepository.remoteBranch}`],
+				[
+					"push",
+					"--no-follow-tags",
+					currentRepository.remote,
+					`${pushedSha}:refs/heads/${currentRepository.remoteBranch}`,
+				],
 				DEFAULT_GIT_TIMEOUT_MS * 4,
 				signal,
 			);
@@ -431,11 +492,7 @@ export class GitPushUseCase {
 			}
 			currentRepository = verified.value.state;
 			repository = currentRepository;
-			if (
-				currentRepository.localSha !== currentRepository.remoteSha ||
-				currentRepository.ahead !== 0 ||
-				currentRepository.behind !== 0
-			) {
+			if (currentRepository.remoteSha !== pushedSha) {
 				return {
 					status: "failed",
 					reason: "Push 命令返回成功，但远端 branch 未与当前 HEAD 对齐；未继续宣称 Push 完成。",
@@ -444,8 +501,15 @@ export class GitPushUseCase {
 				};
 			}
 
+			const ciTarget: GitPushCiWatchTarget = {
+				repositoryRoot: verified.value.identity.repositoryRoot,
+				remoteBranch: verified.value.identity.remoteBranch,
+				remoteUrl: verified.value.identity.remoteUrl,
+				commitSha: pushedSha,
+			};
+			if (options.waitForCi === false) return { status: "pushed", repository: currentRepository, ciTarget };
 			this.host.updatePhase("checking-ci", "正在查找当前 commit 对应的 Push CI");
-			const ci = await this.checkCi(verified.value.identity, currentRepository, signal);
+			const ci = await this.watchCi(ciTarget, signal);
 			this.host.updatePhase("final-verification", "正在执行最终 Git 与 CI 验收");
 			const finalState = await this.refreshState(verified.value.identity, signal);
 			if (!("value" in finalState)) {
@@ -464,7 +528,7 @@ export class GitPushUseCase {
 				};
 			}
 			repository = finalState.value.state;
-			if (repository.localSha !== repository.remoteSha || repository.ahead !== 0 || repository.behind !== 0) {
+			if (repository.remoteSha !== pushedSha) {
 				return {
 					status: "failed",
 					reason: "最终验收发现 local HEAD 与 remote branch 不一致，未报告为完成。",
@@ -627,12 +691,16 @@ export class GitPushUseCase {
 		return this.gitRunner(repositoryRoot, args, DEFAULT_GIT_TIMEOUT_MS, signal);
 	}
 
-	private async checkCi(
-		identity: GitPushRepositoryIdentity,
-		repository: GitPushRepositoryState,
-		signal: AbortSignal,
-	): Promise<GitPushCiCheckResult> {
-		const discovery = await this.workflowDiscovery(identity.repositoryRoot, identity.branch);
+	/**
+	 * Wait for the push CI of one pushed commit: the workflows the repository declares for pushes to the remote branch,
+	 * matched by the exact commit, event and branch. Never reports success it has not seen.
+	 */
+	async watchCi(target: GitPushCiWatchTarget, signal: AbortSignal): Promise<GitPushCiSummary> {
+		return this.checkCi(target, signal);
+	}
+
+	private async checkCi(watch: GitPushCiWatchTarget, signal: AbortSignal): Promise<GitPushCiCheckResult> {
+		const discovery = await this.workflowDiscovery(watch.repositoryRoot, watch.remoteBranch);
 		const warnings = [...discovery.errors];
 		if (discovery.workflows.length === 0) {
 			return {
@@ -648,7 +716,7 @@ export class GitPushUseCase {
 						: "当前仓库没有可确认的 branch push workflow。",
 			};
 		}
-		const provider = this.ciProvider ?? this.createDefaultCiProvider(identity.remoteUrl);
+		const provider = this.ciProvider ?? this.createDefaultCiProvider(watch.remoteUrl);
 		if (!provider) {
 			return {
 				status: "unavailable",
@@ -661,12 +729,12 @@ export class GitPushUseCase {
 			};
 		}
 
-		const repositoryReference = this.createDefaultCiTarget(identity.remoteUrl);
+		const repositoryReference = this.createDefaultCiTarget(watch.remoteUrl);
 		const target: GitPushCiTarget = {
 			owner: repositoryReference?.owner ?? "",
 			repository: repositoryReference?.repository ?? "",
-			branch: repository.branch,
-			commitSha: repository.localSha,
+			branch: watch.remoteBranch,
+			commitSha: watch.commitSha,
 		};
 		let retryCount = 0;
 		const deadline = Date.now() + this.ciTimeoutMs;

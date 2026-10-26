@@ -907,20 +907,38 @@ function keyScreen(ctx, providerId, keyId) {
 }
 
 // ---- /git ---------------------------------------------------------------------------------------------------
+/** What Commit and Push do in each mode (Settings → Git), as the /git rows describe them. */
+const COMMIT_DESC = {
+	instructions: N_("Checks and describes the changes as your commit instructions ask, then creates one local commit. Nothing is pushed."),
+	direct: N_("Creates one local commit with a message built from the file list. No model, no repair. Nothing is pushed."),
+};
+const PUSH_DESC = {
+	instructions: N_("Checks the commits as your push instructions ask and pushes them; CI is followed in the background."),
+	direct: N_("Pushes the commits that already exist on this branch. CI is not checked."),
+};
+
 function gitRoot() {
 	const gitStatus = useStore((s) => s.gitStatus);
 	const checkpoint = useStore((s) => s.snap?.checkpoint);
+	// Saved modes decide what Commit and Push do; each also offers the other mode once, without changing the setting.
+	const { data: prefs } = useLoaded(() => api("/api/git/preferences"));
 	useEffect(() => {
 		loadGitStatus();
 	}, []);
 	const dirty = gitStatus?.preview?.total || 0;
+	const commitMode = prefs?.commit?.mode || "instructions";
+	const pushMode = prefs?.push?.mode || "instructions";
+	const other = (mode) => (mode === "direct" ? "instructions" : "direct");
 	const enable = (ctx) => ctx.push(() => ({ title: t("Set up Git for this project"), custom: (c) => html`<${GitInline} onClose=${c.pop} />` }));
 	return {
 		title: t("Git"),
 		subtitle: gitStatus?.isRepository ? `${gitStatus.branch || t("detached HEAD")} · ${dirty ? t("{n} uncommitted", { n: dirty }) : t("clean")}` : gitStatus ? t("This workspace is not a Git repository.") : undefined,
 		rows: [
-			{ key: "commit", label: t("Commit"), desc: t("Creates one local commit for the task's changes. Nothing is pushed."), onEnter: (c) => (c.close(), commitChanges()) },
-			{ key: "push", label: t("Push"), desc: t("Publishes commits that already exist on this branch, then waits for the CI result."), onEnter: (c) => (c.close(), pushChanges()) },
+			{ key: "commit", label: t("Commit"), desc: t(COMMIT_DESC[commitMode]), onEnter: (c) => (c.close(), commitChanges()) },
+			{ key: "commit-other", label: commitMode === "direct" ? t("Commit with instructions") : t("Commit directly"), desc: t(COMMIT_DESC[other(commitMode)]), onEnter: (c) => (c.close(), commitChanges({ mode: other(commitMode) })) },
+			{ key: "push", label: t("Push"), desc: t(PUSH_DESC[pushMode]), onEnter: (c) => (c.close(), pushChanges()) },
+			{ key: "push-other", label: pushMode === "direct" ? t("Push with instructions") : t("Push directly"), desc: t(PUSH_DESC[other(pushMode)]), onEnter: (c) => (c.close(), pushChanges({ mode: other(pushMode) })) },
+			{ key: "git-settings", label: t("Commit and push settings"), desc: t("Modes and instructions"), chevron: true, onEnter: (c) => (c.close(), setView({ settingsOpen: true, settingsSection: "git" })) },
 			...(checkpoint?.status === "created" ? [{ key: "undo", label: t("Undo task"), desc: t("Keep or undo this task's changes"), chevron: true, onEnter: (c) => c.push(() => undoScreen()) }] : []),
 			{ key: "restore", label: t("Restore to last commit"), desc: t("Permanently discards every uncommitted change."), chevron: true, danger: true, onEnter: (c) => c.push(() => restoreScreen()) },
 			{ key: "worktrees", label: t("Worktrees"), chevron: true, onEnter: (c) => c.push((cc) => worktreesScreen(cc)) },

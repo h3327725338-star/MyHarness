@@ -433,7 +433,8 @@ export function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
 	const addItem = (item, index) => {
 		// Bookmark labels are projected for the HTML export only; the transcript has nothing to draw for them.
 		if (item.kind === "label") return;
-		if (item.kind === "custom" && item.customType === "git-commit-repair" && !item.display) {
+		// A repair round (a pre-commit check, or CI after a push) is one card holding the turn it started.
+		if (item.kind === "custom" && (item.customType === "git-commit-repair" || item.customType === "git-ci-repair") && !item.display) {
 			// A new repair round replaces the open one, so close it first: its card keeps the steps that round ran
 			// instead of losing them to the accumulator that is about to be dropped.
 			if (repair) repair.turns = buildTurns(repair.items, ctx);

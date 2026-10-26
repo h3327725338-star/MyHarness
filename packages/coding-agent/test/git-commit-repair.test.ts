@@ -51,6 +51,7 @@ it("describes all pending paths and submits exactly once", async () => {
 		message.full,
 		undefined,
 		undefined,
+		{ noVerify: false },
 	);
 });
 it.each(["exit", "timeout", "spawn"] as const)("does not repair or retry a %s failure", async (failureKind) => {

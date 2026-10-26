@@ -55,17 +55,21 @@ const failure = (title, error) => {
 };
 
 // ---- /commit -----------------------------------------------------------------------------------------------------
+/** The request body's "mode": only a one-off choice (the /git panel's other mode); otherwise Settings → Git decides. */
+const modeOf = (options) => (options?.mode === "direct" || options?.mode === "instructions" ? { mode: options.mode } : {});
+
 /**
  * Commits the way the terminal's /commit does: no choice is needed, so it starts at once. The Changes panel passes its
  * scope, so "This chat" commits only the files this chat changed; every other entry (the slash command, the
- * /git panel) keeps committing the whole working tree.
+ * /git panel) keeps committing the whole working tree. How it commits (direct, or as the commit instructions ask) is
+ * the Settings → Git mode unless `options.mode` picks the other one for this commit.
  */
 export function commitChanges(options = {}) {
 	const scope = options?.scope === "session" ? "session" : undefined;
 	return runGitTask("commit", "Checking changes", async (slot) => {
 		let result;
 		try {
-			result = await post("/api/git/commit", scope ? { scope } : {}, slot);
+			result = await post("/api/git/commit", { ...(scope ? { scope } : {}), ...modeOf(options) }, slot);
 		} catch (error) {
 			return show(slot, "commit", failure(t("Commit failed"), error));
 		}
@@ -100,6 +104,10 @@ const repositoryLine = (r) => `${r.branch} → ${r.remote}/${r.remoteBranch} · 
 /** The strip's version of a push result (the server's `status` decides which). */
 function pushOutcome(r) {
 	switch (r.status) {
+		case "pushed":
+			// The request answers once the remote holds the commit; in "instructions" mode the server follows CI in the
+			// background and adds its result as a card of its own.
+			return { tone: "ok", title: t("Push succeeded"), hash: r.repository.localSha.slice(0, 7), detail: r.ciFollowUp ? t("CI is checked in the background; its result appears here when it is ready.") : t("Direct push: CI is not checked."), lines: repositoryLine(r.repository) };
 		case "success":
 			return { tone: "ok", title: t("Push succeeded"), hash: r.repository.localSha.slice(0, 7), detail: r.ci.workflows.length ? t("CI: {workflows} all passed.", { workflows: r.ci.workflows.map((w) => w.name).join(", ") }) : t("No CI workflows apply to this commit."), lines: repositoryLine(r.repository) };
 		case "no-push-needed":
@@ -130,11 +138,14 @@ function pushOutcome(r) {
 	}
 }
 
-/** Pushes the commits that already exist on this branch (never the uncommitted files) and waits for the CI result. */
-export function pushChanges() {
+/**
+ * Pushes the commits that already exist on this branch (never the uncommitted files). It ends when the remote holds them:
+ * CI, when the push instructions follow it, is checked in the background. `options.mode` as for commitChanges.
+ */
+export function pushChanges(options = {}) {
 	return runGitTask("push", "Checking the repository, branch and upstream", async (slot) => {
 		try {
-			await show(slot, "push", pushOutcome(await post("/api/git/push", {}, slot)));
+			await show(slot, "push", pushOutcome(await post("/api/git/push", modeOf(options), slot)));
 		} catch (error) {
 			await show(slot, "push", failure(t("Push did not complete"), error));
 		}

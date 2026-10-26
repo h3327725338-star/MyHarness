@@ -162,7 +162,9 @@ Package 资源和 project-local settings 走同一套 Project Trust flow：启�
 | `subAgent` | object | `{ "enabled": false, "mode": "read-only" }` | Global built-in exploration-agent 和 workflow configuration，含只读/读写模式。通过 `/settings` 设置。 |
 | `webSearch` | object | `{ "enabled": false }` | Global built-in web search configuration（搜索引擎和四个数量）；只在启用时注册 `web_search` 和 `web_fetch`，main Agent 与它派出的子智能体都按这个开关。详见 [Web Search](web-search.md)。 |
 | `visionAssistant` | object | `{ "enabled": false }` | Global dedicated image-analysis model configuration。通过 `/settings` 设置。 |
-| `commitDescription` | object | `{}` | Global AI 提交描述模型：为空表示使用主模型。设置 → 智能体 → 助手的“提交描述”行选择独立模型与思考档位。 |
+| `commitDescription` | object | `{}` | Global AI 提交描述模型：为空表示使用主模型。设置 → 智能体 → 助手的“提交描述”行选择独立模型与思考档位。Commit/Push 提示词检查也用这个模型。 |
+| `gitCommit` | object | `{}` | Global `/commit` 的运行方式：`mode`（`"instructions"` 默认 / `"direct"`）、`skipHooks`（只在直接模式生效，默认 `false`）、`instructions`（没有这个字段时用内置默认提示词）。设置 → Git。 |
+| `gitPush` | object | `{}` | Global `/push` 的运行方式：`mode`（`"instructions"` 默认 / `"direct"`）、`instructions`（没有这个字段时用内置默认提示词）。设置 → Git。 |
 | `translation` | object | `{}` | Global 划词翻译模型与目标语言：`provider`/`model`/`thinkingLevel` 为空表示使用主模型，`targetLanguage` 默认 `"auto"`（跟随界面语言），可选 `zh-CN`、`zh-TW`、`en`、`ja`、`ko`、`fr`、`de`、`es`、`ru`。设置 → 智能体 → 助手的“翻译”“翻译成”两行设置。 |
 | `worktreeNaming` | object | `{}` | Global 工作区副本命名模型：为空表示使用主模型。设置 → 智能体 → 助手的“副本命名”行选择独立模型与思考档位。 |
 | `branchSummary` | object | `{}` | Global 分支摘要模型与摘要行为：`provider`/`model`/`thinkingLevel` 为空表示使用主模型，`reserveTokens`/`skipPrompt` 保持原有摘要行为。设置 → 智能体 → 助手的“分支摘要”行选择独立模型与思考档位。 |
@@ -421,6 +423,22 @@ Memory Markdown files 是 source of truth：
 #### commitDescription（AI 提交描述）与 worktreeNaming（副本命名）
 
 两个都是 global 设置，默认都为空，即“使用主模型”：运行时使用当前主对话模型并继承它当前的 Thinking Effort，与改动前的行为完全一致；显式配置 `provider` + `model` 后改用独立模型，此时没写 `thinkingLevel`（Web UI 里的“默认”）表示不发送 Effort，相当于 `off`，只写其中一个视为没有配置。思考档位透传为一次性模型请求的 `reasoning` 参数（`off` 则不传）。两个请求都不再设置 `maxTokens`，输出上限走 Provider 默认。提交描述用于 `/commit` 从 diff 生成标题与正文，副本命名用于工作区副本的 AI 命名（2–5 词的展示名，只返回名称本身）。配置删除或 Provider 停用时回退到主模型；删除 Provider/模型时会清理指向它的引用。
+
+#### gitCommit 与 gitPush（Commit 和 Push 的模式与提示词）
+
+两个都是 global 设置，在 设置 → Git 修改，`/git` 面板可以临时用另一种模式运行一次（不改设置）。
+
+- `mode: "instructions"`（默认）：按 `instructions` 工作。Commit 用 Commit Description 模型写说明（提示词只影响写法），同时按提示词检查改动，要求停下就不提交；按提示词模式下仍保留提交前 hook 失败的自动修复（最多 3 轮）。Push 先按提示词检查待推送的提交，要求停下就不推送；推送后在后台跟进这个 commit 的 CI，提示词要求 CI 通过时自动修复、只提交修复改到的文件并重新 Push，最多 3 轮。
+- `mode: "direct"`：Commit 不调用模型，用文件清单生成说明后立即提交，不检查、不修复；`skipHooks: true` 时带 `--no-verify`。Push 只推送，不查 CI。
+- `instructions`：没有这个字段时使用内置默认提示词（`system-prompts/common/tasks/git-commit-default-instructions.md`、`git-push-default-instructions.md`）；空字符串表示不检查，Commit 说明按内置规则写。Web UI 保存的内容与内置默认相同时会删除这个字段，`POST /api/git/preferences` 里的 `instructions: null` 同样表示回到内置默认。
+- 无论提示词怎么写，都不会绕过检查、强制 Push、改写已 Push 的提交或改 Git 配置；这些限制写在代码里，不由提示词决定。
+
+```json
+{
+  "gitCommit": { "mode": "direct", "skipHooks": false },
+  "gitPush": { "mode": "instructions", "instructions": "After pushing, CI must pass." }
+}
+```
 
 #### translation（划词翻译）
 

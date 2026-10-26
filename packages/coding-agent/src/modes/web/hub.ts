@@ -564,6 +564,7 @@ export class WebHostHub implements WebHostHubLink {
 		// A finished session whose result is still unread keeps its slot, so its sidebar marker cannot vanish unseen.
 		return (
 			!!host.gitTask ||
+			host.backgroundGit.size > 0 ||
 			!host.session.isIdle ||
 			host.completionActive ||
 			host.dialogs.requests.length > 0 ||

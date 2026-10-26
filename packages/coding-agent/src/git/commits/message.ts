@@ -304,6 +304,73 @@ export function generateCommitMessageForPaths(repositoryRoot: string, paths: str
 }
 
 /**
+ * 直接提交（不调用模型）的提交信息：只用已经读到的 diff 与新文件内容（`readCommitMessageContext` 的结果），
+ * 不再运行 Git，也不读文件。规则与 generateCommitMessageForPaths 相同：真实路径、状态、行数和 diff 中实际出现的符号。
+ *
+ * @param context 待提交路径与 diff（新文件以 `New file "path":` 段落出现）
+ */
+export function buildDirectCommitMessage(context: { paths: string[]; diff: string }): GeneratedCommitMessage {
+	const byPath = new Map<string, FileChange>();
+	const sections = context.diff.split(/(?=^diff --git |^New file ")/mu).filter(Boolean);
+	let scanned = 0;
+	for (const section of sections) {
+		const tracked = section.match(/^diff --git (?:"a\/(.*?)"|a\/(.*?)) (?:"b\/(.*?)"|b\/(.*?))\r?\n/u);
+		const added = section.match(/^New file (".*"):\r?\n/u);
+		if (!tracked && !added) continue;
+		const path = tracked ? (tracked[3] ?? tracked[4]) : (JSON.parse(added![1]) as string);
+		const lines = section.split(/\r?\n/u);
+		const binary =
+			/^(?:GIT binary patch|Binary files )/mu.test(section) || /^Binary file \(contents omitted\)/mu.test(section);
+		let plus = 0;
+		let minus = 0;
+		if (!binary) {
+			if (tracked) {
+				for (const line of lines) {
+					if (line.startsWith("+") && !line.startsWith("+++")) plus++;
+					else if (line.startsWith("-") && !line.startsWith("---")) minus++;
+				}
+			} else plus = lines.slice(1).filter((line) => line.trim()).length;
+		}
+		const status: FileChange["status"] =
+			added || /^new file mode /mu.test(section) ? "A" : /^deleted file mode /mu.test(section) ? "D" : "M";
+		const withinScan = !binary && scanned + section.length <= MAX_DIFF_SCAN_BYTES;
+		if (withinScan) scanned += section.length;
+		const points = !withinScan
+			? []
+			: tracked
+				? extractChangePoints(section)
+				: extractPointsFromLines(lines.slice(1, 201));
+		byPath.set(path, { status, path, added: plus, deleted: minus, points });
+	}
+	for (const path of context.paths) {
+		if (!byPath.has(path)) byPath.set(path, { status: "M", path, added: 0, deleted: 0, points: [] });
+	}
+	const wanted = new Set(context.paths);
+	const changes = [...byPath.values()].filter((change) => wanted.size === 0 || wanted.has(change.path));
+	let totalPoints = 0;
+	for (const change of changes) {
+		change.points = change.points.slice(
+			0,
+			Math.max(0, Math.min(MAX_POINTS_TOTAL - totalPoints, MAX_POINTS_PER_FILE)),
+		);
+		totalPoints += change.points.length;
+	}
+	const title = buildTitle(
+		inferType(changes, context.diff.length <= MAX_DIFF_SCAN_BYTES ? context.diff : ""),
+		inferScope(changes),
+		changes,
+	);
+	const body: string[] = [];
+	for (const change of changes) {
+		const stat = change.added === 0 && change.deleted === 0 ? "" : ` (+${change.added}/-${change.deleted})`;
+		body.push(`- ${change.status} ${change.path}${stat}`);
+		for (const point of change.points) body.push(`  - ${point}`);
+	}
+	if (body.length === 0) body.push("- 无文件级变更统计（可能为二进制或重命名）");
+	return { title, body, full: [title, "", ...body].join("\n") };
+}
+
+/**
  * 为首次提交（初始版本，无 HEAD）生成提交信息。
  * 使用暂存区（git add 之后）的 name-status / numstat 统计。
  */

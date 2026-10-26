@@ -313,6 +313,11 @@ export class WebHost {
 	/** Last time a request addressed this slot; the hub evicts the least recently used idle slots. */
 	touchedAt = Date.now();
 	gitTask: Record<string, unknown> | null = null;
+	/**
+	 * Git work this chat runs after its request answered (the CI follow-up of a push). It keeps the slot from being
+	 * evicted, and it stops when the slot shows another session or closes.
+	 */
+	readonly backgroundGit = new Set<AbortController>();
 	private lastActivityAt: number | null = null;
 	private operationStarted = false;
 	inputTouched = false;
@@ -597,7 +602,13 @@ export class WebHost {
 		await this.bindSession();
 	}
 
+	private stopBackgroundGit(): void {
+		for (const controller of this.backgroundGit) controller.abort();
+		this.backgroundGit.clear();
+	}
+
 	private async bindSession(): Promise<void> {
+		this.stopBackgroundGit();
 		this.conversationNaming?.dispose();
 		const owedHandoffs = this.sessionHandoff?.dispose() ?? [];
 		this.operationStarted = false;
@@ -817,6 +828,7 @@ export class WebHost {
 
 	/** Stop forwarding events and release the runtime. Used when the hub closes an idle or deleted slot. */
 	async dispose(): Promise<void> {
+		this.stopBackgroundGit();
 		this.conversationNaming?.dispose();
 		this.sessionHandoff?.dispose();
 		this.generation += 1;

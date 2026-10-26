@@ -25,7 +25,7 @@
 | --- | --- | --- |
 | `git-commit.ts` | `GitCommitUseCase`：`/commit` 的提交目标选择、提交信息生成、失败分类 | `git/checkpoints`、`git/commits`、`git/repository` |
 | `git-workspace.ts` | `inspectCommitTargetAsync()`：提交前的仓库状态与检查点归属检查（异步，不阻塞事件循环） | `git/checkpoints`、`git/repository` |
-| `git-push.ts` | `GitPushUseCase`：显式 Push、remote 校验、fast-forward 判断、CI 结果验收 | `git/repository`、`git/ci` |
+| `git-push.ts` | `GitPushUseCase`：显式 Push（推送检查过的那个 commit SHA，而不是 Push 时的 HEAD）、remote 校验、fast-forward 判断、Push 前的提示词检查钩子；`waitForCi: false` 时远端收到即返回，CI 由 `watchCi()` 另行按远端分支名查询 | `git/repository`、`git/ci` |
 | `git-worktree.ts` | `GitWorktreeUseCase`：Worktree 的创建、切换、合并、删除 | `git/worktrees` |
 | `provider-settings.ts` | `ProviderSettingsUseCase`：Provider 启用/禁用后同步当前模型 | `agent/runtime`、`config/settings` |
 | `workspace-session.ts` | `WorkspaceSessionUseCase`：Workspace 下的 Session 列表、删除 | `session/manager`、`session/storage` |

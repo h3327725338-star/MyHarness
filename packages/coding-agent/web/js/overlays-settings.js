@@ -29,6 +29,7 @@ export const NAV = [
 	{ id: "conversation", label: N_("Conversation & scheduling"), icon: "clock" },
 	{ id: "agent", label: N_("Agent"), icon: "bolt" },
 	{ id: "personal", label: N_("Personalization"), icon: "chat" },
+	{ id: "git", label: N_("Git"), icon: "gitBranch" },
 	{ id: "providers", label: N_("Providers"), icon: "key" },
 	{ id: "connect", label: N_("Connections"), icon: "plug" },
 	{ id: "sync", label: N_("Google Drive"), icon: "drive" },
@@ -56,6 +57,7 @@ const PAGE_NOTE = {
 	search: N_("Search engines, page reads and browser fallback."),
 	agent: N_("How the agent runs, compacts its context and retries."),
 	personal: N_("Global personal prompts for Coding and General chats, saved independently."),
+	git: N_("How Commit and Push run, and the instructions they follow."),
 	providers: N_("The services MyHarness talks to, their API keys and models."),
 	connect: N_("Accounts the agent works with on your behalf: GitHub and your Gmail or Outlook mailboxes."),
 	sync: N_("Keep chats, memories and attachments in sync through your own Google Drive."),
@@ -1037,6 +1039,139 @@ function Personalization() {
 		/>`;
 }
 
+const GIT_MODES = [
+	{ value: "instructions", label: N_("With instructions") },
+	{ value: "direct", label: N_("Direct") },
+];
+/** What one mode of Commit or Push does, under the mode switch. */
+const GIT_MODE_NOTE = {
+	commit: {
+		instructions: N_("Checks the changes and writes the description as your instructions ask; repairs failed pre-commit checks."),
+		direct: N_("Commits at once with a message built from the file list: no model, no check, no repair."),
+	},
+	push: {
+		instructions: N_("Checks the commits as your instructions ask and pushes; CI is followed in the background and repaired when they ask for it."),
+		direct: N_("Pushes at once. CI is not checked."),
+	},
+};
+const GIT_CARDS = {
+	commit: { title: N_("Commit"), instructions: N_("Commit instructions") },
+	push: { title: N_("Push"), instructions: N_("Push instructions") },
+};
+
+/**
+ * Settings → Git: how /commit and /push run. The modes and the hooks switch apply at once (like every simple setting);
+ * the two instruction texts are drafts kept until Save, like the personal prompts, with the same large editor. Saving the
+ * built-in text again (or Restore default) stores nothing, so later built-in updates still apply.
+ */
+function GitPreferences() {
+	const [saved, setSaved] = useState(null);
+	const [text, setText] = useState({ commit: "", push: "" });
+	const [error, setError] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [fullscreen, setFullscreen] = useState(null); // null | "commit" | "push"
+	const boxes = useRef({});
+	const expanders = useRef({});
+	const caret = useRef({ start: 0, end: 0 });
+	const fetchPrefs = () => api("/api/git/preferences");
+	const load = () =>
+		fetchPrefs()
+			.then((data) => {
+				setSaved(data);
+				setText({ commit: data.commit.instructions, push: data.push.instructions });
+				setError("");
+			})
+			.catch((e) => setError(serverText(e.message, t("The operation failed."))));
+	useEffect(() => {
+		load();
+	}, []);
+	// A mode or the hooks switch: saved at once; instruction drafts stay as they are.
+	const apply = async (patch) => {
+		if (await attempt(() => post("/api/git/preferences", patch))) setSaved(await fetchPrefs());
+	};
+	const dirty = !!saved && (text.commit !== saved.commit.instructions || text.push !== saved.push.instructions);
+	const save = async () => {
+		const body = {};
+		for (const key of ["commit", "push"]) {
+			if (text[key] !== saved[key].instructions) body[key] = { instructions: text[key] === saved[key].defaultInstructions ? null : text[key] };
+		}
+		setBusy(true);
+		const ok = await attempt(() => post("/api/git/preferences", body), { success: t("Git instructions saved.") });
+		setBusy(false);
+		if (ok) load();
+	};
+	const openFullscreen = (key) => {
+		const src = boxes.current[key];
+		caret.current = { start: src?.selectionStart ?? 0, end: src?.selectionEnd ?? src?.selectionStart ?? 0 };
+		setFullscreen(key);
+	};
+	if (error && !saved) return html`<div class="notice danger">${error}</div>`;
+	if (!saved) return html`<${Spinner} />`;
+	const card = (key) => {
+		const part = saved[key];
+		const direct = part.mode === "direct";
+		return html`<${Card} key=${key} title=${t(GIT_CARDS[key].title)}>
+			<${Row} label=${t("Mode")} description=${t(GIT_MODE_NOTE[key][part.mode])}>
+				<${Segmented} value=${part.mode} onChange=${(mode) => mode !== part.mode && apply({ [key]: { mode } })} options=${GIT_MODES.map((option) => ({ value: option.value, label: t(option.label) }))} />
+			<//>
+			${key === "commit"
+				? html`<${Row} label=${t("Skip Git hooks")} description=${t("Direct mode only: commit with --no-verify, so pre-commit checks do not run.")} off=${!direct}>
+						<${Toggle} checked=${!!part.skipHooks} disabled=${!direct} label=${t("Skip Git hooks")} onChange=${(on) => apply({ commit: { skipHooks: on } })} />
+					<//>`
+				: null}
+			<${Row} wide label=${t(GIT_CARDS[key].instructions)} description=${t("Used in “With instructions” mode. Whatever they say, checks are never bypassed, nothing is force-pushed and pushed commits are never rewritten.")} off=${direct}>
+				<div class="col git-instructions">
+					<div class="personal-expand">
+						<textarea
+							class="field personal-prompt"
+							rows="8"
+							ref=${(el) => {
+								boxes.current[key] = el;
+							}}
+							value=${text[key]}
+							aria-label=${t(GIT_CARDS[key].instructions)}
+							onInput=${(e) => setText({ ...text, [key]: e.target.value })}
+						/>
+						<button
+							type="button"
+							class="icon-btn sm personal-expand-btn"
+							title=${t("Edit fullscreen")}
+							aria-label=${t("Edit fullscreen")}
+							ref=${(el) => {
+								expanders.current[key] = el;
+							}}
+							onClick=${() => openFullscreen(key)}
+						>
+							<${Icon} name="maximize" size=${14} />
+						</button>
+					</div>
+					${text[key] !== part.defaultInstructions ? html`<div class="row"><button class="link-btn" onClick=${() => setText({ ...text, [key]: part.defaultInstructions })}>${t("Restore default")}</button></div>` : null}
+				</div>
+			<//>
+		<//>`;
+	};
+	return html`
+		${error ? html`<div class="notice danger">${error}</div>` : null}
+		${card("commit")}
+		${card("push")}
+		<div class="row personal-foot">
+			<span class="dim grow">${t("Modes and the hooks switch apply at once; instructions are saved with Save.")}</span>
+			${dirty ? html`<button class="btn" disabled=${busy} onClick=${() => setText({ commit: saved.commit.instructions, push: saved.push.instructions })}>${t("Discard changes")}</button>` : null}
+			<button class="btn primary" disabled=${busy || !dirty} onClick=${save}>${t("Save")}</button>
+		</div>
+		<${PersonalFullscreen}
+			open=${fullscreen !== null}
+			title=${fullscreen === null ? "" : t(GIT_CARDS[fullscreen].instructions)}
+			value=${fullscreen === null ? "" : text[fullscreen]}
+			caret=${caret.current}
+			anchor=${fullscreen === null ? null : expanders.current[fullscreen]}
+			onInput=${(value) => {
+				if (fullscreen !== null) setText({ ...text, [fullscreen]: value });
+			}}
+			onClose=${() => setFullscreen(null)}
+		/>`;
+}
+
 function About() {
 	const snap = useStore((s) => s.snap);
 	const runMode = runModeOf(useStore((s) => s.view.runMode));
@@ -1080,7 +1215,7 @@ export function SettingsModal() {
 			<nav class="settings-nav" aria-label=${t("Settings sections")}>${NAV.map((n) => html`<button key=${n.id} class=${section === n.id ? "on" : ""} onClick=${() => setView({ settingsSection: n.id })}><${Icon} name=${n.icon} size=${15} />${t(n.label)}</button>`)}</nav>
 			<div class=${`settings-body ${section === "providers" ? "wide" : ""}`}>
 				<div class="settings-title"><h2>${t(current.label)}</h2>${PAGE_NOTE[current.id] ? html`<span class="set-desc">${t(PAGE_NOTE[current.id])}</span>` : null}</div>
-				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "sync" ? html`<${SyncPage} />` : section === "connect" ? html`<${ConnectPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "shortcuts" ? html`<${Shortcuts} />` : section === "personal" ? html`<${Personalization} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
+				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "sync" ? html`<${SyncPage} />` : section === "connect" ? html`<${ConnectPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "shortcuts" ? html`<${Shortcuts} />` : section === "personal" ? html`<${Personalization} />` : section === "git" ? html`<${GitPreferences} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
 				${settings?.errors?.length ? html`<div class="notice danger">${settings.errors.map((e) => `${e.scope}: ${e.message}`).join("\n")}</div>` : null}
 			</div>
 		</div>

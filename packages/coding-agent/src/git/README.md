@@ -11,7 +11,8 @@
 | 文件 | 内容 |
 | --- | --- |
 | `command.ts` | `runGit()` / `runGitSync()` / `runGitChecked()`：统一的 Git 子进程执行、超时、失败分类 |
-| `integration.ts` | 仓库检查、身份（user.name/email）、状态预览、初始化、初始基线提交、按路径提交 |
+| `integration.ts` | 仓库检查、身份（user.name/email）、状态预览、初始化、初始基线提交、按路径提交（可选 `--no-verify`，只给用户开启“跳过 Git hooks”的直接提交用） |
+| `working-tree-snapshot.ts` | 未提交路径及其内容哈希的快照；前后两次对比得出一轮 CI 修复改了哪些文件 |
 | `branches.ts` | 本地分支：列出、切换（`git switch`）、新建并切换（`git switch -c`）、安全删除（`git branch -d`，调用方可显式要求强删 `-D`），全部异步 |
 | `workspace-changes.ts` | 任务前后的工作区基线快照与变更检测、Review 状态指纹（Final ChangeSet 全异步：worktree/head/refs/pending/index 均走 async Git，pending 用 fresh 读） |
 | `discard-changes.ts` | 把工作区丢弃回 HEAD（先预览、再执行；同步与异步各一套，恢复决策始终读最新状态） |
@@ -34,7 +35,9 @@
 | 文件 | 内容 |
 | --- | --- |
 | `message.ts` | 根据真实 `git diff` 生成 conventional commits 风格的提交信息，不编造改动 |
-| `ai-message.ts` | 大 diff 的分批概括与跨文件核对：按 token 预算切分、分组摘要再合并，引用必须可回溯到 diff 片段；只产出标题与正文，不写作者归因 |
+| `ai-message.ts` | 大 diff 的分批概括与跨文件核对：按 token 预算切分、分组摘要再合并，引用必须可回溯到 diff 片段；只产出标题与正文，不写作者归因；用户的 Commit 提示词只影响标题与正文的写法 |
+| `model-json.ts` | 模型回答的 JSON 解析：去掉代码块包裹和对象外的文字、修正 JSON 没有的转义（如 `\<`）和字符串里的原始换行；仍不合法时让模型改一次，再不行才报错，报错带出错位置附近的原文 |
+| `review.ts` | 按用户的 Commit/Push 提示词检查待提交改动或待 Push 的提交（无工具的一次性请求，大改动分段，第一段要求停止就停止），并判断 Push 提示词是否要求 CI 通过 |
 
 ### local-repositories/
 

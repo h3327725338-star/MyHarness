@@ -70,6 +70,7 @@ it.each([
 			settingsManager: {
 				isProjectTrusted: () => true,
 				getCommitDescriptionSettings: () => ({}),
+				getGitCommitSettings: () => ({ mode: "instructions", skipHooks: false, instructions: "" }),
 				getNetworkTimeouts: () => ({
 					connectTimeoutMs: 10_000,
 					firstByteTimeoutMs: 60_000,

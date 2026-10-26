@@ -5,6 +5,9 @@ import { estimateTextTokens } from "@myharness/ai";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
 import { runGitAsync } from "../repository/integration.ts";
 import type { GeneratedCommitMessage } from "./message.ts";
+import { type ModelCompletion, parseModelJsonWithRepair } from "./model-json.ts";
+
+export { INVALID_MODEL_JSON } from "./model-json.ts";
 
 export interface CommitMessageContext {
 	paths: string[];
@@ -59,9 +62,18 @@ export interface CommitAnalysisOptions {
 	maxOutputTokens?: number;
 	signal?: AbortSignal;
 	onProgress?: (activity: string) => void;
+	/** The user's own commit instructions (Settings → Git); they shape the final title and body only. */
+	instructions?: string;
 }
 
-interface DiffPart {
+/** The task prompt plus the user's commit instructions, fenced so they cannot pass for the schema rules. */
+function promptWithInstructions(prompt: string, instructions: string | undefined): string {
+	const text = instructions?.trim();
+	if (!text) return prompt;
+	return `${prompt}\n\n${loadSystemPrompt("tasks/commit-message-instructions.md")}\n<user_commit_instructions>\n${text}\n</user_commit_instructions>`;
+}
+
+export interface DiffPart {
 	id: string;
 	path: string;
 	text: string;
@@ -77,7 +89,7 @@ interface Analysis {
 }
 
 /** Conservative estimates, not a tokenizer guarantee. Unknown models use small batches, not a total-diff cap. */
-function requestBudget(options: CommitAnalysisOptions): number {
+export function requestBudget(options: CommitAnalysisOptions): number {
 	const window =
 		options.contextWindow && Number.isFinite(options.contextWindow) && options.contextWindow > 0
 			? options.contextWindow
@@ -96,7 +108,7 @@ function groupKey(path: string): string {
 }
 
 /** Preserve file/hunk boundaries when possible; oversized lines are split without dropping characters. */
-function splitDiff(context: CommitMessageContext, maxTokens: number): DiffPart[] {
+export function splitDiff(context: CommitMessageContext, maxTokens: number): DiffPart[] {
 	const sections = context.diff.split(/(?=^diff --git |^New file )/mu).filter(Boolean);
 	const parts: DiffPart[] = [];
 	for (const section of sections) {
@@ -182,31 +194,14 @@ function splitDiff(context: CommitMessageContext, maxTokens: number): DiffPart[]
 	return parts.sort((a, b) => root(groupKey(a.path)).localeCompare(root(groupKey(b.path))));
 }
 
-/** First line of the error when the model's answer is not JSON; the web UI translates it and shows the rest as details. */
-export const INVALID_MODEL_JSON =
-	"The model returned a commit description that is not valid JSON, so no commit was created. Try again.";
-
-/** Parse one answer of the model. A malformed answer says so in plain words, with the parser's reason and the answer. */
-function parseModelJson(text: string): unknown {
-	try {
-		return JSON.parse(text);
-	} catch (error) {
-		const reason = error instanceof Error ? error.message : String(error);
-		const excerpt = text.length > 2000 ? `${text.slice(0, 2000)}…` : text;
-		throw new Error(`${INVALID_MODEL_JSON}
-${reason}
-Model output:
-${excerpt}`);
-	}
-}
-
 async function describeInBatches(
 	context: CommitMessageContext,
 	prompt: string,
-	complete: (systemPrompt: string, input: string) => Promise<string>,
+	complete: ModelCompletion,
 	options: CommitAnalysisOptions,
-): Promise<string> {
+): Promise<unknown> {
 	const budget = requestBudget(options);
+	const parse = (text: string) => parseModelJsonWithRepair(text, complete, options.signal);
 	const fits = (input: unknown) => estimateTextTokens(prompt) + estimateTextTokens(JSON.stringify(input)) <= budget;
 	const ask = async (input: unknown): Promise<string> => {
 		options.signal?.throwIfAborted();
@@ -217,7 +212,7 @@ async function describeInBatches(
 	};
 	if (fits(context)) {
 		options.onProgress?.("正在生成详细提交说明");
-		return ask(context);
+		return parse(await ask(context));
 	}
 	const modules = new Map<string, number>();
 	for (const path of context.paths) {
@@ -258,7 +253,7 @@ async function describeInBatches(
 		return groups;
 	};
 	const analyze = async (input: unknown, expected: string[], allowed: Set<string>): Promise<Analysis> => {
-		const result = parseModelJson(await ask(input)) as Omit<Analysis, "id">;
+		const result = (await parse(await ask(input))) as Omit<Analysis, "id">;
 		if (
 			!result ||
 			!Array.isArray(result.covered) ||
@@ -330,9 +325,10 @@ async function describeInBatches(
 	for (let round = 0; round < 3; round++) {
 		summaries = await compact(summaries);
 		options.onProgress?.("正在核对关联并汇总提交说明");
-		const text = await ask({ stage: "synthesize", overview, history, summaries });
-		const response = parseModelJson(text) as { read?: unknown };
-		if (!response.read) return text;
+		const response = (await parse(await ask({ stage: "synthesize", overview, history, summaries }))) as {
+			read?: unknown;
+		};
+		if (!response || typeof response !== "object" || !response.read) return response;
 		if (
 			!Array.isArray(response.read) ||
 			!response.read.length ||
@@ -360,6 +356,20 @@ async function describeInBatches(
 }
 
 /**
+ * A body entry the model broke over several lines becomes one line per line it holds instead of being rejected. A
+ * title over several lines is still rejected (an extra line could pass for a second title). Non-string values are
+ * left for validation to reject.
+ */
+function splitLines(value: { title?: unknown; body?: unknown }): { title?: unknown; body?: unknown } {
+	let { title, body } = value;
+	if (typeof title === "string") title = title.trim();
+	if (Array.isArray(body)) {
+		body = body.flatMap((line) => (typeof line === "string" ? line.split(/\r?\n/u) : [line]));
+	}
+	return { title, body };
+}
+
+/**
  * Turn a `CommitMessageContext` into a validated `{ title, body, full }` commit message.
  *
  * The model only summarizes evidence from `context` (batched under its context window); every
@@ -372,15 +382,15 @@ async function describeInBatches(
  */
 export async function generateAICommitMessage(
 	context: CommitMessageContext,
-	complete: (systemPrompt: string, input: string) => Promise<string>,
+	complete: ModelCompletion,
 	options: CommitAnalysisOptions = {},
 ): Promise<GeneratedCommitMessage> {
-	const prompt = loadSystemPrompt("tasks/commit-message.md");
-	if (!prompt.trim()) throw new Error("Commit description prompt is unavailable.");
-	const text = await describeInBatches(context, prompt, complete, options);
-	const value: unknown = parseModelJson(text);
+	const base = loadSystemPrompt("tasks/commit-message.md");
+	if (!base.trim()) throw new Error("Commit description prompt is unavailable.");
+	const prompt = promptWithInstructions(base, options.instructions);
+	const value = await describeInBatches(context, prompt, complete, options);
 	if (!value || typeof value !== "object") throw new Error("Invalid generated commit description.");
-	const { title, body } = value as { title?: unknown; body?: unknown };
+	const { title, body } = splitLines(value as { title?: unknown; body?: unknown });
 	if (
 		typeof title !== "string" ||
 		!title.trim() ||

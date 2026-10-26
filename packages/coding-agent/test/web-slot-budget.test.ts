@@ -107,6 +107,7 @@ function stubHost(slotId: string, spec: StubSpec, disposed: string[]): WebHost {
 		completionActive: false,
 		dialogs: { requests: [] },
 		gitTask: null,
+		backgroundGit: new Set(),
 		unread: false,
 		status: { slot: slotId },
 		transcriptCacheBytes: 0,

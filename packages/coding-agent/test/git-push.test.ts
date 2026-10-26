@@ -36,6 +36,8 @@ interface FakeGitOptions {
 	status?: string;
 	pushFailure?: boolean;
 	verifyRemoteSha?: string;
+	/** The upstream branch name on the remote (the local branch is always "feature"). */
+	upstreamBranch?: string;
 }
 
 function createFakeGit(options: FakeGitOptions = {}) {
@@ -43,6 +45,7 @@ function createFakeGit(options: FakeGitOptions = {}) {
 	let remoteSha = options.remoteSha ?? "remote-sha";
 	let ahead = options.ahead ?? 1;
 	let behind = options.behind ?? 0;
+	const upstreamRef = `refs/remotes/origin/${options.upstreamBranch ?? "feature"}`;
 	const pushes: string[][] = [];
 	const calls: string[][] = [];
 	const runner = async (
@@ -57,17 +60,18 @@ function createFakeGit(options: FakeGitOptions = {}) {
 		if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return ok(`${localSha}\n`);
 		if (args[0] === "remote" && args.length === 1) return ok("origin\nbackup\n");
 		if (args[0] === "rev-parse" && args[1] === "--symbolic-full-name" && args[3] === "@{upstream}")
-			return ok("refs/remotes/origin/feature\n");
+			return ok(`${upstreamRef}\n`);
 		if (args[0] === "remote" && args[1] === "get-url") return ok("https://github.com/acme/project.git\n");
 		if (args[0] === "fetch") return ok();
-		if (args[0] === "rev-parse" && args[2] === "refs/remotes/origin/feature") return ok(`${remoteSha}\n`);
+		if (args[0] === "rev-parse" && args[2] === upstreamRef) return ok(`${remoteSha}\n`);
 		if (args[0] === "rev-list") return ok(`${ahead}\t${behind}\n`);
 		if (args[0] === "status") return ok(options.status ?? "");
 		if (args[0] === "log") return ok(ahead > 0 ? `${localSha}\n` : "");
 		if (args[0] === "push") {
 			pushes.push([...args]);
 			if (options.pushFailure) return failure("remote rejected");
-			remoteSha = options.verifyRemoteSha ?? localSha;
+			const source = String(args[3]).split(":")[0];
+			remoteSha = options.verifyRemoteSha ?? (source === "HEAD" ? localSha : source);
 			ahead = remoteSha === localSha ? 0 : 1;
 			behind = 0;
 			return ok("pushed\n");
@@ -204,7 +208,7 @@ describe("GitPushUseCase", () => {
 		}).execute(root);
 
 		expect(result.status).toBe("success");
-		expect(fakeGit.pushes).toEqual([["push", "--no-follow-tags", "origin", "HEAD:refs/heads/feature"]]);
+		expect(fakeGit.pushes).toEqual([["push", "--no-follow-tags", "origin", "local-sha:refs/heads/feature"]]);
 		expect(fakeGit.pushes[0]).not.toContain("--force");
 		expect(fakeGit.pushes[0]).not.toContain("--force-with-lease");
 		expect(fakeGit.pushes[0]).not.toContain("--all");
@@ -342,5 +346,73 @@ describe("GitPushUseCase", () => {
 		expect(second.status).toBe("success");
 		expect(fakeGit.pushes).toHaveLength(2);
 		expect(fakeGit.pushes.every((args) => !args.includes("--force") && !args.includes("--all"))).toBe(true);
+	});
+
+	it("pushes the commit it checked even when HEAD moves before the push", async () => {
+		const fakeGit = createFakeGit();
+		const result = await new GitPushUseCase(
+			{
+				updatePhase: () => {},
+				// Another chat commits while the push instructions are being checked.
+				reviewBeforePush: async () => {
+					fakeGit.setLocalSha("newer-sha");
+					return {};
+				},
+			},
+			{ gitRunner: fakeGit.runner, workflowDiscovery },
+		).execute(root, new AbortController().signal, { waitForCi: false });
+		expect(fakeGit.pushes).toEqual([["push", "--no-follow-tags", "origin", "local-sha:refs/heads/feature"]]);
+		expect(result.status).toBe("pushed");
+		if (result.status === "pushed") expect(result.ciTarget.commitSha).toBe("local-sha");
+	});
+
+	it("blocks without pushing when the push instructions stop it", async () => {
+		const fakeGit = createFakeGit();
+		const result = await new GitPushUseCase(
+			{ updatePhase: () => {}, reviewBeforePush: async () => ({ stop: "src/a.ts holds an API key" }) },
+			{ gitRunner: fakeGit.runner },
+		).execute(root);
+		expect(result.status).toBe("blocked");
+		if (result.status === "blocked") expect(result.reason).toContain("src/a.ts holds an API key");
+		expect(fakeGit.pushes).toHaveLength(0);
+	});
+
+	it("pushes nothing when the push instructions cannot be checked", async () => {
+		const fakeGit = createFakeGit();
+		const result = await new GitPushUseCase(
+			{
+				updatePhase: () => {},
+				reviewBeforePush: async () => {
+					throw new Error("Unknown provider: unknown");
+				},
+			},
+			{ gitRunner: fakeGit.runner },
+		).execute(root);
+		expect(result).toMatchObject({ status: "failed", remoteMayHaveChanged: false });
+		if (result.status === "failed") expect(result.reason).toContain("未执行 Push：Unknown provider: unknown");
+		expect(fakeGit.pushes).toHaveLength(0);
+	});
+
+	it("answers once pushed and finds the CI later under the remote branch name", async () => {
+		const fakeGit = createFakeGit({ upstreamBranch: "main" });
+		let discoveredFor = "";
+		const useCase = new GitPushUseCase(createHost(), {
+			gitRunner: fakeGit.runner,
+			workflowDiscovery: (_root, branch) => {
+				discoveredFor = branch;
+				return workflowDiscovery();
+			},
+			ciProvider: providerFor([{ ...successRun("local-sha"), branch: "main" }]),
+			ciPollIntervalMs: 0,
+			sleep: async () => {},
+		});
+		const result = await useCase.execute(root, new AbortController().signal, { waitForCi: false });
+		expect(result.status).toBe("pushed");
+		expect(fakeGit.pushes).toEqual([["push", "--no-follow-tags", "origin", "local-sha:refs/heads/main"]]);
+		if (result.status !== "pushed") return;
+		expect(result.ciTarget).toMatchObject({ remoteBranch: "main", commitSha: "local-sha" });
+		const ci = await useCase.watchCi(result.ciTarget, new AbortController().signal);
+		expect(discoveredFor).toBe("main");
+		expect(ci.status).toBe("success");
 	});
 });

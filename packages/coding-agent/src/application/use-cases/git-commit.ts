@@ -50,6 +50,8 @@ export interface GitCommitUseCaseHost {
 	/** Only invoked for an explicitly reported pre-commit hook failure, at most three rounds. */
 	repairCode?: (failure: GitCommandResult) => Promise<boolean>;
 	signal?: AbortSignal;
+	/** Commit with `--no-verify`: the user chose to skip Git hooks for direct commits. */
+	skipHooks?: boolean;
 }
 
 export function normalizeGitCommitTarget(targetOrCheckpoint: GitCommitTarget | GitCheckpoint): GitCommitTarget {
@@ -187,6 +189,7 @@ export class GitCommitUseCase {
 			message.full,
 			undefined,
 			this.host.signal,
+			{ noVerify: this.host.skipHooks === true },
 		);
 		if (firstResult.ok) return { status: "committed", commitHash: firstResult.commitHash };
 		if (await this.confirmNoChanges(target, firstResult)) return { status: "no-changes" };
