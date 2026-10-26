@@ -1,15 +1,24 @@
 // Moving around the conversation: one scroll controller (registered by the Transcript, which owns the scroll position
 // and its "follow the bottom" rule) shared by the message index rail and the jump from a quote to its source.
 import { motionEnabled } from "./ui.js";
-import { toast } from "./store.js";
+import { dismissToast, fetchMoreTranscript, toast } from "./store.js";
 import { t } from "./i18n.js";
 import { findQuoteOrigin, flashRange } from "./quote-highlight.js";
 
 let controller = null;
 let animation = 0;
 let endCurrent = null;
+/** How long a quote jump keeps looking while older turns are still mounting or arriving from the server. */
+const QUOTE_WAIT_MS = 15_000;
+const QUOTE_RETRY_MS = 150;
+/** The last "not found" notice: a second click replaces it instead of stacking another one. */
+let missNotice = null;
 
-/** The Transcript registers how to scroll it: `el` is its scroller, `release` stops it following the bottom. */
+/**
+ * The Transcript registers how to scroll it: `el` is its scroller, `release` stops it following the bottom,
+ * `revealAll` mounts every loaded turn at once and `pending` says what is still on its way (`{ mounting, older }`, or
+ * null when the whole conversation is on the page).
+ */
 export function registerScroller(next) {
 	controller = next;
 	return () => {
@@ -87,15 +96,67 @@ export function scrollToNode(node, opts) {
 export const NAV_ORIGIN_EVENT = "myharness:nav-origin";
 
 /**
+ * Find where a quote came from. When the passage is not on the page yet but older turns are still mounting or still on
+ * the server, those are shown and fetched and the passage is looked for again, for a bounded time. `more` is true when
+ * the search stopped while older history was still out of reach.
+ */
+async function locateQuote(blockquote, text) {
+	let range = findQuoteOrigin(blockquote, text);
+	if (range || !controller?.pending?.()) return { range, more: false };
+	let notice = null;
+	let olderDone = false;
+	let failures = 0;
+	let idle = 0;
+	const until = Date.now() + QUOTE_WAIT_MS;
+	try {
+		while (Date.now() < until && blockquote.isConnected) {
+			const pending = controller?.pending?.();
+			const older = Boolean(pending?.older) && !olderDone;
+			if (pending?.mounting || older) {
+				idle = 0;
+				notice ??= toast(t("Looking for the quoted passage…"), "info", 0);
+				if (pending.mounting) controller.revealAll?.();
+				if (older) {
+					const result = await fetchMoreTranscript();
+					if (result === "done") olderDone = true;
+					else if ((result === "error" || result === "refreshed") && ++failures >= 2) olderDone = true;
+				}
+			} else if (++idle > 2) {
+				// Nothing more is on its way, and the last page has had a few beats to render.
+				break;
+			}
+			await new Promise((resolve) => setTimeout(resolve, QUOTE_RETRY_MS));
+			range = findQuoteOrigin(blockquote, text);
+			if (range) return { range, more: false };
+		}
+		return { range: null, more: Boolean(controller?.pending?.()?.older) && !olderDone };
+	} finally {
+		if (notice) dismissToast(notice);
+	}
+}
+
+/**
  * A quote in a sent message was clicked: scroll to the passage it was taken from and flash it. The place the reader came
- * from is announced so a "back" control can return there. Returns false when the passage is not on screen.
+ * from is announced so a "back" control can return there. Returns false when the passage cannot be found.
  */
 export async function jumpToQuote(blockquote) {
+	if (!controller?.el || !blockquote) return false;
+	const { range, more } = await locateQuote(blockquote, blockquote.innerText || blockquote.textContent || "");
+	if (missNotice) dismissToast(missNotice);
+	missNotice = null;
+	// The reader switched chats while the passage was being looked for: there is nothing to report here any more.
 	const el = controller?.el;
-	if (!el || !blockquote) return false;
-	const range = findQuoteOrigin(blockquote, blockquote.innerText || blockquote.textContent || "");
+	if (!el || !blockquote.isConnected) return false;
 	if (!range) {
-		toast(t("The quoted passage is not in the part of the conversation that is loaded."), "info", 3500);
+		missNotice = toast(
+			t(
+				more
+					? "The quoted passage is not in the part of the conversation that is loaded."
+					: "The quoted passage was not found in this conversation.",
+			),
+			"info",
+			3500,
+		);
 		return false;
 	}
 	const from = el.scrollTop;

@@ -92,16 +92,15 @@ export function reviewTarget(sync) {
 export function footLine(manual, status, sync) {
 	const moving = status?.progress && status.progress.total > 0 ? status.progress : null;
 	if (manual?.state === "running") {
-		if (manual.stage === "waiting" && moving) {
-			// The pass the run waits for counts its own work: show that instead of a bare "waiting".
-			const text = moving.stage === "upload" ? t("Uploading…") : t("Downloading…");
-			return { text: `${text} ${progressText(status, moving.stage)}`, spinning: true };
+		if (moving && (manual.stage === "waiting" || manual.stage === moving.stage)) {
+			// The pass the run waits for (or the run itself) counts its own work, step by step: show that.
+			return { text: `${movingText(moving)} ${progressText(status, moving.stage)}`, spinning: true };
 		}
 		if (manual.stage === "waiting") {
 			const phase = status?.phase;
 			if (phase === "downloading") {
 				return {
-					text: t("Waiting for the current sync pass to finish (downloading, {count} batches left).", {
+					text: t("Waiting for the current sync pass to finish (downloading, {count} left).", {
 						count: Number(status?.pendingDownloads) || 0,
 					}),
 				};
@@ -146,8 +145,7 @@ export function footLine(manual, status, sync) {
 	}
 	if (moving) {
 		// An automatic pass moving a backlog: the same live count a manual run shows.
-		const text = moving.stage === "upload" ? t("Uploading…") : t("Downloading…");
-		return { text: `${text} ${progressText(status, moving.stage)}`, spinning: true };
+		return { text: `${movingText(moving)} ${progressText(status, moving.stage)}`, spinning: true };
 	}
 	const waiting = sync.up + sync.down + sync.filePending + (manual?.remainingDownloads ?? 0);
 	if (waiting > 0 || status?.phase === "uploading" || status?.phase === "downloading") {
@@ -157,6 +155,15 @@ export function footLine(manual, status, sync) {
 	}
 	if (!manual) return null;
 	return { text: manual.kind === "download" ? t("Download finished.") : t("Sync finished.") };
+}
+
+/**
+ * What the pass in flight is doing. A download first reads the change lists of new batches, then fetches and writes
+ * what they name; the two steps count different things, so each says which one it is.
+ */
+export function movingText(moving) {
+	if (moving?.stage === "upload") return t("Uploading…");
+	return moving?.step === "read" ? t("Reading changes from Drive…") : t("Downloading…");
 }
 
 /** "12 / 240" for the pass in flight in one stage, or "" when that stage is not moving. */

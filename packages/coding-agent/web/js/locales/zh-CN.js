@@ -1127,6 +1127,8 @@ export const zhCN = {
 	"Back to where you were": "回到原来的位置",
 	"Jump to the quoted passage": "跳转到引用的原文",
 	"The quoted passage is not in the part of the conversation that is loaded.": "引用的原文不在当前已加载的对话范围内。",
+	"The quoted passage was not found in this conversation.": "在这段对话里没有找到引用的原文。",
+	"Looking for the quoted passage…": "正在查找引用的原文…",
 
 	// ---- Action verbs (turns.js)
 	Reading: "正在读取",
@@ -2396,12 +2398,14 @@ export const zhCN = {
 	"Sync is paused. Turn Pause off first.": "同步已暂停，请先关闭“暂停”。",
 	"A manual sync is already running.": "已有一次手动同步正在进行。",
 	"Waiting for the current sync pass to finish…": "等待当前这一轮同步结束…",
-	"Waiting for the current sync pass to finish (downloading, {count} batches left).":
-		"等待当前这一轮同步结束（正在下载，还剩 {count} 个批次）。",
+	"Waiting for the current sync pass to finish (downloading, {count} left).":
+		"等待当前这一轮同步结束（正在下载，还剩 {count} 项）。",
 	"Waiting for the current sync pass to finish (uploading, {count} changes left).":
 		"等待当前这一轮同步结束（正在上传，还剩 {count} 项改动）。",
 	"Uploading…": "正在上传…",
 	"Downloading…": "正在下载…",
+	"Reading changes from Drive…": "正在读取云端变更…",
+	"Reading changes": "读取变更",
 	"Download finished.": "下载完成。",
 	"Sync finished.": "同步完成。",
 		"Needs your decision": "需要你来处理",

@@ -21,7 +21,8 @@ const missDelay = (streak) => Math.min(MISS_RETRY_MS * 2 ** Math.max(streak - 1,
 export const nativeHighlights = () =>
 	typeof globalThis.Highlight === "function" && typeof globalThis.CSS !== "undefined" && globalThis.CSS.highlights !== undefined;
 
-const normalise = (text) => String(text || "").trim().replace(/\s+/g, " ");
+/** Quotes and page text are compared without any whitespace (see buildIndex). */
+const normalise = (text) => String(text || "").replace(/\s+/g, "");
 
 /** id -> { needle, hint, nextAt, ranges, spans }, what is painted right now. */
 const painted = new Map();
@@ -45,8 +46,10 @@ function surface() {
 	return el && el.isConnected ? el : null;
 }
 
-/** All text of the reading surface, plus a whitespace-collapsed copy with a map back: a selection copied out of rendered
- *  text can differ from the stored quote by newlines and indentation, and both spellings must find the same fragment. */
+/** All text of the reading surface, plus a copy without any whitespace and a map back. A selection copied out of rendered
+ *  text differs from the page's text nodes in whitespace only: newlines and indentation, and a tab the browser puts
+ *  between two table cells whose text nodes touch with nothing between them. Dropping whitespace on both sides makes
+ *  every spelling find the same fragment. */
 function buildIndex(el, accept) {
 	const nodes = [];
 	let text = "";
@@ -61,13 +64,9 @@ function buildIndex(el, accept) {
 	let norm = "";
 	const map = [];
 	for (let i = 0; i < text.length; i++) {
-		if (!/\s/.test(text[i])) {
-			norm += text[i];
-			map.push(i);
-		} else if (norm && norm[norm.length - 1] !== " ") {
-			norm += " ";
-			map.push(i);
-		}
+		if (/\s/.test(text[i])) continue;
+		norm += text[i];
+		map.push(i);
 	}
 	return { nodes, norm, map };
 }
@@ -107,7 +106,7 @@ function locate(index, needle, hint) {
 	let best = -1;
 	let bestDistance = Infinity;
 	for (let at = index.norm.indexOf(needle); at !== -1; at = index.norm.indexOf(needle, at + 1)) {
-		// Both sides in collapsed-text units: raw offsets carry every newline and indent, which pulls the hint towards
+		// Both sides in whitespace-free units: raw offsets carry every newline and indent, which pulls the hint towards
 		// an earlier copy of the same words.
 		const distance = Math.abs(at - hint);
 		if (distance < bestDistance) {
@@ -366,7 +365,7 @@ export function findQuoteOrigin(blockquote, text) {
 		if (node.parentElement.closest(".user-bubble blockquote")) return false;
 		return !!(blockquote.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_PRECEDING);
 	});
-	for (const probe of needle.length > 80 ? [needle, needle.slice(0, 80).trim()] : [needle]) {
+	for (const probe of needle.length > 80 ? [needle, needle.slice(0, 80)] : [needle]) {
 		let best = -1;
 		for (let at = index.norm.indexOf(probe); at !== -1; at = index.norm.indexOf(probe, at + 1)) best = at;
 		if (best >= 0) return rangeFor(index.nodes, index.map[best], index.map[best + probe.length - 1] + 1);

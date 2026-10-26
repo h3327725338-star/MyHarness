@@ -51,10 +51,12 @@ function jumpTo(id) {
 function SyncCount({ status, stage, text }) {
 	const progress = progressText(status, stage);
 	if (!progress) return html`<span class="mono">${text}</span>`;
-	const { done, total } = status.progress;
+	const { done, total, step } = status.progress;
 	const percent = Math.round((Math.min(done, total) / total) * 100);
-	return html`<span class="sync-count" role="status" title=${progress}>
-		<span class="mono">${progress}</span>
+	// Change lists are read before anything is downloaded; without the word the count looks like files arriving.
+	const label = step === "read" ? t("Reading changes") : "";
+	return html`<span class="sync-count" role="status" title=${label ? `${label} ${progress}` : progress}>
+		<span>${label ? html`<span class="dim">${label} </span>` : null}<span class="mono">${progress}</span></span>
 		<span class="sync-meter" role="progressbar" aria-valuemin="0" aria-valuemax=${total} aria-valuenow=${Math.min(done, total)}><i style=${{ width: `${percent}%` }} /></span>
 	</span>`;
 }

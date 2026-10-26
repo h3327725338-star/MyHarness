@@ -21,6 +21,14 @@ const TEMP_FILE_PATTERN = /\.(?:tmp|part|crdownload)$/u;
  */
 const LOCAL_ONLY_FILE_PATTERN = /(?:\.bridge|\.lock|\.lock\.owner)$|\.lock\//u;
 
+/**
+ * Whether a Data-root relative path is a temporary or local-only file. Such a file is never uploaded, and one an older
+ * version did upload is never written or deleted on another computer: it describes a process of the computer it came from.
+ */
+export function isLocalOnlyPath(relativePath: string): boolean {
+	return TEMP_FILE_PATTERN.test(relativePath) || LOCAL_ONLY_FILE_PATTERN.test(relativePath);
+}
+
 export interface HeaderCacheEntry {
 	mtimeMs: number;
 	general: boolean;
@@ -60,8 +68,7 @@ function addFile(
 	const stat = statSync(absolute);
 	if (stat.size > MAX_SCANNED_FILE_BYTES) return;
 	const relativePath = toPosix(relative(dataRoot, absolute));
-	if (TEMP_FILE_PATTERN.test(relativePath)) return;
-	if (LOCAL_ONLY_FILE_PATTERN.test(relativePath)) return;
+	if (isLocalOnlyPath(relativePath)) return;
 	const id = relativePath;
 	const key = `${kind}:${id}`;
 	const entity: ScannedEntity = {

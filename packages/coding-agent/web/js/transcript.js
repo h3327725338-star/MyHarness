@@ -1236,7 +1236,14 @@ export function Transcript() {
 		};
 	}, []);
 	// The message index and the quote jumps scroll through this controller, so "follow the bottom" lets go when they move.
-	useLayoutEffect(() => registerScroller({ el: scroller.current, release: () => { stick.current = false; holdPlace.current = false; } }), []);
+	// A quote jump also asks it to mount every turn and says whether older history is still on its way (set below).
+	const nav = useRef({ revealAll: () => {}, pending: () => null });
+	useLayoutEffect(() => registerScroller({
+		el: scroller.current,
+		release: () => { stick.current = false; holdPlace.current = false; },
+		revealAll: () => nav.current.revealAll(),
+		pending: () => nav.current.pending(),
+	}), []);
 	useLayoutEffect(() => {
 		stick.current = true;
 		// The cached height belongs to the previous session; the first follow after a switch reads once.
@@ -1296,6 +1303,12 @@ export function Transcript() {
 	// A jump from the message index to a message that is still mounting asks for the whole mount at once: the reader
 	// named a message, so waiting out the chunked mount would only look like a dead click.
 	const revealAll = () => setBatches(Number.MAX_SAFE_INTEGER);
+	nav.current.revealAll = revealAll;
+	nav.current.pending = () => {
+		// The cold-load tail preview stands in for a full build that is still on its way: that counts as mounting too.
+		const mounting = previewing.current || rendered.length < shown.length;
+		return mounting || transcriptHasMore ? { mounting, older: transcriptHasMore } : null;
+	};
 	useLayoutEffect(() => {
 		// A switch renders batch 1 from derived state; sync the counter before paint so later frames keep counting up.
 		if (switched && batches !== 1) setBatches(1);

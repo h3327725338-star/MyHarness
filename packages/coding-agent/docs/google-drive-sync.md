@@ -4,8 +4,12 @@ MyHarness can keep memories and General-mode chat data in sync through a folder 
 talks to the Drive API directly; the Google Drive desktop client is not required for application data, and a workspace
 that already lives inside Drive stays managed by the Drive client.
 
-This document describes the implemented behavior. Real two-machine Google verification is still pending: the tests use
-an in-memory Drive, and no live Google account is used by the automated checks.
+This document describes the implemented behavior. The automated tests use an in-memory Drive and no live Google
+account. On 2026-10-26 the catch-up path was also run read-only against a real Drive folder (about 6,100 batches from
+two computers, every write refused) as a fresh computer: from a snapshot built from the other computer's state it caught
+up in about 100 seconds including 500 MB of downloads, and from the batches alone in about 7.5 minutes, about 5 of them
+reading the 5,660 change lists. Two computers running this build against each other, including publishing snapshots to
+Drive, have not been verified yet.
 
 ## What is synced
 
@@ -59,7 +63,7 @@ My Drive/
       ├─ identity.json
       ├─ batches/<batchId>.json
       ├─ objects/<sha256>
-      ├─ snapshots/
+      ├─ snapshots/<deviceId>.json.gz
       └─ files/<workspace>__<batchId>.json
 ```
 
@@ -71,7 +75,22 @@ My Drive/
 - `objects/` is content-addressed, so identical attachments are stored once.
 - A large first upload is published as several batches of at most 500 operations, never as one batch a receiver would
   refuse.
-- A batch from the same device is marked as seen without being applied: the local state already contains it.
+- A batch from the same device is recognised by its file name and marked as seen without being read or applied: the
+  local state already contains it.
+- Writer locks, their owner markers (`*.jsonl.lock.owner`), bridges and temporary files never leave a computer. Older
+  versions did publish the owner marker of every open chat (rewritten every 30 seconds), so a long-running Drive folder
+  can hold thousands of batches of nothing else; a receiving device skips those records entirely and never writes or
+  deletes them, and a sending device no longer publishes deletions for the ones still in its state.
+- `snapshots/<deviceId>.json.gz` holds every record one device has committed (gzip JSON: records, deletion markers and
+  the content of records up to 64 KB, at most 32 MB of it), plus `upTo`, the newest batch time of that device it
+  stands for. A device writes its snapshot on its first successful pass and rewrites it once it has batches newer than
+  the snapshot, at most every 10 minutes. A computer that finds 20 or more unhandled batches of one device reads that device's snapshot instead of their change
+  lists, applies it like any other changes, and then treats every batch of that device up to `upTo` as handled. Only
+  the device's own batches are covered: batches of other devices are still read, and their changes the snapshot already
+  includes are recognised as covered without a download. A snapshot is an accelerator only; the batches stay in Drive
+  and remain the source of truth, so a missing or unreadable snapshot just means the batches are read. A snapshot that
+  names content Drive still does not have after the usual number of passes is set aside until the next start and that
+  device's batches are read instead, where a missing object is reported, and retried by a manual run, batch by batch.
 - A damaged batch, a batch over 5000 operations, or a batch whose object never arrives is reported once in Settings and
   then skipped, so one bad file cannot keep the sync loop busy forever. A damaged or oversized batch is also remembered
   by name, so a full issue list cannot make it readable again.
@@ -81,8 +100,11 @@ My Drive/
 Memory scans reuse ancestor safety checks within each traversal and retain only file identity metadata between polls.
 Unchanged Markdown is not read or YAML-parsed again; replacement, modification and deletion are checked on the next scan.
 A successful poll that changes only `lastCheckAt` writes a small `state-<hash>.json.check.json` sidecar rather than
-rewriting the complete protocol state. Protocol changes still commit synchronously and atomically before proceeding;
-restart loads the latest check time from either file. Local-only memory catalogs, maintenance files, temporary files
+rewriting the complete protocol state. Uploads and the publish journal still commit synchronously and atomically before
+proceeding. While a download writes remote changes, the state is saved at most once a second (and at the end of the
+round) instead of after every change; a restart in between finds files that already hold the incoming version and adopts
+them without a download or a conflict, so nothing is lost or applied twice. Restart loads the latest check time from
+either file. Local-only memory catalogs, maintenance files, temporary files
 and root-level traces do not trigger an extra watcher-driven scan; periodic reconciliation remains enabled.
 
 ## Merge rules
@@ -279,14 +301,32 @@ end-to-end encrypted: Google stores the data under the account's normal Drive pr
 - Every Drive request has a deadline: 30 s for metadata, 3 min for reading an object, 5 min for a write. A request that
   never answers fails that pass instead of leaving it `running` forever, so the manual buttons come back and the next
   retry is scheduled by itself. A timeout is not retried inside the same request.
-- A pass applies batches one at a time, in `(createdAt, batchId)` order, because version vectors and file writes depend
-  on that order; the *waiting* is what overlaps. Batch manifests are read in parallel chunks of 6, and the small objects
-  (up to 8 MB) of the next batches are fetched while the current batch is written, with at most 4 object downloads in
-  flight and one download per object even when a prefetch already has it. The limits stay low on purpose: a 429 would
-  cost more than the parallel reads save.
+- A download round first learns everything it has to change: the change lists of the new batches (16 read at a time; one
+  that cannot be read now waits for the next pass instead of failing the whole pass, and change lists of batches that
+  still wait are kept in memory so a retry does not read them again), or a device's snapshot (see above). Then it groups
+  the changes by record and starts with the newest version of each record (a version that covers another always has
+  the larger counter sum), so once that one is written, every older version of the same record is recognised as covered
+  and is never downloaded. If the newest version has to wait, the older ones are tried and the best available version
+  is written. Version vectors decide every write, so the order between records does not matter; records are taken small
+  and sidebar items first (workspaces, prompts, memories, drafts), then chats and files from small to large and newest
+  first. Contents download 16 at a time within a 192 MB memory budget (a larger object runs alone); the changes
+  themselves are still written one after the other. A batch is recorded as handled once every change in it is settled.
+  The page is told what arrived (and the memory catalog refreshed) at most every 2 seconds instead of after every batch.
+- Drive answers a call after about a second whatever the number in flight, so a catch-up spends its time waiting; doing
+  that waiting 16 at a time is what makes it fast. Drive allows 325,000 quota units per user per minute and a download
+  costs at most 200, so 16 calls of about a second each (under 1,000 a minute) stay inside it. Drive's rate
+  limit (429, or 403 `userRateLimitExceeded`/`rateLimitExceeded`) is retried up to five times with exponential backoff
+  and jitter (about 1, 2, 4, 8, 16 s, or the `Retry-After` Drive sends); a 403 that refuses permission is not retried.
+  Eight downloads in a row that fail as requests end the round (the connection is gone); those changes wait for the next
+  pass without counting toward the missing-object limit.
 - A file id learned from a listing or from a lookup is reused, so reading a batch or an object is one download rather
-  than a Drive query followed by a download. The sub-folders of `sync-v1` are also resolved once instead of on every
-  pass.
+  than a Drive query followed by a download. Before a round downloads, the client is told every object it is about to
+  fetch, in order, and finds their ids 25 names a query and four queries at a time; a download whose id is still being
+  looked up waits for that answer instead of asking again. The sub-folders of `sync-v1` are also resolved once instead
+  of on every pass.
+- The batches folder is listed in full on start, on a manual run and every 30 minutes; in between, a pass lists only the
+  files Drive created since the newest one already seen (with 10 minutes of overlap for files that appear in listings a
+  little late), instead of reading every page of a folder with thousands of batches on every pass.
 - Errors retry after ~30 s; offline changes stay queued because the pending queue is the difference from the last
   committed state. While Drive cannot be reached the queue is still counted from the local files, so "Waiting to
   upload" shows the real number offline, and the next retry after the network returns continues on its own.
@@ -320,6 +360,8 @@ end-to-end encrypted: Google stores the data under the account's normal Drive pr
 | File larger than 200 MB | Not uploaded; listed under “needs a manual look” until it fits |
 | File larger than 256 MB in the scanned tree | Not scanned at all; it stays local only |
 | Damaged remote batch or missing object | Reported once in Settings, then skipped; other batches still apply |
+| A change list cannot be read right now | That batch waits for the next pass; the other batches of the pass still apply |
+| A remote change for a chat that is running here | It waits, without being downloaded, until the chat is idle; it never counts toward the missing-object limit |
 | Remote record with an unusable identity | Refused before any path is built; reported once |
 | Remote chat timestamp that is not a plain timestamp | Sanitised into the generated file name; it cannot choose a folder |
 
@@ -331,9 +373,11 @@ Settings → Google Drive has three buttons in one row:
 
 Every pass, automatic or manual, keeps listing the batches folder until nothing new is left (at most 20 rounds), uploads
 up to four file contents at a time, and reports what it moves in the status's `progress = { stage: download|upload,
-done, total }` (null between passes). Settings shows it as "x / y" with a bar next to "Waiting to download" / "Waiting
-to upload" and in the line under the buttons, updated at most four times a second. A pass that downloaded or uploaded
-something is followed by the next one after 1.5 s instead of the normal poll, so a backlog keeps flowing; automatic
+done, total, step? }` (null between passes). A download has two steps: `read` counts the change lists read from Drive,
+`apply` counts the records fetched and written. Settings shows it as "x / y" with a bar next to "Waiting to download" /
+"Waiting to upload" (with "Reading changes" in front during the first step) and in the line under the buttons ("Reading
+changes from Drive… x / y", then "Downloading… x / y"), updated at most four times a second. A pass that downloaded or
+uploaded something is followed by the next one after 1.5 s instead of the normal poll, so a backlog keeps flowing; automatic
 passes also retry batches skipped for a missing object or a failed apply every 10 minutes.
 - **Download now** — download only. It waits for a pass that is already running, then keeps listing the batches folder
   until nothing new is left (bounded to 20 rounds), so batches that arrive during a long download are fetched too. It
@@ -344,7 +388,7 @@ Download now and Sync now answer at once (409 when sync is paused, Drive is not 
 going) and report progress through the status: `manual = { kind, state: running|done|failed, stage, done, total,
 remainingDownloads?, error? }`. The row shows "Downloading… x / y", "Uploading… x / y", the finish or the failure
 reason; both buttons are disabled while one runs. While the run waits for a pass that is already in flight, the row says
-what that pass is doing and how much is left ("downloading, N batches left" / "uploading, N changes left") instead of
+what that pass is doing and how much is left ("downloading, N left" / "uploading, N changes left") instead of
 only "waiting", and the per-request deadlines above guarantee that wait ends. Pause means nothing is uploaded or
 applied, so while paused both buttons are disabled and the routes refuse; Check now keeps its old behaviour (a pass
 that does nothing while paused).
@@ -374,14 +418,18 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 
 ## Limits and not-yet-verified behavior
 
-- Real Google OAuth, two physical machines, folder rename, revoked authorization, quota exhaustion and Drive outage
-  behavior have not been run against a live account; only the in-memory Drive tests are executed.
+- Real Google OAuth sign-in, two physical machines running this build, publishing snapshots, folder rename, revoked
+  authorization, quota exhaustion and Drive outage behavior have not been run against a live account; besides the
+  in-memory Drive tests, only the read-only catch-up dry run described at the top was run against a real Drive.
 - Background sync stops when MyHarness quits and continues on the next start. Tray support and launch-at-login are not
   implemented, so after a reboot nothing uploads until MyHarness is opened.
 - Batches over 5000 operations written by another client are refused; this daemon never writes such a batch itself.
 - Conflicts for chats and drafts are kept for review but there is no “apply the other version” button yet; the copy
   path is shown. Memories no longer create review entries: they merge automatically.
-- The `snapshots/` folder is part of the layout but snapshots are not used yet for faster bootstrap.
+- A snapshot stands for its device's own batches by batch time. A device whose clock jumped backwards could publish a
+  batch with an earlier time than its last snapshot; the same exposure already exists for the per-device watermark.
+- Old batches and objects are never removed from Drive (no garbage collection yet), so the folder keeps growing; the
+  snapshot and the incremental listing keep that from slowing a pass down, but it still uses Google storage.
 - Workspace files that live outside the MyHarness Data root are synced by the file channel only when the user turns it
   on; a Drive-managed folder is never uploaded by MyHarness, because `drive.file` only grants access to files this app
   created and double management is refused on purpose.
@@ -409,7 +457,10 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 - Handled batches are remembered per device as a watermark (`appliedUpTo`: the newest batch time up to which every
   listed batch of that device is handled) plus a short list of handled names above the first batch still waiting. The
   watermark only passes a time when every batch of that device up to it is handled, so a deferred batch is never
-  skipped, and batches a manual run reopens stay open (`reopenedBatches`) until they are handled again. Before this, the
+  skipped, and batches a manual run reopens stay open (`reopenedBatches`) until they are handled again. The list is
+  folded at the end of every download round and bounded at 50,000 names, so a catch-up of thousands of batches that
+  finish in any order never loses handled names to a cap before the fold. A device's applied snapshot moves its
+  watermark straight to the snapshot's `upTo`. Before this, the
   log kept only the last 2000 names, so a Drive folder with more batches than that downloaded its oldest batches again
   on every pass (shown as a backlog of hundreds of "waiting to download" items). A state written by the old version
   whose list is already full treats the batches older than each device's oldest remembered one as handled.
@@ -418,8 +469,22 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 
 ```powershell
 npm.cmd --workspace packages/coding-agent run test -- test/google-drive-sync.test.ts
+npm.cmd --workspace packages/coding-agent run test -- test/google-drive-sync-catchup.test.ts
 npm.cmd --workspace packages/coding-agent run test -- test/workspace-file-sync.test.ts
 ```
+
+`test/google-drive-sync-catchup.test.ts` covers catching up: 3000 batches of lock markers and 30 versions of one file
+apply as one download of the newest version, with this computer's own lock marker untouched and the state written about
+once a second; a new computer catches up from the other device's snapshot without reading any of its batches and
+downloads only the content too large to travel inside it; a snapshot whose large content is missing keeps the backlog
+waiting and finishes once it arrives, and one whose content never arrives is set aside for the device's batches, the
+batch naming the missing file reported on its own and applied by a manual run once the file is there; a chat running here keeps its remote change waiting (without a download) for as
+many passes as it takes; a change list that cannot be read waits while the other batches apply; incremental listing
+between full listings; the two progress steps; a newer version of identical content is learned without a download;
+a local file that already holds the incoming version is adopted instead of becoming a conflict; and the Drive client's
+403 rate-limit retry, a 403 permission error that is not retried, combined object lookups, locating a round's objects
+ahead of their downloads (at most four queries at once, no second query for a download that starts meanwhile) and the
+`createdTime` filter.
 
 `test/workspace-file-sync.test.ts` covers the file channel: first snapshot and reconstruction on a second device with
 its own folder and the same workspace id, add/edit/delete in both directions, an interrupted download that resumes and

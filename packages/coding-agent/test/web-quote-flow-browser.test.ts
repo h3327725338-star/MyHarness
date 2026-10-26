@@ -795,3 +795,126 @@ tell('passed');
 	},
 	180000,
 );
+
+/**
+ * Jumping from a sent quote back to its source. A quote taken across two table cells reads "a<TAB>b" in the message,
+ * while the page has the two cells' text side by side with no whitespace between them; it must still find the row.
+ * In a long chat the source can also sit in turns that are not mounted yet (the cold-load tail preview and the
+ * chunked mount): the jump shows them and lands on the passage instead of reporting it as missing.
+ */
+it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
+	"a quote taken across table cells jumps back to its row, also from a long chat whose start is not mounted yet",
+	async () => {
+		const artifacts = process.env.MYHARNESS_ARTIFACTS_DIR;
+		const base = artifacts ? join(artifacts, "tests") : tmpdir();
+		mkdirSync(base, { recursive: true });
+		const root = mkdtempSync(join(base, "quote-jump-"));
+		const server = new WebHttpServer();
+		const browser = new LocalBrowser({
+			kind: installed.find((b) => b.kind === "chrome")?.kind ?? installed[0]!.kind,
+			rootDir: join(root, "browser"),
+		});
+		try {
+			for (const dir of ["js", "vendor", "css"])
+				server.mount({ prefix: `/${dir}/`, directory: fileURLToPath(new URL(`../web/${dir}`, import.meta.url)) });
+			server.mount({
+				prefix: "/markdown/",
+				directory: fileURLToPath(new URL("../src/exports/html/vendor", import.meta.url)),
+			});
+			server.route("GET", "/api/resources", () => ({
+				commands: [],
+				tools: [],
+				skills: [],
+				prompts: [],
+				extensions: [],
+				contextFiles: [],
+			}));
+			server.route("GET", "/api/git/status", () => ({ gitAvailable: false, isRepository: false }));
+			server.route("GET", "/api/stats", () => ({}));
+			server.mount({ prefix: "/test/", directory: root });
+			writeFileSync(
+				join(root, "jump.js"),
+				`
+import {h,render} from '/vendor/preact.js';
+import {Transcript} from '/js/transcript.js';
+import {set,state} from '/js/store.js';
+const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+const check=(c,m)=>{if(!c) throw Error(m);};
+const tell=(m)=>document.body.insertAdjacentHTML('beforeend','<p id="ready">'+m+'</p>');
+window.addEventListener('error',e=>tell('uncaught: '+(e.message||String(e.error))));
+window.addEventListener('unhandledrejection',e=>tell('rejected: '+(e.reason&&e.reason.message||String(e.reason))));
+const snapFor=(id)=>({session:{id,file:'C:/t/'+id+'.jsonl',persisted:true,name:null},cwd:'C:/t',flags:{},active:false,
+ model:{id:'m',label:'M',input:['text'],contextWindow:8000,maxTokens:1000},thinking:{supported:false},trust:{trusted:true,requiresTrust:false},
+ context:{budget:{activeTokens:120,effectiveWindow:8000,percent:2}},queue:{steering:[],followUp:[]},dialogs:[],surface:{widgets:{},statuses:{}}});
+const base={connected:true,everConnected:true,models:[],slots:[],activeSlot:'s1',gitStatus:null,dialogs:[],queue:{steering:[],followUp:[]},runs:{},toolRuns:{},userBash:{},userBashOrder:[],
+ surface:{widgets:{},statuses:{}},resources:{commands:[],tools:[],skills:[],prompts:[],extensions:[],contextFiles:[]},modeState:{coding:{drafts:{}},general:{drafts:{}}}};
+const table='Each line of p2.cpp:\\n\\n| Line | Meaning |\\n| --- | --- |\\n| \`int *b\` | \`b\` is a **pointer to int** (holds an address) |\\n| \`b = &a;\` | b stores the address of a |';
+const quoteMessages=()=>state.toasts.filter((x)=>/quoted passage/i.test(x.message)).map((x)=>x.message);
+const flashed=()=>{
+ const set=window.CSS&&CSS.highlights&&(CSS.highlights.get('myharness-jump')||CSS.highlights.get('myharness-jump-fade'));
+ if(set) return [...set].map((r)=>r.toString()).join('');
+ return [...document.querySelectorAll('.quote-hl[data-quote-id="__jump__"]')].map((s)=>s.textContent).join('');
+};
+async function jumpLands(host,expected,label){
+ const quote=host.querySelector('.user-text blockquote');
+ check(quote,label+': the sent message shows no block quote');
+ quote.dispatchEvent(new MouseEvent('click',{bubbles:true}));
+ const until=Date.now()+6000;
+ while(Date.now()<until&&flashed().replace(/\\s+/g,'')!==expected) await wait(50);
+ const text=flashed();
+ check(text.replace(/\\s+/g,'')===expected,label+': the jump did not flash its source, got '+JSON.stringify(text)+', notices '+JSON.stringify(quoteMessages()));
+ await wait(200);
+ check(quoteMessages().length===0,label+': a quote notice is still shown: '+JSON.stringify(quoteMessages()));
+}
+try {
+// 1) the source row is on screen: the tab between the two cells must not stop the match.
+set({...base,snap:snapFor('table'),items:[
+ {kind:'user',id:'u1',ts:1,text:'explain p2.cpp',images:[]},
+ {kind:'assistant',ts:2,blocks:[{type:'text',text:table}],stopReason:'stop',final:true},
+ {kind:'user',id:'u2',ts:3,text:'> int *b\\tb is a pointer to int\\n\\nso b only holds an address?',images:[]}]});
+const first=document.getElementById('first');
+render(h(Transcript,{}),first);
+await wait(400);
+await jumpLands(first,'int*bbisapointertoint','table quote');
+render(null,first);
+
+// 2) a long chat opens as its tail: the source row is in a turn that is not mounted when the quote is clicked.
+const filler=[];
+for(let i=0;i<230;i++){
+ filler.push({kind:'user',id:'f'+i,ts:10+i*2,text:'filler question '+i,images:[]});
+ filler.push({kind:'assistant',ts:11+i*2,blocks:[{type:'text',text:'filler answer '+i}],stopReason:'stop',final:true});
+}
+set({...base,snap:snapFor('long'),items:[
+ {kind:'user',id:'l1',ts:1,text:'explain p2.cpp',images:[]},
+ {kind:'assistant',ts:2,blocks:[{type:'text',text:table}],stopReason:'stop',final:true},
+ ...filler,
+ {kind:'user',id:'l9',ts:5000,text:'> b = &a;\\tb stores the address of a\\n\\nand this line?',images:[]}]});
+const second=document.getElementById('second');
+render(h(Transcript,{}),second);
+check(!second.textContent.includes('Each line of p2.cpp'),'the long chat mounted its first turn at once, so this case tests nothing');
+await jumpLands(second,'b=&a;bstorestheaddressofa','long chat');
+tell('passed');
+} catch(e) { tell('failed: '+((e&&e.message)||String(e))); }
+`,
+			);
+			writeFileSync(
+				join(root, "index.html"),
+				`<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/layout.css"><link rel="stylesheet" href="/css/transcript.css"><div class="app"><main class="main"><div id="first"></div><div id="second"></div></main></div><script src="/markdown/marked.min.js"></script><script type="module" src="/test/jump.js"></script>`,
+			);
+			server.setIndexFile(join(root, "index.html"));
+			const { port } = await server.listen(0);
+			const page = await browser.solveChallenge({
+				url: `http://127.0.0.1:${port}/`,
+				readySelector: "#ready",
+				label: "Quote jump test",
+				isSolved: (p) => p.text.includes('id="ready">'),
+			});
+			expect(page.text).toContain('id="ready">passed');
+		} finally {
+			await browser.shutdown();
+			await server.close();
+			rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+		}
+	},
+	180000,
+);

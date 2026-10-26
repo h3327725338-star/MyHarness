@@ -138,4 +138,24 @@ describe("Google Drive settings status", () => {
 		);
 		expect(waiting).toEqual({ text: "Downloading… 37 / 212", spinning: true });
 	});
+
+	it("names the download step: reading the change lists first, then downloading what they name", () => {
+		const reading = status({
+			phase: "downloading",
+			progress: { stage: "download", step: "read", done: 120, total: 5534 },
+		});
+		expect(footLine(null, reading, deriveSync(reading))).toEqual({
+			text: "Reading changes from Drive… 120 / 5534",
+			spinning: true,
+		});
+		const applying = status({
+			phase: "downloading",
+			progress: { stage: "download", step: "apply", done: 3, total: 900 },
+		});
+		const manual = { kind: "download", state: "running", stage: "download", done: 3, total: 900 };
+		expect(footLine(manual, applying, deriveSync(applying))).toEqual({
+			text: "Downloading… 3 / 900",
+			spinning: true,
+		});
+	});
 });

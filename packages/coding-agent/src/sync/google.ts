@@ -18,6 +18,17 @@ const FOLDER_MIME = "application/vnd.google-apps.folder";
 const TRANSIENT_STATUS = new Set([429, 500, 502, 503, 504]);
 const TRANSIENT_RETRIES = 3;
 /**
+ * Drive reports its per-user rate limit as 403 (`userRateLimitExceeded`, `rateLimitExceeded`) as well as 429. Those
+ * pass after a while, so they get more attempts with an exponential backoff plus jitter, as Google asks clients to do.
+ */
+const RATE_LIMIT_REASONS = new Set(["userRateLimitExceeded", "rateLimitExceeded"]);
+const RATE_LIMIT_RETRIES = 5;
+/** Lookups of files by exact name that start within this window go out as one query (see lookup). */
+const LOOKUP_WINDOW_MS = 10;
+const LOOKUP_BATCH = 25;
+/** Queries of one flush in flight at a time: locating thousands of objects must not open a hundred requests at once. */
+const LOOKUP_LANES = 4;
+/**
  * Every request has a deadline. Without one a stalled connection never settles, the pass stays "running" forever and
  * the manual buttons stay disabled behind "waiting for the current pass"; a deadline turns that into one failed pass
  * that retries on its own schedule. Metadata is small, media is the object itself and an upload is the largest body.
@@ -37,6 +48,24 @@ function transientDelay(attempt: number, retryAfter?: string | null): number {
 	const seconds = retryAfter ? Number(retryAfter) : Number.NaN;
 	if (Number.isFinite(seconds) && seconds > 0) return Math.min(30_000, seconds * 1000);
 	return Math.min(20_000, 500 * 3 ** attempt);
+}
+
+/** Truncated exponential backoff with jitter for a rate limit: about 1, 2, 4, 8 and 16 seconds. */
+function rateLimitDelay(attempt: number, retryAfter?: string | null): number {
+	const seconds = retryAfter ? Number(retryAfter) : Number.NaN;
+	if (Number.isFinite(seconds) && seconds > 0) return Math.min(32_000, seconds * 1000);
+	return Math.min(32_000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 1000);
+}
+
+/** Whether a 403 is Drive's rate limit rather than a refused permission (which no retry fixes). */
+async function isRateLimit403(response: Response): Promise<boolean> {
+	if (response.status !== 403) return false;
+	try {
+		const payload = (await response.clone().json()) as { error?: { errors?: { reason?: unknown }[] } };
+		return (payload.error?.errors ?? []).some((item) => RATE_LIMIT_REASONS.has(String(item.reason)));
+	} catch {
+		return false;
+	}
 }
 /** `drive.file`: only files this app created or the user explicitly handed to it. Never the whole drive. */
 export const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
@@ -329,6 +358,13 @@ export class GoogleDriveClient implements DrivePort {
 	private fileIds = new Map<string, string>();
 	/** One shared refresh for every request that notices an expired token, instead of one per request. */
 	private refreshing: Promise<StoredGoogleCredentials> | undefined;
+	/** Lookups by name waiting to go out together, per parent folder (see lookup). */
+	private lookups = new Map<
+		string,
+		Map<string, { resolve: (file: RemoteFile | undefined) => void; reject: (error: unknown) => void }>
+	>();
+	/** `parent/name` -> the answer still on its way, so a name is never asked for twice at the same time. */
+	private runningLookups = new Map<string, Promise<RemoteFile | undefined>>();
 
 	constructor(options: GoogleDriveOptions) {
 		this.options = options;
@@ -387,6 +423,13 @@ export class GoogleDriveClient implements DrivePort {
 				this.credentials = { ...this.credentials, expiresAt: 0 };
 				return this.request(url, init, false);
 			}
+			if ((response.status === 429 || (await isRateLimit403(response))) && attempt < RATE_LIMIT_RETRIES) {
+				await response.arrayBuffer().catch(() => undefined);
+				await new Promise((resolve) =>
+					setTimeout(resolve, rateLimitDelay(attempt, response.headers.get("retry-after"))),
+				);
+				continue;
+			}
 			if (TRANSIENT_STATUS.has(response.status) && attempt < TRANSIENT_RETRIES) {
 				await response.arrayBuffer().catch(() => undefined);
 				await new Promise((resolve) =>
@@ -415,6 +458,83 @@ export class GoogleDriveClient implements DrivePort {
 			`${DRIVE_API}/files?q=${encodeURIComponent(query)}&fields=files(id,name,size,mimeType,modifiedTime,createdTime)&orderBy=createdTime&pageSize=100&spaces=drive&supportsAllDrives=true&includeItemsFromAllDrives=true`,
 		);
 		return payload.files?.[0];
+	}
+
+	/**
+	 * Find a file by exact name. Lookups that start within LOOKUP_WINDOW_MS of each other share queries of up to
+	 * LOOKUP_BATCH names, and a name already on its way is not asked for again: a download of hundreds of objects whose
+	 * ids were not known yet sent one query before each one.
+	 */
+	private lookup(parent: string, name: string): Promise<RemoteFile | undefined> {
+		const key = `${parent}/${name}`;
+		const running = this.runningLookups.get(key);
+		if (running) return running;
+		const answer = new Promise<RemoteFile | undefined>((resolve, reject) => {
+			let waiting = this.lookups.get(parent);
+			if (!waiting) {
+				waiting = new Map();
+				this.lookups.set(parent, waiting);
+				setTimeout(() => void this.flushLookups(parent), LOOKUP_WINDOW_MS);
+			}
+			waiting.set(name, { resolve, reject });
+		});
+		this.runningLookups.set(key, answer);
+		const settled = () => this.runningLookups.delete(key);
+		answer.then(settled, settled);
+		return answer;
+	}
+
+	/** Send the waiting lookups of one folder, LOOKUP_BATCH names a query, in the order they were asked for. */
+	private async flushLookups(parent: string): Promise<void> {
+		const waiting = this.lookups.get(parent);
+		this.lookups.delete(parent);
+		if (!waiting) return;
+		const names = [...waiting.keys()];
+		let next = 0;
+		const lane = async () => {
+			while (next < names.length) {
+				const chunk = names.slice(next, next + LOOKUP_BATCH);
+				next += LOOKUP_BATCH;
+				try {
+					const found = await this.findMany(chunk, parent);
+					for (const name of chunk) waiting.get(name)?.resolve(found.get(name));
+				} catch (error) {
+					for (const name of chunk) waiting.get(name)?.reject(error);
+				}
+			}
+		};
+		await Promise.all(Array.from({ length: Math.min(LOOKUP_LANES, Math.ceil(names.length / LOOKUP_BATCH)) }, lane));
+	}
+
+	/** One query for several exact names. As in find, the oldest file with a name is the one that counts. */
+	private async findMany(names: string[], parent: string): Promise<Map<string, RemoteFile>> {
+		const found = new Map<string, RemoteFile>();
+		if (names.length === 1) {
+			const file = await this.find(names[0]!, parent);
+			if (file) found.set(names[0]!, file);
+			return found;
+		}
+		const clause = names.map((name) => `name='${escapeQuery(name)}'`).join(" or ");
+		let pageToken: string | undefined;
+		for (;;) {
+			const params = new URLSearchParams({
+				q: `'${parent}' in parents and trashed=false and (${clause})`,
+				fields: "nextPageToken,files(id,name,size,mimeType,modifiedTime,createdTime)",
+				orderBy: "createdTime",
+				pageSize: "1000",
+				spaces: "drive",
+				supportsAllDrives: "true",
+				includeItemsFromAllDrives: "true",
+			});
+			if (pageToken) params.set("pageToken", pageToken);
+			const payload = await this.json<{ files?: RemoteFile[]; nextPageToken?: string }>(
+				`${DRIVE_API}/files?${params.toString()}`,
+			);
+			for (const file of payload.files ?? []) if (!found.has(file.name)) found.set(file.name, file);
+			if (!payload.nextPageToken) break;
+			pageToken = payload.nextPageToken;
+		}
+		return found;
 	}
 
 	private async createFolder(name: string, parent: string): Promise<string> {
@@ -535,15 +655,20 @@ export class GoogleDriveClient implements DrivePort {
 		return identity;
 	}
 
-	async list(folder: RemoteFolder): Promise<RemoteFile[]> {
+	async list(folder: RemoteFolder, options: { createdAfter?: string } = {}): Promise<RemoteFile[]> {
 		const parent = this.folderId(folder);
 		const files: RemoteFile[] = [];
 		let pageToken: string | undefined;
+		// Drive compares RFC 3339 times; anything else is not sent, so a bad value lists everything instead of nothing.
+		const after =
+			options.createdAfter && Number.isFinite(Date.parse(options.createdAfter))
+				? new Date(options.createdAfter).toISOString()
+				: undefined;
 		try {
 			for (;;) {
 				const params = new URLSearchParams({
-					q: `'${parent}' in parents and trashed=false`,
-					fields: "nextPageToken,files(id,name,size,mimeType,modifiedTime)",
+					q: `'${parent}' in parents and trashed=false${after ? ` and createdTime > '${after}'` : ""}`,
+					fields: "nextPageToken,files(id,name,size,mimeType,modifiedTime,createdTime)",
 					orderBy: "name",
 					pageSize: "1000",
 					spaces: "drive",
@@ -577,7 +702,7 @@ export class GoogleDriveClient implements DrivePort {
 		let id = this.fileIds.get(key);
 		let lookedUp = false;
 		if (!id) {
-			const file = await this.find(name, parent);
+			const file = await this.lookup(parent, name);
 			if (!file || file.mimeType === FOLDER_MIME) return undefined;
 			id = file.id;
 			this.fileIds.set(key, id);
@@ -679,6 +804,25 @@ export class GoogleDriveClient implements DrivePort {
 
 	async downloadObject(hash: string): Promise<Uint8Array | undefined> {
 		return this.read("objects", hash);
+	}
+
+	/**
+	 * Learn the ids of objects a download round is about to read, LOOKUP_BATCH names per query, so each download that
+	 * follows is one request. A download that starts before its name is answered waits for that answer (see lookup).
+	 */
+	async locateObjects(hashes: readonly string[]): Promise<void> {
+		const parent = this.folderId("objects");
+		const located: Promise<void>[] = [];
+		for (const hash of new Set(hashes)) {
+			const key = this.fileKey("objects", hash);
+			if (this.fileIds.has(key)) continue;
+			located.push(
+				this.lookup(parent, hash).then((file) => {
+					if (file && file.mimeType !== FOLDER_MIME) this.fileIds.set(key, file.id);
+				}),
+			);
+		}
+		await Promise.all(located);
 	}
 
 	/** Content-addressed object id; a cached id is reused until Drive answers 404. */

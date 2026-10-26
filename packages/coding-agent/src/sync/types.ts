@@ -138,6 +138,26 @@ export interface SyncState {
 	appliedUpTo?: Record<string, string>;
 	/** Batches under a device's `appliedUpTo` that a manual run asked to try again (skipped earlier). */
 	reopenedBatches?: string[];
+	/** The last snapshot this device published (see SyncSnapshot): when, and up to which of its own batch times. */
+	snapshot?: { at: string; upTo: string };
+}
+
+/**
+ * Every record one device has committed, published so a new or long-offline computer catches up with one download
+ * instead of reading each batch that device ever wrote. It stands for that device's own batches up to `upTo` only;
+ * batches of other devices are still read one by one. Stored gzip-compressed as `snapshots/<deviceId>.json.gz`.
+ */
+export interface SyncSnapshot {
+	version: 1;
+	deviceId: string;
+	deviceName: string;
+	createdAt: string;
+	/** Newest batch time of this device it covers (base 36, as in the batch file name). */
+	upTo: string;
+	records: SyncRecord[];
+	tombstones: Record<string, SyncTombstone>;
+	/** Content of the small records by hash, base64, so a new computer does not download each one. */
+	inline: Record<string, string>;
 }
 
 export interface SyncConfig {
@@ -180,13 +200,18 @@ export interface StoredGoogleCredentials {
 	obtainedAt: string;
 }
 
-/** A manual "Download now" / "Sync now" run and its progress, kept until the next manual run replaces it. */
-/** Progress of the pass in flight: changes applied from Drive, or files of this computer uploaded. */
+/**
+ * Progress of the pass in flight: files of this computer uploaded, or the two steps of a download — reading the change
+ * lists of new batches (`read`), then fetching and writing the records they name (`apply`).
+ */
 export interface SyncProgress {
 	stage: "download" | "upload";
 	done: number;
 	total: number;
+	step?: "read" | "apply";
 }
+
+/** A manual "Download now" / "Sync now" run and its progress, kept until the next manual run replaces it. */
 
 export interface SyncManualRun {
 	kind: "download" | "sync";
@@ -271,6 +296,8 @@ export interface RemoteFile {
 	size?: number;
 	mimeType?: string;
 	modifiedTime?: string;
+	/** Drive's own clock: what an incremental listing continues from. */
+	createdTime?: string;
 }
 
 export type RemoteFolder = "root" | "batches" | "objects" | "snapshots" | "files";
@@ -279,9 +306,12 @@ export type RemoteFolder = "root" | "batches" | "objects" | "snapshots" | "files
 export interface DrivePort {
 	/** Find or create the visible `MyHarness` folder, its `sync-v1` layout and `identity.json`. */
 	ensureSpace(): Promise<{ folderId: string; folderName: string; syncId: string; url: string }>;
-	list(folder: RemoteFolder): Promise<RemoteFile[]>;
+	/** `createdAfter` (an ISO time on Drive's clock) lists only files created after it. */
+	list(folder: RemoteFolder, options?: { createdAfter?: string }): Promise<RemoteFile[]>;
 	read(folder: RemoteFolder, name: string): Promise<Uint8Array | undefined>;
 	write(folder: RemoteFolder, name: string, data: Uint8Array): Promise<RemoteFile>;
 	uploadObject(hash: string, data: Uint8Array): Promise<void>;
 	downloadObject(hash: string): Promise<Uint8Array | undefined>;
+	/** Optional head start for a round of downloads: find where these objects are, many per query. A hint only. */
+	locateObjects?(hashes: readonly string[]): Promise<void>;
 }
