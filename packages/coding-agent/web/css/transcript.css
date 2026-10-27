@@ -158,8 +158,11 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 .final-stream > .final-code:not(:first-child) { margin-top: 0.85em; }
 /* Monospace inside final keeps one fixed box so toggling between body and code text does not jump size. */
 .final .md code, .final .md pre { font-family: var(--font-mono); font-size: var(--fs-code); line-height: 1.55; font-variant-ligatures: none; }
-.final-actions { margin-top: 2px; }
-.msg-meta { font-size: var(--fs-xs); margin-left: 6px; max-width: 320px; }
+/* The model and token counts are never cut: a column too narrow for them on one line (collaboration mode) wraps them
+   between the model and each count, never inside a count. */
+.final-actions { margin-top: 2px; height: auto; min-height: 24px; }
+.msg-meta { font-size: var(--fs-xs); margin-left: 6px; min-width: 0; overflow-wrap: anywhere; }
+.msg-meta-count { white-space: nowrap; }
 .partial-note { font-size: var(--fs-sm); margin-top: 4px; }
 .final.streaming .md > :last-child::after { content: "▍"; color: var(--text-3); margin-left: 2px; animation: caret 1s steps(2) infinite; }
 @keyframes caret { 50% { opacity: 0; } }

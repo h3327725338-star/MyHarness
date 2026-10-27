@@ -296,7 +296,8 @@ function githubScreen() {
 		rows.push({ key: "verify", label: t("Verify connection"), desc: t("Check the login, refreshing it when needed"), onEnter: () => start(true) });
 		rows.push({ key: "reconnect", label: t("Reauthorize"), desc: t("For an expired login or missing permissions"), onEnter: () => start(false) });
 	} else {
-		rows.push({ key: "connect", label: t("Connect GitHub"), desc: t("Authorize this device in the browser"), icon: "gitBranch", ...(data.clientIdConfigured ? { onEnter: () => start(false) } : { chevron: true, onEnter: (c) => c.push(clientIdScreen) }) });
+		// Without an OAuth app of the user's own, the server takes the sign-in GitHub CLI or Git already has here.
+		rows.push({ key: "connect", label: t("Connect GitHub"), desc: data.clientIdConfigured ? t("Authorize this device in the browser") : t("Uses the sign-in GitHub CLI or Git already has on this computer"), icon: "gitBranch", onEnter: () => start(false) });
 	}
 	rows.push({ key: "client", label: "Client ID", desc: data.clientIdFromEnvironment ? t("Set by MYHARNESS_GITHUB_CLIENT_ID, which takes precedence.") : t("First setup or a different app"), value: data.clientIdConfigured ? t("set") : t("not set"), chevron: true, onEnter: (c) => c.push(clientIdScreen) });
 	rows.push({ key: "new-app", label: t("Create a GitHub app"), icon: "externalLink", onEnter: () => openSystemLink("https://github.com/settings/applications/new") });

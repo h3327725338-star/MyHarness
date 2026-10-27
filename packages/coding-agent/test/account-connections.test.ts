@@ -355,3 +355,50 @@ describe("GitHub device authorization", () => {
 		}
 	});
 });
+
+describe("GitHub sign-in already on this computer", () => {
+	it("takes GitHub CLI's or Git's sign-in without an OAuth app and records where it came from", async () => {
+		const request = vi.fn<typeof fetch>();
+		request.mockResolvedValueOnce(
+			Response.json(identity, { headers: { "x-oauth-scopes": "gist, read:org, repo, workflow" } }),
+		);
+		const storage = new InMemoryAuthStorageBackend();
+		const asked: boolean[] = [];
+		const connections = new AccountConnections(storage, request, async (_signal, interactive) => {
+			asked.push(interactive);
+			return { source: "gh", token: "gho_testtokenneverreturnedbyapi" };
+		});
+		expect(connections.getClientId()).toBe("");
+		expect(await connections.connectExisting(new AbortController().signal, true)).toEqual(identity);
+		expect(asked).toEqual([true]);
+		const headers = new Headers(request.mock.calls[0][1]?.headers);
+		expect(headers.get("Authorization")).toBe("Bearer gho_testtokenneverreturnedbyapi");
+		expect(connections.getSource()).toBe("gh");
+		expect(connections.getGrantedScopes()).toEqual(["gist", "read:org", "repo", "workflow"]);
+		// No refresh token and no OAuth app: verifying uses the saved token as it is.
+		request.mockResolvedValueOnce(Response.json(identity));
+		expect(await connections.verify(new AbortController().signal)).toEqual(identity);
+	});
+
+	it("saves nothing when no sign-in is found, and older connections count as the OAuth app's", async () => {
+		const request = vi.fn<typeof fetch>();
+		const storage = new InMemoryAuthStorageBackend();
+		const connections = new AccountConnections(storage, request, async () => undefined);
+		expect(await connections.connectExisting(new AbortController().signal)).toBeUndefined();
+		expect(request).not.toHaveBeenCalled();
+		expect(connections.getAccount()).toBeUndefined();
+		expect(connections.getSource()).toBeUndefined();
+		storage.withLock(() => ({
+			result: undefined,
+			next: JSON.stringify({ github: { account: identity, token: token.access_token, clientId: "own-app" } }),
+		}));
+		expect(connections.getSource()).toBe("app");
+		storage.withLock(() => ({
+			result: undefined,
+			next: JSON.stringify({
+				github: { account: identity, token: token.access_token, clientId: "", source: "other" },
+			}),
+		}));
+		expect(() => connections.getSource()).toThrow("格式无效");
+	});
+});

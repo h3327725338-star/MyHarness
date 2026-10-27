@@ -798,7 +798,7 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 				<p role="status">${status.error || (status.loading ? t("Loading…") : "")}</p>
 				${status.url ? html`<button class="btn sm" onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}>${t("Open in system browser")}</button>` : null}
 			</div>
-			${snapshot ? html`<img class="desktop-browser-shot" ref=${shot} decoding="async" src=${snapshot.src} style=${snapshot.width && snapshot.height ? { width: `${snapshot.width}px`, height: `${snapshot.height}px` } : null} alt="" draggable="false" />` : null}
+			${snapshot ? html`<img class="desktop-browser-shot" ref=${shot} decoding="sync" src=${snapshot.src} style=${snapshot.width && snapshot.height ? { width: `${snapshot.width}px`, height: `${snapshot.height}px` } : null} alt="" draggable="false" />` : null}
 		</div>
 	</div>`;
 }

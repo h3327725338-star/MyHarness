@@ -79,6 +79,8 @@ export function PanelNav({ section, browser = true, onShow, children = null, fol
 
 /** The narrowest a tab of the row may get before the row is "tight" (the smallest width of a tab at rest). */
 const TAB_ROOM = 72;
+/** The gap between a section's icon and its name while the name is shown (`.ws-nav-label` in layout.css). */
+const LABEL_GAP = 6;
 
 /**
  * How much the panel head (`headRef`) has to fold its row so nothing runs under anything: "" (section names shown),
@@ -86,11 +88,25 @@ const TAB_ROOM = 72;
  * too wide when the section buttons run past their box or the section's tabs get less than TAB_ROOM. The width each
  * fuller step needed is remembered, so the row unfolds only once that step fits and never flips back and forth at the
  * edge; a change of what the row holds (`signature`) measures the full row again before it is painted. Names that are
- * still folding count as gone, so a measurement in the middle of that motion does not fold the row further.
+ * still folding count as gone, so a measurement in the middle of that motion does not fold the row further; names that
+ * are still unfolding count at their full width, so the row folds before they run under the buttons at its end (the
+ * head keeps its size while they grow, so nothing else would measure it again). The end of that motion measures again.
+ * A fold decided for new content is not animated (`data-fold-instant` on the head for two frames): the row shows its
+ * new section already folded instead of drawing the names over the buttons and pulling them away.
  */
 export function useRowFold(headRef, signature) {
-	const [fold, setFold] = useState("");
+	const [fold, setState] = useState("");
 	const needs = useRef({ full: 0, icons: 0 });
+	// The row holds new content that has not been on screen yet.
+	const fresh = useRef(false);
+	const setFold = (value) => {
+		const head = headRef.current;
+		if (fresh.current && head) {
+			head.dataset.foldInstant = "";
+			requestAnimationFrame(() => requestAnimationFrame(() => delete head.dataset.foldInstant));
+		}
+		setState(value);
+	};
 	const measure = () => {
 		const head = headRef.current;
 		if (!head) return;
@@ -104,9 +120,21 @@ export function useRowFold(headRef, signature) {
 		const strip = nav?.querySelector(".ws-tabs");
 		const over = nav ? Math.max(0, nav.scrollWidth - nav.clientWidth) : 0;
 		const short = strip && strip.childElementCount > 0 ? Math.max(0, TAB_ROOM - strip.clientWidth) : 0;
+		// A narrow panel never shows the names (`.panel[data-w="xs"]`), so there they are not about to grow.
+		const unfolding = fold === "" && head.closest(".panel")?.dataset.w !== "xs";
 		let names = 0;
-		for (const label of nav?.querySelectorAll(".ws-nav-label") ?? []) names += label.getBoundingClientRect().width + parseFloat(getComputedStyle(label).marginLeft || "0");
-		const missing = over + short;
+		let growing = 0;
+		for (const label of nav?.querySelectorAll(".ws-nav-label") ?? []) {
+			const width = label.getBoundingClientRect().width;
+			const gap = parseFloat(getComputedStyle(label).marginLeft || "0");
+			names += width + gap;
+			if (unfolding) growing += Math.max(0, label.scrollWidth - width) + Math.max(0, LABEL_GAP - gap);
+		}
+		// They grow into the free space of the row first (its `.grow` spacer), and only the rest runs past the buttons;
+		// folding them frees their full width.
+		const spare = growing > 0 ? (head.querySelector(":scope > .grow")?.getBoundingClientRect().width ?? 0) : 0;
+		const missing = over + short + Math.max(0, growing - spare);
+		names += growing;
 		if (fold === "") {
 			if (missing <= 0.5) return;
 			needs.current.full = room + missing;
@@ -121,7 +149,18 @@ export function useRowFold(headRef, signature) {
 		} else if (room >= needs.current.full) setFold("");
 	};
 	useLayoutEffect(() => {
-		if (fold) setFold("");
+		fresh.current = true;
+		if (fold) setState("");
+		let later = 0;
+		const first = requestAnimationFrame(() => {
+			later = requestAnimationFrame(() => {
+				fresh.current = false;
+			});
+		});
+		return () => {
+			cancelAnimationFrame(first);
+			cancelAnimationFrame(later);
+		};
 	}, [signature]);
 	useLayoutEffect(measure);
 	useEffect(() => {
@@ -129,7 +168,14 @@ export function useRowFold(headRef, signature) {
 		if (!head || typeof ResizeObserver === "undefined") return undefined;
 		const observer = new ResizeObserver(() => measure());
 		observer.observe(head);
-		return () => observer.disconnect();
+		const settled = (event) => {
+			if (event.target.classList?.contains("ws-nav-label") || event.target.classList?.contains("ws-nav-btn")) measure();
+		};
+		head.addEventListener("transitionend", settled);
+		return () => {
+			observer.disconnect();
+			head.removeEventListener("transitionend", settled);
+		};
 	}, [fold]);
 	return fold;
 }

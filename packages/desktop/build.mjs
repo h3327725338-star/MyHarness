@@ -21,7 +21,7 @@ const destination = join(output, `release-${stamp}`);
 mkdirSync(stage, { recursive: true });
 const result = spawnSync(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '--version'], { stdio: 'inherit' });
 if (result.status !== 0) throw new Error('TypeScript unavailable');
-for (const name of ['main.cjs', 'preload.cjs', 'service-entry.cjs', 'windows-job.cjs', 'browser-view.cjs', 'browser-bookmarks.cjs', 'browser-speed-dial.cjs', 'browser-input.cjs', 'browser-passwords.cjs', 'browser-permissions.cjs', 'browser-page-helpers.cjs', 'browser-tab-preload.cjs', 'legacy-prefs.cjs', 'notification-routing.cjs', 'preview-links.cjs', 'app-prefs.cjs', 'zoom.cjs', 'browser-dark.cjs', 'browser-language.cjs', 'browser-sync.cjs']) cpSync(join(here, name), join(stage, name));
+for (const name of ['main.cjs', 'preload.cjs', 'service-entry.cjs', 'windows-job.cjs', 'browser-view.cjs', 'browser-bookmarks.cjs', 'browser-speed-dial.cjs', 'browser-input.cjs', 'browser-passwords.cjs', 'browser-permissions.cjs', 'browser-page-helpers.cjs', 'browser-tab-preload.cjs', 'legacy-prefs.cjs', 'notification-routing.cjs', 'preview-links.cjs', 'app-prefs.cjs', 'zoom.cjs', 'browser-dark.cjs', 'browser-language.cjs', 'browser-sync.cjs', 'browser-web-mail.cjs']) cpSync(join(here, name), join(stage, name));
 const runtime = join(stage, 'runtime');
 const copied = new Set();
 const installed = new Map();

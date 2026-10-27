@@ -211,7 +211,9 @@
 /* The panel's own scroll area: a tab's content grows and shrinks inside it (a folded section opening, a long list) and
    never changes the height of the panel or of the conversation next to it. */
 .panel-body { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
-.panel .resizer { left: -4px; }
+/* The panel's width handle hangs from the conversation's right edge (app.js): its outer half is cut off there, its inner
+   half stays on the conversation, clear of a website the desktop host draws over the whole panel. */
+.app:not(.ws-max) .main > .resizer { left: auto; right: -4px; }
 
 .toasts { position: absolute; top: 52px; right: 14px; display: flex; flex-direction: column; z-index: 60; pointer-events: none; max-width: 420px; }
 /* A toast sits in a Collapse slot (Toasts in app.js) so a dismissed one folds away; its spacing is inside the slot, and while it
@@ -342,6 +344,8 @@ html.mode-revealing .app, html.mode-revealing .panel-slot { transition: none; }
 .ws-nav-strip .ws-tabs { flex: 0 1 auto; }
 .ws-nav-strip .ws-new-tab { flex: none; }
 @keyframes ws-strip-in { from { opacity: 0; } }
+/* A section shown for the first time folds at once (useRowFold in workspace-tabs.js). */
+.panel-head[data-fold-instant] :is(.ws-nav-btn, .ws-nav-label) { transition: none; }
 :root[data-motion="off"] :is(.ws-nav-btn, .ws-nav-label) { transition: none; }
 :root[data-motion="off"] .ws-nav-strip { animation: none; }
 @media (prefers-reduced-motion: reduce) { :is(.ws-nav-btn, .ws-nav-label) { transition: none; } .ws-nav-strip { animation: none; } }
@@ -443,7 +447,11 @@ html.mode-revealing .app, html.mode-revealing .panel-slot { transition: none; }
 /* The conversation's left edge is its border line: the handle straddles it like the panel's does, and the line it lights
    up is that border (plus the column's first pixel), not a second line beside it. */
 .app.ws-max .main > .resizer { left: -4px; }
-.app.ws-max .main:has(> .resizer:is(:hover, .dragging)), .panel:has(> .resizer:is(:hover, .dragging)) { border-left-color: var(--accent-line); }
+.app.ws-max .main:has(> .resizer:is(:hover, .dragging)) { border-left-color: var(--accent-line); }
+/* The line between the conversation and the panel is the conversation's right border, or on the frameless window the
+   panel's left border; the one that is drawn lights up. */
+.app:not(.ws-max) .main:has(> .resizer:is(:hover, .dragging)) { border-right-color: var(--accent-line); }
+.app:not(.ws-max):has(> .main > .resizer:is(:hover, .dragging)) .panel { border-left-color: var(--accent-line); }
 /* The close-panel button sits at the end of the conversation header here, and the sidebar button opens the tab row. */
 .app.ws-max .panel-head { padding-right: var(--pad-panel); }
 .panel-head .panel-sidebar { flex: none; margin-right: 2px; }
@@ -539,7 +547,8 @@ html.ws-morph::view-transition-new(ws-sidebar) { animation: ws-morph-in var(--t-
 .desktop-frameless :is(.resizer, .desktop-browser-target, .ws-menu, .scrim, .composer-scrim, .composer.expanded, .quote-edit-scrim, .quote-edit-pop, .lightbox-scrim, .personal-fullscreen-scrim, .popover, .local-file-menu, .floating-quote-bar, .quote-note-card, .tooltip) { -webkit-app-region: no-drag; }
 /* A column resizer comes before the top bar it overlaps, and a later drag area wins over an earlier no-drag one; these
    strips come after the top bars and give the resizer's top end back to the resizer. */
-.desktop-frameless .app.panel-open:not(.ws-max) .panel::after, .desktop-frameless .app.ws-max .main::after { content: ""; position: absolute; left: 0; top: 0; width: 8px; height: 44px; pointer-events: none; -webkit-app-region: no-drag; }
+.desktop-frameless .app.panel-open .main::after, .desktop-frameless .app.ws-max .main::after { content: ""; position: absolute; left: 0; top: 0; width: 8px; height: 44px; pointer-events: none; -webkit-app-region: no-drag; }
+.desktop-frameless .app.panel-open:not(.ws-max) .main::after { left: auto; right: 0; width: 4px; }
 
 /* Desktop app zoom (app-zoom.js): the new size for a moment after Ctrl + "+" / "-" / 0, and the settings control. */
 .app-zoom-badge { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); z-index: 61; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 12px; border-radius: var(--r-md); background: var(--bg-raised); border: 1px solid var(--border-strong); box-shadow: var(--shadow-pop); font-size: var(--fs-md); animation: fade-in var(--t-base) var(--ease); }

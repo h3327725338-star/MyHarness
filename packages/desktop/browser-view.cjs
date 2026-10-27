@@ -11,6 +11,7 @@ const { attachZoom, cleanZoom, createSiteZoomStore, stepZoom } = require(require
 const dark = require(require('node:path').join(__dirname, 'browser-dark.cjs'));
 const { acceptLanguage, createLanguageStore, languageList } = require(require('node:path').join(__dirname, 'browser-language.cjs'));
 const { createBrowserSync } = require(require('node:path').join(__dirname, 'browser-sync.cjs'));
+const { createWebMailState } = require(require('node:path').join(__dirname, 'browser-web-mail.cjs'));
 const { INTERACTIVE_QUERY } = page;
 
 exports.httpUrl = (value) => {
@@ -148,6 +149,15 @@ exports.createBrowser = (window, log, options = {}) => {
   const siteZoom = createSiteZoomStore(profileDir ? require('node:path').join(profileDir, 'browser-zoom.json') : '', log);
   // The language websites are told the user reads (toolbar → language); '' keeps the engine's default (Windows').
   const siteLanguage = createLanguageStore(profileDir ? require('node:path').join(profileDir, 'browser-language.json') : '', log);
+  // Whether Gmail and Outlook are signed in on their websites here (Settings → Connections); the page hears of a change.
+  const webMail = createWebMailState({
+    file: profileDir ? require('node:path').join(profileDir, 'browser-web-mail.json') : '',
+    cookies: (url) => partition.cookies.get({ url }),
+    fetch: (url, init) => partition.fetch(url, init),
+    openTabs: () => [...tabs.values()].filter((tab) => !tab.destroyed).map((tab) => ({ url: tab.url, title: tab.title })),
+    log,
+  });
+  const webMailSeen = (url, title, from) => { if (webMail.observe(url, title, from)) send({ type: 'webMail' }); };
   // The app page measures the view's box in its own CSS pixels; with the app window zoomed those are not the window's
   // pixels any more (a 125 % app has 1.25 window pixels per CSS pixel).
   const appZoom = () => {
@@ -751,10 +761,17 @@ exports.createBrowser = (window, log, options = {}) => {
     const [width, height] = window.getContentSize();
     if (width < 1 || height < 1) return null;
     const scale = appZoom();
-    const x = Math.max(0, Math.min(width - 1, Math.round(value.x * scale)));
-    const y = Math.max(0, Math.min(height - 1, Math.round(value.y * scale)));
-    const w = Math.max(0, Math.min(width - x, Math.round(value.width * scale)));
-    const h = Math.max(0, Math.min(height - y, Math.round(value.height * scale)));
+    // Edges are rounded, not sizes, so the view ends exactly where the page's box ends at any app zoom (110 % rounded
+    // each size on its own and could stop a pixel short). An edge within a pixel of the window's own edge goes onto it:
+    // no strip of the app shows between the site and the window border.
+    const edge = (number, max) => {
+      const pixel = Math.round(number * scale);
+      return pixel <= 1 ? 0 : pixel >= max - 1 ? max : pixel;
+    };
+    const x = Math.min(width - 1, edge(value.x, width));
+    const y = Math.min(height - 1, edge(value.y, height));
+    const w = Math.max(0, edge(value.x + value.width, width) - x);
+    const h = Math.max(0, edge(value.y + value.height, height) - y);
     if (w < 1 || h < 1) return null;
     return { x, y, width: w, height: h };
   };
@@ -927,7 +944,10 @@ exports.createBrowser = (window, log, options = {}) => {
       passwordManager?.navigated(tab);
       tab.favicon = undefined;
       tab.iconKey = undefined;
+      const from = tab.url;
       commit(tab, { url: target, error: '' });
+      // A move from a mailbox to its sign-in page is a sign-out; the new page's title comes later.
+      webMailSeen(target, '', from);
     });
     contents.on('page-favicon-updated', (_event, favicons) => { if (live()) tab.favicon = Array.isArray(favicons) ? favicons[0] : undefined; });
     // The tab strip shows a speaker while the page plays sound (or is muted), so the panel hears of every change.
@@ -946,6 +966,7 @@ exports.createBrowser = (window, log, options = {}) => {
       // instead of being read only at did-stop-loading; a later in-page title change updates it again.
       if (!live()) return;
       commit(tab, { title, challenge: VERIFY_PAGE.test(title || '') });
+      webMailSeen(tab.url, title);
     });
     contents.on('did-fail-load', (_event, code, description, target, isMainFrame) => {
       // -3 is a client-side abort (a navigation replaced by another one), not a page error.
@@ -1917,6 +1938,8 @@ exports.createBrowser = (window, log, options = {}) => {
       }
       case 'list':
         return [...tabs.values()].map(stateOf);
+      case 'webMail':
+        return webMail.state();
       case 'state':
         return stateOf(requireTab(value.tabId));
       case 'navigate':

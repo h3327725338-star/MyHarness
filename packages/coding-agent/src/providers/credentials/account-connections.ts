@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { getAgentDir } from "../../config.ts";
 import { type AuthStorageBackend, FileAuthStorageBackend } from "./auth-storage.ts";
+import { type ExistingGitHubFinder, findExistingGitHubSignIn } from "./github-existing-signin.ts";
 
 // Broad OAuth access requested by GitHub Connect; GitHub/organization policy remains authoritative.
 export const GITHUB_SCOPES = [
@@ -27,10 +28,17 @@ export interface ConnectedAccount {
 	login: string;
 	id: number;
 }
+/**
+ * How the saved GitHub connection was made: "app" through the OAuth app's device flow (also every connection saved
+ * before sources were recorded), "gh" / "git" by taking the sign-in GitHub CLI or Git already had on this computer.
+ */
+export type GitHubSource = "app" | "gh" | "git";
 interface GitHubConnection {
 	account: ConnectedAccount;
 	token: string;
+	/** Empty for a sign-in taken from GitHub CLI or Git: there is no OAuth app of ours to refresh it with. */
 	clientId: string;
+	source?: GitHubSource;
 	expiresAt?: number;
 	refreshToken?: string;
 	refreshExpiresAt?: number;
@@ -50,13 +58,16 @@ export interface GitHubDevicePrompt {
 export class AccountConnections {
 	private readonly storage: AuthStorageBackend;
 	private readonly request: typeof fetch;
+	private readonly findExisting: ExistingGitHubFinder;
 
 	constructor(
 		storage: AuthStorageBackend = new FileAuthStorageBackend(join(getAgentDir(), "account-connections.json")),
 		request: typeof fetch = fetch,
+		findExisting: ExistingGitHubFinder = findExistingGitHubSignIn,
 	) {
 		this.storage = storage;
 		this.request = request;
+		this.findExisting = findExisting;
 	}
 
 	private read(): ConnectionData {
@@ -75,6 +86,7 @@ export class AccountConnections {
 					typeof data.github.account?.login !== "string" ||
 					!Number.isSafeInteger(data.github.account?.id) ||
 					(data.github.refreshToken !== undefined && typeof data.github.refreshToken !== "string") ||
+					(data.github.source !== undefined && !["app", "gh", "git"].includes(data.github.source)) ||
 					(data.github.scopes !== undefined &&
 						(!Array.isArray(data.github.scopes) ||
 							data.github.scopes.some((scope: unknown) => typeof scope !== "string"))) ||
@@ -111,6 +123,12 @@ export class AccountConnections {
 		return this.read().github?.scopes ?? [];
 	}
 
+	/** How the saved connection was made, or undefined when GitHub is not connected. */
+	getSource(): GitHubSource | undefined {
+		const connection = this.read().github;
+		return connection ? (connection.source ?? "app") : undefined;
+	}
+
 	async disconnect(): Promise<void> {
 		await this.storage.withLockAsync(async (text) => {
 			const data = this.parse(text);
@@ -119,7 +137,12 @@ export class AccountConnections {
 		});
 	}
 
-	private async json(url: string, init: RequestInit, signal: AbortSignal): Promise<Record<string, unknown>> {
+	private async json(
+		url: string,
+		init: RequestInit,
+		signal: AbortSignal,
+		onHeaders?: (headers: Headers) => void,
+	): Promise<Record<string, unknown>> {
 		let response: Response;
 		try {
 			response = await this.request(url, {
@@ -133,6 +156,7 @@ export class AccountConnections {
 		}
 		if (response.status === 401) throw new Error("GitHub 登录已失效，请选择重新授权。");
 		if (!response.ok) throw new Error(`GitHub 请求失败（HTTP ${response.status}），请稍后重试。`);
+		onHeaders?.(response.headers);
 		try {
 			const data = await response.json();
 			if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error();
@@ -142,7 +166,11 @@ export class AccountConnections {
 		}
 	}
 
-	private async identity(token: string, signal: AbortSignal): Promise<ConnectedAccount> {
+	private async identity(
+		token: string,
+		signal: AbortSignal,
+		onHeaders?: (headers: Headers) => void,
+	): Promise<ConnectedAccount> {
 		const data = await this.json(
 			"https://api.github.com/user",
 			{
@@ -154,6 +182,7 @@ export class AccountConnections {
 				},
 			},
 			signal,
+			onHeaders,
 		);
 		if (typeof data.login !== "string" || !/^[a-zA-Z0-9-]+$/.test(data.login) || !Number.isSafeInteger(data.id)) {
 			throw new Error("GitHub 账号信息无效，请重新授权。");
@@ -225,6 +254,7 @@ export class AccountConnections {
 			const updated = {
 				account: connection.account,
 				clientId: connection.clientId,
+				source: connection.source,
 				scopes:
 					typeof response.scope === "string" ? response.scope.split(/[ ,]+/).filter(Boolean) : connection.scopes,
 				...fields,
@@ -354,6 +384,33 @@ export class AccountConnections {
 		return redact(await response.text());
 	}
 
+	/**
+	 * Connect with the GitHub sign-in this computer already has (GitHub CLI, then Git's credential helper), so signing
+	 * in needs no OAuth app of ours. `interactive`: when neither has one, Git Credential Manager may open its own GitHub
+	 * sign-in. The token is checked against GitHub and saved like a device-flow one; undefined when none was found.
+	 */
+	async connectExisting(signal: AbortSignal, interactive = false): Promise<ConnectedAccount | undefined> {
+		const found = await this.findExisting(signal, interactive);
+		signal.throwIfAborted();
+		if (!found) return undefined;
+		let scopes: string[] = [];
+		const account = await this.identity(found.token, signal, (headers) => {
+			scopes = (headers.get("x-oauth-scopes") ?? "").split(/[ ,]+/).filter(Boolean);
+		});
+		signal.throwIfAborted();
+		const connection: GitHubConnection = { account, token: found.token, clientId: "", source: found.source, scopes };
+		try {
+			await this.storage.withLockAsync(async (text) => {
+				signal.throwIfAborted();
+				return { result: undefined, next: JSON.stringify({ ...this.parse(text), github: connection }) };
+			});
+		} catch {
+			signal.throwIfAborted();
+			throw new Error("已找到 GitHub 登录，但无法保存本机凭据。请检查账户连接文件权限与格式后重试。");
+		}
+		return account;
+	}
+
 	async connect(signal: AbortSignal, onDevice: (prompt: GitHubDevicePrompt) => void): Promise<ConnectedAccount> {
 		const clientId = this.getClientId();
 		if (!clientId) throw new Error("请先配置 GitHub OAuth App Client ID，并在应用中启用 Device Flow。");
@@ -414,6 +471,7 @@ export class AccountConnections {
 			const connection: GitHubConnection = {
 				account,
 				clientId,
+				source: "app",
 				scopes: typeof token.scope === "string" ? token.scope.split(/[ ,]+/).filter(Boolean) : [],
 				...fields,
 			};

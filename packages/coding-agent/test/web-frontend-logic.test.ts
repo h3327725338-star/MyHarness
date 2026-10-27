@@ -699,7 +699,7 @@ describe("Web UI: a run ended by an interrupting message", () => {
 				stats: { actions: 7 },
 				duration: 63_000,
 			});
-			expect(summary.label).toBe("运行 1分3秒 后转去回复你的新消息 · 7 个操作");
+			expect(summary.label).toBe("运行 1分3秒 后转入新消息 · 7 个操作");
 			expect(summary.label).not.toContain("取消");
 		} finally {
 			setLang(previous);

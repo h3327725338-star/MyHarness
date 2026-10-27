@@ -704,12 +704,13 @@ function FinalMessage({ final }) {
 	const buffered = useRafBufferedText(final.text, final.streaming);
 	const { stable, tail } = useMemo(() => splitStableTail(buffered), [buffered]);
 	const text = final.streaming ? stable : final.text;
+	const counts = usage ? [usage.input + usage.cacheRead > 0 ? t("{n} tokens in", { n: fmtCount(usage.input + usage.cacheRead) }) : "", usage.output ? t("{n} tokens out", { n: fmtCount(usage.output) }) : ""].filter(Boolean) : [];
 	return html`<div class=${`final ${final.streaming ? "streaming" : ""}`}>
 		<div class="final-stream" style=${{ display: "flex", flexDirection: "column", minWidth: 0 }}>${text ? html`<${FinalStable} text=${text} />` : null}${final.streaming && tail ? html`<${FinalTail} text=${tail} />` : null}</div>
 		${final.partial ? html`<div class="dim partial-note">${t("The response was cut off.")}</div>` : null}
 		${!final.streaming ? html`<div class="msg-actions final-actions">
 			<${CopyButton} text=${final.text} label=${t("Copy answer")} />
-			<span class="dim msg-meta truncate">${message.model}${usage ? ` · ${[usage.input + usage.cacheRead > 0 ? t("{n} tokens in", { n: fmtCount(usage.input + usage.cacheRead) }) : "", usage.output ? t("{n} tokens out", { n: fmtCount(usage.output) }) : ""].filter(Boolean).join(" / ")}` : ""}</span>
+			<span class="dim msg-meta">${message.model}${counts.length ? " · " : ""}${counts.map((count, index) => html`${index ? " / " : ""}<span class="msg-meta-count">${count}</span>`)}</span>
 		</div>` : null}
 	</div>`;
 }
@@ -1020,7 +1021,50 @@ function readPlace(el, stuck) {
 	}
 	if (found < 0) return { stick: true };
 	const node = sections[found];
-	return { stick: false, key: node.dataset.turnKey, offset: Math.round(top - node.getBoundingClientRect().top) };
+	const place = { stick: false, key: node.dataset.turnKey, offset: Math.round(top - node.getBoundingClientRect().top) };
+	// The block at the top inside that turn too (its path of child positions and the start of its text): coming back at
+	// another column width (a panel still sliding open) puts the same paragraph at the top, not the same pixel of the turn.
+	const block = readingAnchor(el, el.querySelector(":scope > .transcript-inner"));
+	const path = [];
+	for (let at = block?.node; at && at !== node; at = at.parentElement) path.unshift(Array.prototype.indexOf.call(at.parentElement?.children ?? [], at));
+	if (block && block.node !== node && node.contains(block.node)) Object.assign(place, { path, blockTop: Math.round(block.top), blockText: block.node.textContent.slice(0, 40) });
+	return place;
+}
+/** The block a remembered place names inside its turn `node`, or null when the turn no longer has it there. */
+function placeBlock(node, want) {
+	if (!want.path) return null;
+	let at = node;
+	for (const index of want.path) at = at?.children[index];
+	return at && at.textContent.slice(0, 40) === want.blockText ? at : null;
+}
+/**
+ * The block at the top of the view in `el` (a paragraph, a code block, a card: the deepest box that is still partly
+ * above the top line, or the first one below it) and how far its top is from the top of the view. Children are searched
+ * in their vertical order, a handful of layout reads per level.
+ */
+function readingAnchor(el, inner) {
+	if (!el || !inner) return null;
+	const top = el.getBoundingClientRect().top;
+	let parent = inner;
+	let node = null;
+	for (let depth = 0; depth < 8; depth++) {
+		const kids = parent.children;
+		let lo = 0;
+		let hi = kids.length - 1;
+		let found = -1;
+		while (lo <= hi) {
+			const mid = (lo + hi) >> 1;
+			if (kids[mid].getBoundingClientRect().bottom > top + 1) {
+				found = mid;
+				hi = mid - 1;
+			} else lo = mid + 1;
+		}
+		if (found < 0) break;
+		node = kids[found];
+		if (node.getBoundingClientRect().top >= top - 1 || !node.firstElementChild) break;
+		parent = node;
+	}
+	return node ? { node, top: node.getBoundingClientRect().top - top } : null;
 }
 /**
  * Right before a mode reveal captures the page (beforeModeCapture): the turns of `el` out of view skip their contents
@@ -1288,6 +1332,21 @@ export function Transcript() {
 		const drift = node.getBoundingClientRect().top - el.getBoundingClientRect().top - a.offset;
 		if (Math.abs(drift) >= 1) { el.scrollTop += drift; lastTop.current = el.scrollTop; }
 	};
+	// Away from the bottom, the block the reader has at the top of the view (readingAnchor). Overflow anchoring is off (the
+	// follow does its own scrolling), so without this a change of the column's width — the panel sliding open beside it
+	// when a chat with an open panel comes back, the window resized — rewraps every turn above and moves the text away.
+	const reading = useRef(null);
+	const noteReading = () => {
+		reading.current = stick.current ? null : readingAnchor(scroller.current, content.current);
+	};
+	const holdReading = () => {
+		const r = reading.current;
+		const el = scroller.current;
+		if (!r || !el || stick.current || anchor.current || restore.current) return;
+		if (!r.node.isConnected) { reading.current = null; return; }
+		const drift = r.node.getBoundingClientRect().top - el.getBoundingClientRect().top - r.top;
+		if (Math.abs(drift) >= 1) { el.scrollTop += drift; lastTop.current = el.scrollTop; }
+	};
 	const holdPlace = useRef(false);
 	// A jump to one message of another chat, waiting for that chat to be on screen (see the reveal effect below).
 	const revealWant = useRef(null);
@@ -1317,6 +1376,10 @@ export function Transcript() {
 		// Size changes and scroll anchoring are not reader intent.
 		if (!programmatic.current && Date.now() - lastInteract.current < 500 && top < lastTop.current - 2 && distance > 72) stick.current = false;
 		if (near && !holdPlace.current) { stick.current = true; programmatic.current = false; }
+		// The block at the top is taken again only when the view itself moved: a measure after a layout change (the column
+		// rewrapping) would take the moved text as the new place before holdReading puts it back.
+		if (stick.current) reading.current = null;
+		else if (top !== lastTop.current || !reading.current) noteReading();
 		lastTop.current = top;
 		const show = !stick.current && distance > 72;
 		setAway((prev) => (prev === show ? prev : show));
@@ -1412,6 +1475,7 @@ export function Transcript() {
 			if (stick.current) followToBottom();
 			else {
 				holdAnchor();
+				holdReading();
 				scheduleMeasure();
 			}
 		});
@@ -1433,6 +1497,7 @@ export function Transcript() {
 	}), []);
 	useLayoutEffect(() => {
 		anchor.current = null;
+		reading.current = null;
 		// The cached height belongs to the previous session; the first follow after a switch reads once.
 		contentHeight.current = 0;
 		// So do heights a chunk or a preview swap of the previous session took: they must not shift this one.
@@ -1446,7 +1511,7 @@ export function Transcript() {
 			stick.current = false;
 			holdPlace.current = false;
 			programmatic.current = false;
-			restore.current = { session, key: place.key, offset: place.offset, until: Date.now() + RESTORE_WAIT_MS };
+			restore.current = { session, key: place.key, offset: place.offset, path: place.path, blockTop: place.blockTop, blockText: place.blockText, until: Date.now() + RESTORE_WAIT_MS };
 			restoreTimer.current = setTimeout(() => giveUpRestore(), RESTORE_WAIT_MS + 50);
 			applyRestore();
 			return;
@@ -1493,6 +1558,12 @@ export function Transcript() {
 	// first commit after a switch already shows 20, never a stale full mount.
 	const [win, setWin] = useState(OPEN_WINDOW);
 	const batchSession = useRef(session);
+	// A switch that shows a loading page first (a mode switch, a chat that is not loaded yet) empties this page while the
+	// session is still the one being left, and the next session comes later: its reader's place is read in the render
+	// that starts the switch, while the page still shows its turns. Read later, the page is empty and the place is lost.
+	const wasSwitching = useRef(!!switching);
+	if (switching && !wasSwitching.current && session && restore.current?.session !== session) rememberPlace(session, readPlace(scroller.current, stick.current));
+	wasSwitching.current = !!switching;
 	const switched = batchSession.current !== session;
 	const firstWin = useRef(OPEN_WINDOW);
 	if (switched) {
@@ -1561,11 +1632,15 @@ export function Transcript() {
 		if (node) {
 			// Waiting at the bottom may have counted as following it: the restored place is not.
 			stick.current = false;
-			el.scrollTop = node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop + want.offset;
+			const block = placeBlock(node, want);
+			el.scrollTop = block
+				? block.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - want.blockTop
+				: node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop + want.offset;
 			lastTop.current = el.scrollTop;
 			readerPlaces.delete(want.session);
 			restore.current = null;
 			clearTimeout(restoreTimer.current);
+			noteReading();
 			scheduleMeasure();
 			return;
 		}

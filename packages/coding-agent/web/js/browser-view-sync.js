@@ -117,7 +117,9 @@ export function browserViewRect(element) {
 	const width = Math.round(box.right) - x;
 	const height = Math.round(box.bottom) - y;
 	if (width < 1 || height < 1) return null;
-	if (x < 0 || y < 0 || x + width > window.innerWidth || y + height > window.innerHeight) return null;
+	// A box that reaches the window's edge may round a pixel past it under an app zoom (innerWidth/innerHeight are whole
+	// numbers); the host clamps that pixel to the window instead of the view being hidden.
+	if (x < 0 || y < 0 || x + width > window.innerWidth + 1 || y + height > window.innerHeight + 1) return null;
 	for (let ancestor = element.parentElement; ancestor && ancestor !== document.documentElement; ancestor = ancestor.parentElement) {
 		const style = getComputedStyle(ancestor);
 		const clips = /(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`);

@@ -28,7 +28,7 @@ export function isProfileLocked(lockFile: string): boolean {
 }
 
 // Windows Restart Manager names the processes that have a file open. Only browser processes are returned.
-const HOLDERS_SCRIPT = String.raw`
+const HOLDERS_SCRIPT = `
 $ErrorActionPreference = 'Stop'
 Add-Type @'
 using System; using System.Collections.Generic; using System.Runtime.InteropServices;

@@ -301,7 +301,10 @@ export class MailConnections {
 
 	/** Finds one connected mailbox by address (optionally `provider:address`); with no reference, the only one. */
 	private pick(accounts: MailConnection[], reference: string | undefined): MailConnection {
-		if (!accounts.length) throw new Error("尚未连接邮箱，请在 /settings → Mail Connect 中连接 Gmail 或 Outlook。");
+		if (!accounts.length)
+			throw new Error(
+				"没有通过 API 连接的邮箱。用户若已在内置浏览器中登录 Gmail 或 Outlook，请改用 workspace 工具在 https://mail.google.com/ 或 https://outlook.office.com/mail/ 网页中处理邮件；否则请用户在 设置 → 连接 中登录。",
+			);
 		const wanted = reference?.trim().toLowerCase();
 		if (!wanted) {
 			if (accounts.length === 1) return accounts[0];

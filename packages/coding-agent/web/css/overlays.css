@@ -102,8 +102,10 @@
 /* The shortcut editors all share one width: the longest key string plus the field padding ("Ctrl+Alt+Shift+K"). */
 .set-control > [data-shortcut-editor] { flex: none; width: 120px; min-width: 0; }
 .set-control > .toggle { margin-left: auto; }
+/* The box is --h-control tall with its 1px border and 2px padding inside it: the buttons take exactly what is left
+   (6px less), so the chosen one has the same 2px above and below it. */
 .set-control .segmented { display: flex; box-sizing: border-box; }
-.set-control .segmented button { flex: 1 1 0; justify-content: center; min-width: 0; height: calc(var(--h-control) - 8px); padding: 0 6px; white-space: nowrap; }
+.set-control .segmented button { flex: 1 1 0; justify-content: center; min-width: 0; height: calc(var(--h-control) - 6px); padding: 0 6px; white-space: nowrap; }
 /* Searchable Multi-Select */
 .set-multiselect { position: relative; display: flex; align-items: center; width: 100%; min-width: 0; }
 .set-multiselect-btn { width: 100%; height: var(--h-control); min-width: 0; display: inline-flex; align-items: center; justify-content: flex-start; text-align: left; padding: 0 28px 0 8px; cursor: pointer; }
@@ -395,6 +397,13 @@
 .svc-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; padding-left: 30px; }
 .svc-field { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); color: var(--text-3); }
 .svc-field .field { width: 100%; }
+/* Advanced: the user's own OAuth apps, folded into one line at the end of the page. */
+.svc-adv .svc-app-toggle { min-height: 40px; gap: 8px; }
+.svc-adv-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); opacity: 0.8; }
+.svc-adv-item { border-top: 1px solid var(--border); }
+.svc-adv-name { display: flex; align-items: center; gap: 8px; padding: 12px 16px 0; font-size: var(--fs-body); }
+.svc-adv-item .svc-setup { border-top: 0; padding-top: 10px; }
+.svc-adv-item .svc-app { border-top: 0; }
 .svc-foot { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-size: var(--fs-sm); color: var(--text-3); }
 @media (max-width: 760px) {
 	/* Too narrow for the action beside the name: it goes under the card head; account buttons go under the address. */

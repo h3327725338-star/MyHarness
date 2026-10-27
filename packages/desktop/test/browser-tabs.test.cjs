@@ -351,6 +351,16 @@ test('window resize re-clamps the native view and a zero-sized window hides it',
   browser.destroy();
 });
 
+test('at an app zoom the view ends where the page box ends and reaches the window edges', async () => {
+  const { browser, window } = loadBrowser();
+  window.size = [1105, 1032];
+  window.webContents.getZoomFactor = () => 1.1;
+  await browser.command({ action: 'open', url: 'https://example.com/', rect: { x: 0, y: 84, width: 1004, height: 854 } });
+  // Rounding each size on its own stopped a pixel short of the window's right and bottom edges (y 92 + height 939).
+  assert.deepEqual(onWindow(browser.tabs[0].view), { x: 0, y: 92, width: 1105, height: 940 });
+  browser.destroy();
+});
+
 test('a clip cuts the active view at the uncovered part without resizing it', async () => {
   const { browser } = loadBrowser();
   const rect = { x: 100, y: 50, width: 800, height: 600 };

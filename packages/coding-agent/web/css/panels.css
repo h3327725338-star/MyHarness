@@ -1,9 +1,9 @@
 .panel-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .panel-pane[hidden] { display: none; }
 .desktop-browser-panel { display: flex; flex: 1; min-height: 0; flex-direction: column; }
-/* The native page view of the desktop host lies exactly over this box. The left margin keeps it clear of the panel's
-   resize handle (which overlaps the panel's edge), so the handle stays draggable. */
-.desktop-browser-target { position: relative; flex: 1; min-height: 0; margin-left: 4px; overflow: hidden; }
+/* The native page view of the desktop host lies exactly over this box, which reaches every edge of the panel: no strip
+   of the panel shows beside the site. The resize handle on the panel's edge stays draggable on its outer half. */
+.desktop-browser-target { position: relative; flex: 1; min-height: 0; overflow: hidden; }
 /* New-tab page: the user's shortcuts as round site icons in the middle of the empty tab (Chrome's start page), with
    groups drawn as a 2x2 of small icons (the Start menu's folders). It only shows while the tab has no native page. */
 .sd { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px; overflow: auto; }

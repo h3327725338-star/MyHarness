@@ -7,11 +7,12 @@ import { WebHttpServer } from "../src/modes/web/http-server.ts";
 import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/browser/firefox.ts";
 
 // Each chat keeps the reader's place: back to a chat left in the middle shows the same turn at the same place in the
-// first frame (first commit still <= 20 turns), new messages there keep it and show the jump button, sending goes to the
-// bottom, a chat left at the bottom comes back at the bottom, a reopened slot of the same session finds the place, and a
-// place whose turn is gone opens at the bottom. A task-end notification's landing wins over a remembered place. A remount
-// of the Transcript (a language switch rebuilds the interface) stays where the reader is, and the notification of a chat
-// that waits for an answer opens it at the bottom whatever place was remembered.
+// first frame (first commit still <= 20 turns), new messages there keep it and show the jump button, sending from further
+// up keeps it too, a chat left at the bottom comes back at the bottom, a reopened slot of the same session finds the
+// place, and a place whose turn is gone opens at the bottom. A task-end notification's landing wins over a remembered
+// place. A remount of the Transcript (a language switch rebuilds the interface) stays where the reader is, and the
+// notification of a chat that waits for an answer opens it at the bottom whatever place was remembered. A switch through
+// a loading page (a mode switch) still comes back to the place, and a narrowing column keeps the text at the top.
 const installed = detectInstalledBrowsers();
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
 	"keeps each chat's reading place across switches",
@@ -25,6 +26,11 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 		try {
 			for (const dir of ["js", "vendor", "css"])
 				server.mount({ prefix: `/${dir}/`, directory: fileURLToPath(new URL(`../web/${dir}`, import.meta.url)) });
+			// Answers render as Markdown paragraphs, like the app, so a narrower column rewraps separate blocks.
+			server.mount({
+				prefix: "/markdown/",
+				directory: fileURLToPath(new URL("../src/exports/html/vendor", import.meta.url)),
+			});
 			const user = (p: string, i: number) => ({
 				kind: "user",
 				id: `u-${p}-${i}`,
@@ -93,7 +99,7 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 			server.mount({ prefix: "/test/", directory: root });
 			writeFileSync(
 				join(root, "index.html"),
-				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/layout.css"><link rel="stylesheet" href="/css/transcript.css"><div id="app" style="height:600px;display:flex;flex-direction:column"></div><script type="module" src="/test/test.js"></script>',
+				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/layout.css"><link rel="stylesheet" href="/css/transcript.css"><div id="app" style="height:600px;display:flex;flex-direction:column"></div><script src="/markdown/marked.min.js"></script><script type="module" src="/test/test.js"></script>',
 			);
 			writeFileSync(
 				join(root, "test.js"),
@@ -225,6 +231,30 @@ try {
  if(atBottom()) throw Error('could not scroll the waiting chat up');
  await openChatAtBottom('sa2');
  if(!await waitFor(atBottom,3000)) throw Error('the waiting chat on screen did not go to the bottom: '+show(anchor()));
+ // (11) A switch that shows a loading page first (a mode switch, a chat not loaded yet) empties the page before the next
+ // session arrives: the place is still remembered, and the chat comes back there instead of at the bottom.
+ await scrollBy(-(el().scrollHeight*0.45));
+ const left4=anchor();
+ if(!left4||atBottom()) throw Error('could not scroll A to the middle before the loading switch');
+ set({switching:{mode:'general',seq:-1,error:null}});
+ await frame(); await frame();
+ if(turns()!==0) throw Error('the loading page still shows '+turns()+' turns');
+ await activateSlot('sb'); await waitFor(atBottom,3000);
+ await activateSlot('sa2');
+ if(!await waitFor(()=>same(anchor(),left4),4000)) throw Error('after a switch through a loading page A shows '+show(anchor())+', left at '+show(left4));
+ // (12) The column narrows while the reader is further up (the panel sliding open beside a chat that comes back with
+ // it): the paragraph at the top of the view stays there instead of the rewrapped text moving away.
+ await waitFor(()=>turns()===80,4000); await wait(200);
+ const app=document.getElementById('app');
+ const topBlock=()=>{const top=el().getBoundingClientRect().top;for(const p of document.querySelectorAll('.transcript-inner p'))if(p.getBoundingClientRect().bottom>top+1)return p;return null;};
+ const before=topBlock();
+ const beforeTop=before.getBoundingClientRect().top-el().getBoundingClientRect().top;
+ for(const w of [700,620,540,460,420]){app.style.width=w+'px';await frame();}
+ await wait(300);
+ const after=topBlock();
+ const afterTop=before.getBoundingClientRect().top-el().getBoundingClientRect().top;
+ if(after!==before||Math.abs(afterTop-beforeTop)>3) throw Error('narrowing the column moved the text: top block was "'+before.textContent.slice(0,40)+'" at '+Math.round(beforeTop)+', now "'+(after?.textContent||'').slice(0,40)+'" ('+Math.round(afterTop)+')');
+ app.style.width='';
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) { document.body.insertAdjacentHTML('beforeend','<p id="ready">'+String(error.stack||error).replace(/</g,'&lt;')+'</p>'); }
 `,

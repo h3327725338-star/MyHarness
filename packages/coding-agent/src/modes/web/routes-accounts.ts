@@ -3,14 +3,17 @@
  * (`AccountConnections`, stored in account-connections.json). The browser only ever sees the login and whether
  * something is configured, never a token.
  *
- * Connecting uses GitHub's device flow: the server asks GitHub for a code, the page shows it with the verification
- * link, and the server waits for the authorization in the background. Progress arrives as `github_event` SSE events.
+ * Signing in takes the simplest way there is. With an OAuth app of the user's own (Client ID) it is GitHub's device
+ * flow: the server asks GitHub for a code, the page shows it with the verification link, and the server waits for the
+ * authorization in the background. Without one, the sign-in GitHub CLI or Git already has on this computer is used, and
+ * when neither has one Git Credential Manager opens its own GitHub sign-in. Progress arrives as `github_event` SSE events.
  */
 
 import {
 	AccountConnections,
 	type ConnectedAccount,
 	type GitHubDevicePrompt,
+	type GitHubSource,
 } from "../../providers/credentials/account-connections.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 
@@ -26,16 +29,20 @@ export function registerAccountRoutes(server: WebHttpServer, connections = new A
 		let account: ConnectedAccount | undefined;
 		let scopes: string[] = [];
 		let clientId = "";
+		let source: GitHubSource | undefined;
 		let error: string | null = null;
 		try {
 			account = connections.getAccount();
 			scopes = connections.getGrantedScopes();
 			clientId = connections.getClientId();
+			source = connections.getSource();
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
 		}
 		return {
 			account: account ?? null,
+			/** "app" (the OAuth app's device flow), "gh" (GitHub CLI's sign-in) or "git" (Git's), null when not connected. */
+			source: source ?? null,
 			/** Older connections were granted fewer scopes; reconnecting grants private repositories too. */
 			needsReauthorization: !!account && !scopes.includes("repo"),
 			clientIdConfigured: clientId.length > 0,
@@ -58,25 +65,46 @@ export function registerAccountRoutes(server: WebHttpServer, connections = new A
 		return status();
 	});
 
-	/** Starts the device flow (or, with `verify`, checks the saved login) and reports the outcome as `github_event`. */
+	/**
+	 * Signs in (or, with `verify`, checks the saved login) and reports the outcome as `github_event`. `method`: "app"
+	 * for the device flow of the user's own OAuth app, "existing" for the sign-in this computer already has; by default
+	 * the OAuth app when one is set up, otherwise the existing sign-in.
+	 */
 	server.route("POST", "/api/github/connect", ({ body }) => {
-		const verify = asObject(body ?? {}).verify === true;
+		const options = asObject(body ?? {});
+		const verify = options.verify === true;
+		if (options.method !== undefined && options.method !== "app" && options.method !== "existing")
+			throw new HttpError(400, 'method must be "app" or "existing"');
 		if (pending) throw new HttpError(409, "A GitHub connection is already waiting for authorization.");
-		if (!verify && !connections.getClientId()) throw new HttpError(400, "Set the GitHub Client ID first.");
+		const method = options.method ?? (connections.getClientId() ? "app" : "existing");
+		if (!verify && method === "app" && !connections.getClientId())
+			throw new HttpError(400, "Set the GitHub Client ID first.");
 		const controller = new AbortController();
 		const current: { controller: AbortController; prompt?: GitHubDevicePrompt } = { controller };
 		pending = current;
-		const run = verify
+		const run: Promise<ConnectedAccount> = verify
 			? connections.verify(controller.signal)
-			: connections.connect(controller.signal, (prompt) => {
-					if (controller.signal.aborted) return;
-					current.prompt = prompt;
-					server.broadcast("github_event", { type: "prompt", prompt });
-				});
+			: method === "existing"
+				? connections.connectExisting(controller.signal, true).then((account) => {
+						if (!account)
+							throw new Error(
+								"这台电脑上没有找到可用的 GitHub 登录。可以先在终端运行 gh auth login，或用 Git 向 GitHub 推送一次；也可以在“高级”里使用自己的 OAuth 应用。",
+							);
+						return account;
+					})
+				: connections.connect(controller.signal, (prompt) => {
+						if (controller.signal.aborted) return;
+						current.prompt = prompt;
+						server.broadcast("github_event", { type: "prompt", prompt });
+					});
 		run.then(
 			(account) => {
 				if (controller.signal.aborted) return;
-				server.broadcast("github_event", { type: "done", verified: verify, account });
+				let source: GitHubSource | undefined;
+				try {
+					source = connections.getSource();
+				} catch {}
+				server.broadcast("github_event", { type: "done", verified: verify, account, source: source ?? null });
 			},
 			(error: unknown) => {
 				if (controller.signal.aborted) return;

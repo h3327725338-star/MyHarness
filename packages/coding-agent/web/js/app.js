@@ -151,15 +151,6 @@ function PanelContainer() {
 		: null;
 	// A head too narrow for the section names folds them into icons, and narrower still the sections into one menu.
 	const fold = useRowFold(headRef, `${section}|${rowTabs?.length ?? 0}|${closedCount > 0}|${browserEntry}|${wsMax}|${sidebarOpen}`);
-	// The panel is never wider than the room the window leaves it (the cap of --panel-width in layout.css). A drag starts
-	// from the width that is on screen and stops at that cap, so the handle always moves with the pointer: a width saved
-	// in a larger window, or a drag past the cap, leaves no dead stretch to drag back through.
-	const room = () => Math.max(340, window.innerWidth - (state.view.sidebarOpen ? state.view.sidebarW : 0) - 520);
-	const onWidth = (value) => {
-		const w = Math.round(Math.min(value, room()));
-		state.view = { ...state.view, panelW: w };
-		document.documentElement.style.setProperty("--panel-w", `${w}px`);
-	};
 	useWidthClass(panelRef, [], [440, 440]);
 	// Panel tabs stay mounted while another tab is shown (their tree, filters and scroll survive a switch); file and
 	// browser tabs mount only while active — a browser tab's page lives in the host process and is not reloaded.
@@ -171,7 +162,6 @@ function PanelContainer() {
 		return null;
 	};
 	return html`<aside class="panel" aria-label=${t("Details")} ref=${panelRef}>
-		${wsMax ? null : html`<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => panelRef.current?.offsetWidth || state.view.panelW} onChange=${onWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />`}
 		<div class="panel-head" ref=${headRef}>
 			${wsMax && !sidebarOpen ? html`<button class="icon-btn sm panel-sidebar" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })} onPointerEnter=${peekButtonEnter} onPointerLeave=${peekButtonLeave}><${Icon} name="sidebar" size=${16} /></button>` : null}
 			<${PanelNav} section=${section} browser=${browserEntry} fold=${fold} onRestore=${closedCount > 0 ? () => actions.reopenWorkspaceTab() : null} onShow=${(value) => actions.showWorkspaceSection(value)}>${strip}<//>
@@ -395,6 +385,18 @@ function chatColumnMin() {
 	return controls ? Math.max(320, controls.offsetWidth + 6 + 268) : 320;
 }
 
+/**
+ * The panel is never wider than the room the window leaves it (the cap of --panel-width in layout.css). A drag starts
+ * from the width that is on screen and stops at that cap, so the handle always moves with the pointer: a width saved
+ * in a larger window, or a drag past the cap, leaves no dead stretch to drag back through.
+ */
+function onPanelWidth(value) {
+	const room = Math.max(340, window.innerWidth - (state.view.sidebarOpen ? state.view.sidebarW : 0) - 520);
+	const w = Math.round(Math.min(value, room));
+	state.view = { ...state.view, panelW: w };
+	document.documentElement.style.setProperty("--panel-w", `${w}px`);
+}
+
 /** In collaboration mode the chat column is as wide as the user dragged it, within the room the workspace leaves. */
 function onChatWidth(value) {
 	const w = Math.round(Math.max(chatColumnMin(), Math.min(value, Math.max(320, window.innerWidth - 480))));
@@ -494,10 +496,17 @@ export function App() {
 	// Inside a mode reveal the panel is drawn open at once: the reveal is the motion, the new mode appears as it stays.
 	const panelShown = panel.shown || (panelOpen && modeRevealActive());
 	const layoutClass = `app ${panelShown ? "panel-open" : ""} ${wsMax && panel.mounted ? "ws-max" : ""}`;
+	// The panel's width handle lives on the conversation's side of the line between them: a website in the panel is drawn
+	// by the desktop host above the page and would take every click on a handle inside the panel.
+	const panelHandle =
+		!wsMax && panelShown
+			? html`<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => appRef.current?.querySelector(".panel")?.offsetWidth || state.view.panelW} onChange=${onPanelWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />`
+			: null;
 	return html`<div class=${layoutClass} ref=${appRef}>
 		<${Sidebar} />
 		<main class="main" ref=${mainRef}>
 			${wsMax ? html`<${Resizer} invert min=${chatColumnMin()} max=${Math.round(window.innerWidth * 0.6)} getValue=${() => mainRef.current?.offsetWidth || state.view.chatW} onChange=${onChatWidth} onEnd=${() => setView({ chatW: state.view.chatW })} />` : null}
+			${panelHandle}
 			<${FoldIn} content=${!restarting && everConnected && !connected ? html`<div class="conn-banner" role="status">${t("Connection to the local server lost — reconnecting…")}</div>` : null} />
 			<${Header} />
 			<${Transcript} />

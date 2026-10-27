@@ -46,24 +46,35 @@ Interactive mode 和 Web UI 都可以在任务完成、失败或中断后显示�
 
 ## GitHub Connect
 
-打开设置 → **连接** → GitHub，或 `/settings` → **GitHub Connect** → **连接 GitHub**。在 GitHub 中输入界面显示的 code 并确认授权。这里没有 third-party account list 或多页 wizard。如果缺少 Client ID，单个 setup screen 会提供所需的表单字段和注册 OAuth App 的链接。已有 Client IDs 仍可使用；`MYHARNESS_GITHUB_CLIENT_ID` 会覆盖已保存的值。不需要 Client Secret。
+打开设置 → **连接** → GitHub → **登录**，或 `/settings` → **GitHub Connect** → **连接 GitHub**。登录按以下顺序选最简单的方式（`POST /api/github/connect` 的 `method` 可指定 `app` / `existing`，省略时由服务端选）：
 
-连接会请求以下 broad scopes：`repo`、`workflow`、`user`、`admin:org`、`admin:repo_hook`、`admin:org_hook`、`admin:public_key`、`admin:gpg_key`、`admin:ssh_signing_key`、`gist`、`notifications`、`delete_repo`、`write:packages`、`delete:packages`、`codespace` 和 `project`。这些权限包含 private repositories、account email addresses 以及管理/删除权限。实际访问仍受用户自身权限、GitHub 已授予的 permissions 和组织 SSO policy 限制。GitHub email APIs 只会列出地址，不会读取 email inbox。通过以前的 identity-only flow 创建的连接需要**重新授权**才能获得扩展后的 permissions。
+1. 配置了自己的 OAuth App（Client ID）时：GitHub device flow，在 GitHub 中输入界面显示的 code 并确认授权，请求下面的 broad scopes。
+2. 否则复用这台电脑已有的 GitHub 登录（`providers/credentials/github-existing-signin.ts`）：先 `gh auth token`（GitHub CLI），再 `git credential fill`（Git Credential Manager，`GCM_INTERACTIVE=never`）。只接受 GitHub API 令牌（`gho_`/`ghp_`/`github_pat_` 等），普通账号密码不用。令牌先用 `GET /user` 校验，权限取自响应的 `X-OAuth-Scopes`（GitHub CLI 通常是 `gist read:org repo workflow`，Git Credential Manager 是 `repo gist workflow`），连接记为 `source: gh | git`。
+3. 两者都没有时，让 Git Credential Manager 弹出它自己的 GitHub 登录（浏览器授权，最长等 5 分钟），成功后 `git credential approve` 让 Git 也保存这次登录。
+
+“重新授权”沿用当前连接的方式。自己的 OAuth App 在设置 → 连接最下方的**高级：使用自己的 OAuth 应用**里配置，需要 device flow 的 broad scopes 时才用；`MYHARNESS_GITHUB_CLIENT_ID` 会覆盖已保存的值。不需要 Client Secret。
+
+通过自己的 OAuth App 连接时会请求以下 broad scopes：`repo`、`workflow`、`user`、`admin:org`、`admin:repo_hook`、`admin:org_hook`、`admin:public_key`、`admin:gpg_key`、`admin:ssh_signing_key`、`gist`、`notifications`、`delete_repo`、`write:packages`、`delete:packages`、`codespace` 和 `project`。这些权限包含 private repositories、account email addresses 以及管理/删除权限。实际访问仍受用户自身权限、GitHub 已授予的 permissions 和组织 SSO policy 限制。GitHub email APIs 只会列出地址，不会读取 email inbox。通过以前的 identity-only flow 创建的连接需要**重新授权**才能获得扩展后的 permissions。
 
 默认的 main-agent `github` tool 会使用已保存的 credentials 发送 authenticated REST 和 GraphQL JSON requests，不需要 GitHub CLI。例如，`/user/repos?visibility=private&per_page=100` 用于列出 private repositories，`/user/emails` 用于列出 account email addresses。分页时继续请求返回的 `next` path。Requests 仅允许访问 `api.github.com`，会拒绝 redirects，tokens 也不会出现在 tool arguments 或 shell environments 中。Tool 支持 GET、POST、PUT、PATCH 和 DELETE；写操作仍需要用户针对具体操作给出 instruction。它不会改变系统 Git/SSH 或 `gh` login state。显式的 tool allowlists 和 delegated-session restrictions 仍然有效。
 
-即将过期的 credentials 会在 API access 或**验证连接**前自动 refresh。已保存的 accounts 会标记为**已保存**，不会被表述为远程有效。Refresh 失败可通过**重新授权**解决。Credentials 仍保存在现有的 `~/.myharness/agent/account-connections.json` 文件（或配置的 agent directory）中，依靠 filesystem permissions、locking 和 atomic writes 保护，不使用 keychain encryption。**断开连接…** 会删除本地 credentials；**打开 GitHub 授权管理**可以单独撤销远程 OAuth grant。
+即将过期的 credentials 会在 API access 或**验证连接**前自动 refresh（复用 GitHub CLI / Git 的令牌没有有效期和刷新令牌，失效后点**重新授权**再取一次）。已保存的 accounts 会标记为**已保存**，不会被表述为远程有效。Refresh 失败可通过**重新授权**解决。Credentials 仍保存在现有的 `~/.myharness/agent/account-connections.json` 文件（或配置的 agent directory）中，依靠 filesystem permissions、locking 和 atomic writes 保护，不使用 keychain encryption。**断开连接…** 会删除本地 credentials；**打开 GitHub 授权管理**可以单独撤销远程 OAuth grant。
 
 ## Mail Connect（Gmail / Outlook）
 
-打开设置 → **连接**（或 `/settings` → **Mail Connect**），可以连接任意多个邮箱，供默认的 main-agent `mail` 工具使用。页面按服务分卡片（GitHub、Gmail、Outlook），每张卡片标题旁是状态（需要设置 / 未连接 / 已连接 N 个），右侧是主操作（**开始设置**、**连接**或**添加账号**），已连接的账号逐行列出，各自带**验证**、**重新授权**、**断开连接**：
+打开设置 → **连接**（或 `/settings` → **Mail Connect**）。页面按服务分卡片（GitHub、Gmail、Outlook），每张卡片只有一个主操作**登录**；已连接的账号逐行列出，各自带**验证**、**重新授权**、**断开连接**。
+
+Google 和 Microsoft 只把邮箱 API 开放给注册过的 OAuth 应用（Outlook.com 自 2024 年 9 月起也不再接受 IMAP 应用专用密码），所以邮箱的**登录**有两种结果：
+
+- 没有配置自己的 OAuth 应用、且在桌面应用中：点**登录**会关闭设置，在内置浏览器新开该邮箱的网页版（Gmail `https://mail.google.com/`，Outlook `https://outlook.office.com/mail/`），用户在网站自己的页面登录。登录状态由内置浏览器保存，Agent 之后用 `workspace` 工具在网页里读写和整理邮件；`mail` 工具在没有 API 邮箱时会把 Agent 引向这条路。桌面宿主会告诉页面网站是否已登录（`desktop:browser` 的 `webMail`，`packages/desktop/browser-web-mail.cjs`）：Gmail 看 Google 的登录 Cookie 是否存在（只看名字），再用浏览器自己的 Cookie 读 Gmail 的 Atom 订阅得到邮箱地址；Outlook 没有这样的接口（未登录也返回同一个启动页），以标签实际显示的收件箱标题（“Mail - 名字 - Outlook”）记为已登录，从邮箱地址被转到微软登录页记为已退出；打开着的邮箱标签优先。已登录时卡片显示“已登录”和地址或名字、按钮变成**打开**，右侧栏 Session 的“连接”也列出这个邮箱；退出登录在网站上操作。旧版桌面宿主不认识 `webMail` 时，卡片保持原来的“登录”。
+- 在**高级：使用自己的 OAuth 应用**里配置了该邮箱的应用：点**登录**走下面的 OAuth 流程，连接任意多个邮箱，供默认的 main-agent `mail` 工具直接调用 API（不在桌面应用里时，没有应用的邮箱卡片显示**开始设置**，点它展开“高级”）：
 
 | 入口 | 覆盖的邮箱 | 登录与 API |
 | --- | --- | --- |
 | **连接 Gmail** | `@gmail.com` / `@googlemail.com` 个人邮箱和 Google Workspace（自定义域名）邮箱 | Google OAuth，scope `https://mail.google.com/`；Gmail API（`gmail.googleapis.com`） |
 | **连接 Outlook** | 个人 Microsoft 账号（outlook.com、hotmail.com、live.com、msn.com 等）和任意组织的 Microsoft 365 / Exchange Online 工作或学校邮箱 | Microsoft identity platform `/common`；Microsoft Graph（`graph.microsoft.com`），scope `User.Read Mail.ReadWrite Mail.Send MailboxSettings.ReadWrite offline_access` |
 
-每种邮箱第一次使用前要配置一次你自己的 OAuth 应用：点卡片上的**开始设置**展开编号步骤（第一步带注册页面的入口），最后填入 Client ID（Gmail 还要 Client Secret）保存；设置好后这些步骤收进卡片底部的“使用你自己的 OAuth 应用 · 更改”，需要换 Client ID 时再展开：
+自己的 OAuth 应用都在页面最下方默认折叠的**高级：使用自己的 OAuth 应用**里：每个服务一段编号步骤（第一步带注册页面的入口），填入 Client ID（Gmail 还要 Client Secret）保存；设置好后收成一行“使用你自己的 OAuth 应用 · 更改”，需要换 Client ID 时再展开：
 
 - Google：在 Google Cloud Console 启用 Gmail API、配置 OAuth 同意屏幕，创建类型为“桌面应用”的 OAuth 客户端，填入 Client ID 和 Client Secret（桌面客户端的 secret 不是机密，但 Google 换取令牌时需要）。停留在“测试”状态的应用只能由测试用户登录，且刷新令牌 7 天后失效；自己的 Google Workspace 可把同意屏幕设为“内部”。
 - Microsoft：在 Microsoft Entra 应用注册中选择“任何组织目录中的账户和个人 Microsoft 账户”，添加平台“移动和桌面应用程序”，重定向 URI 填 `http://localhost`，只填应用程序（客户端）ID，不需要 secret。组织可能要求管理员批准应用或禁止用户授权，这由租户策略决定。
