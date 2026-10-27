@@ -1,6 +1,4 @@
-import { existsSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { type AddressInfo, createServer, type Socket } from "node:net";
 import { describe, expect, it } from "vitest";
 import { execCommand } from "../src/platform/process/exec.ts";
 
@@ -61,19 +59,46 @@ describe("execCommand cancellation", () => {
 	});
 
 	it("terminates descendants when the command is cancelled", async () => {
-		const marker = join(tmpdir(), `myharness-exec-descendant-${process.pid}-${Date.now()}.tmp`);
-		const descendant = `setTimeout(() => { require("node:fs").writeFileSync(${JSON.stringify(marker)}, "alive"); process.exit(0); }, 900); setInterval(() => {}, 1000);`;
-		const parent = `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: "ignore" }); setInterval(() => {}, 1000);`;
+		// Cancelled once the descendant runs, and judged by its connection, which ends with its process. A fixed 120 ms
+		// timeout and a marker the descendant wrote 900 ms after it started failed under load, where the kill alone took
+		// about a second.
+		const server = createServer();
+		const connected = new Promise<Socket>((resolve) => server.once("connection", resolve));
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const { port } = server.address() as AddressInfo;
+		// Left alone, the descendant exits after 30 seconds, so a failed kill does not leave it running.
+		const descendant = `require("node:net").connect(${port}, "127.0.0.1"); setTimeout(() => {}, 30_000);`;
+		// Detached on Windows: a Node child is otherwise ended with its parent by libuv's job object, and the tree kill
+		// would go untested. Elsewhere it stays in the command's process group, which is what gets killed there.
+		const parent = `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: "ignore", detached: process.platform === "win32" }); setInterval(() => {}, 1000);`;
+		const controller = new AbortController();
+		// The timeout only ends a run whose descendant never connects.
+		const running = execCommand(process.execPath, ["-e", parent], process.cwd(), {
+			signal: controller.signal,
+			timeout: 20_000,
+			killGraceMs: 200,
+		});
+		let socket: Socket | undefined;
 		try {
-			const result = await execCommand(process.execPath, ["-e", parent], process.cwd(), {
-				timeout: 120,
-				killGraceMs: 200,
+			socket = await Promise.race([connected, running.then(() => undefined)]);
+			expect(socket, "the descendant never started").toBeDefined();
+			// A killed process resets its connection; the close after it is what counts.
+			socket!.on("error", () => undefined);
+			const ended = new Promise<boolean>((resolve) => {
+				const deadline = setTimeout(() => resolve(false), 5_000);
+				socket!.once("close", () => {
+					clearTimeout(deadline);
+					resolve(true);
+				});
 			});
+			controller.abort();
+			const result = await running;
 			expect(result.killed).toBe(true);
-			await new Promise((resolve) => setTimeout(resolve, 1_100));
-			expect(existsSync(marker)).toBe(false);
+			expect(await ended, "the descendant outlived the cancellation").toBe(true);
 		} finally {
-			if (existsSync(marker)) rmSync(marker, { force: true });
+			controller.abort();
+			socket?.destroy();
+			server.close();
 		}
 	});
 
