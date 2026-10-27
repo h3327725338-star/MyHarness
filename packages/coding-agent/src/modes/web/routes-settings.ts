@@ -11,6 +11,7 @@ import { resolveHandoffModel } from "../../agent/runtime/session-handoff.ts";
 import {
 	MAX_NETWORK_MAX_ATTEMPTS,
 	MIN_NETWORK_MAX_ATTEMPTS,
+	type SettingsError,
 	type SettingsManager,
 	SUB_AGENT_SETTING_RANGES,
 	WEB_SEARCH_BROWSER_IDS,
@@ -195,6 +196,15 @@ function numberValue(value: unknown, name: string, min: number, max: number): nu
 	if (!Number.isFinite(parsed) || parsed < min || parsed > max)
 		throw new HttpError(400, `"${name}" must be a number between ${min} and ${max}`);
 	return parsed;
+}
+
+/** A setting this chat already uses but whose file was not written (see SettingsManager.flush). */
+function settingNotSaved(unsaved: SettingsError[]): HttpError {
+	const reasons = unsaved.map((entry) => `${entry.scope}: ${entry.error.message}`).join("; ");
+	return new HttpError(
+		500,
+		`The setting applies to this chat but was not saved to the settings file, so new chats still use the old value: ${reasons}`,
+	);
 }
 
 function modelRefValue(value: unknown): ModelRefValue {
@@ -1397,13 +1407,15 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		const id = typeof payload.id === "string" ? payload.id : "";
 		if (!id) throw new HttpError(400, "Missing setting id");
 		await applySetting(id, payload.value);
-		await settings().flush();
-		const errors = settings().getErrors();
+		const unsaved = await settings().flush();
 		host.broadcast("settings_changed", { id });
 		// The `subAgent` switch also changes the session's active tools (agent/workflow/ultracode), so tell
 		// other tabs to refresh the right-panel tool list as well; the local tab refreshes it directly.
 		if (id === "subAgent") host.broadcast("resources_changed", {});
-		return { ok: true, errors: errors.map((entry) => ({ scope: entry.scope, message: entry.error.message })) };
+		// The change is in use here either way, but a save that never reached the file must not answer like one that did:
+		// new chats read the file.
+		if (unsaved.length > 0) throw settingNotSaved(unsaved);
+		return { ok: true };
 	});
 
 	/** A row of the `/settings` menu was opened or changed: counted like the terminal does, for the menu's order. */

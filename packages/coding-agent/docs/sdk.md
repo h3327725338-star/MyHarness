@@ -944,7 +944,7 @@ Project overrides global. Nested objects merge keys. Setters modify global setti
 
 - Settings getters/setters are synchronous for in-memory state.
 - Setters enqueue persistence writes asynchronously.
-- Call `await settingsManager.flush()` when you need a durability boundary (for example, before process exit or before asserting file contents in tests).
+- Call `await settingsManager.flush()` when you need a durability boundary (for example, before process exit or before asserting file contents in tests). It resolves with the scopes whose changes are still not in their file and why; those changes stay in memory and every later `flush()` writes them again.
 - `SettingsManager` does not print settings I/O errors. Use `settingsManager.drainErrors()` and report them in your app layer.
 
 > See [examples/sdk/10-settings.ts](../examples/sdk/10-settings.ts)

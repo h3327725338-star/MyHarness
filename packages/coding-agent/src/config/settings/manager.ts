@@ -204,6 +204,35 @@ function noticeRemovedTimeoutSettings(settings: Settings, scope: SettingsScope):
 	}
 }
 
+/**
+ * `base` with the fields a manager changed taken from `changed`: whole fields, or only the changed keys of a nested
+ * object, so what others changed elsewhere in the file is kept.
+ */
+function withChangedFields(
+	base: Settings,
+	changed: Settings,
+	modifiedFields: Set<keyof Settings>,
+	modifiedNestedFields: Map<keyof Settings, Set<string>>,
+): Settings {
+	const mergedSettings: Settings = { ...base };
+	for (const field of modifiedFields) {
+		const value = changed[field];
+		if (modifiedNestedFields.has(field) && typeof value === "object" && value !== null) {
+			const nestedModified = modifiedNestedFields.get(field)!;
+			const baseNested = (base[field] as Record<string, unknown>) ?? {};
+			const inMemoryNested = value as Record<string, unknown>;
+			const mergedNested = { ...baseNested };
+			for (const nestedKey of nestedModified) {
+				mergedNested[nestedKey] = inMemoryNested[nestedKey];
+			}
+			(mergedSettings as Record<string, unknown>)[field] = mergedNested;
+		} else {
+			(mergedSettings as Record<string, unknown>)[field] = value;
+		}
+	}
+	return mergedSettings;
+}
+
 export class SettingsManager {
 	private storage: SettingsStorage;
 	private globalSettings: Settings;
@@ -220,6 +249,8 @@ export class SettingsManager {
 	private pendingWrites = new Map<SettingsScope, () => Promise<void>>();
 	private writeTimer: ReturnType<typeof setTimeout> | undefined;
 	private writeRevision = { global: 0, project: 0 };
+	/** Scopes whose last write failed; their changes stay modified and are written again (see flush). */
+	private writeFailures = new Map<SettingsScope, Error>();
 	private errors: SettingsError[];
 
 	private constructor(
@@ -335,6 +366,7 @@ export class SettingsManager {
 		this.projectTrusted = trusted;
 		this.modifiedProjectFields.clear();
 		this.modifiedProjectNestedFields.clear();
+		this.writeFailures.delete("project");
 
 		if (!trusted) {
 			this.projectSettings = {};
@@ -352,25 +384,46 @@ export class SettingsManager {
 		this.settings = mergeSettings(this.globalSettings, this.projectSettings);
 	}
 
+	/** Reads both files again. Changes whose write failed stay on top of what the files hold, still pending (see flush). */
 	async reload(): Promise<void> {
 		await this.flush();
+		const globalUnsaved = this.writeFailures.has("global");
+		const projectUnsaved = this.writeFailures.has("project");
 		const globalLoad = SettingsManager.tryLoadFromStorage(this.storage, "global");
 		if (!globalLoad.error) {
-			this.globalSettings = globalLoad.settings;
+			this.globalSettings = globalUnsaved
+				? withChangedFields(
+						globalLoad.settings,
+						this.globalSettings,
+						this.modifiedFields,
+						this.modifiedNestedFields,
+					)
+				: globalLoad.settings;
 			this.globalSettingsLoadError = null;
 		} else {
 			this.globalSettingsLoadError = globalLoad.error;
 			this.recordError("global", globalLoad.error);
 		}
 
-		this.modifiedFields.clear();
-		this.modifiedNestedFields.clear();
-		this.modifiedProjectFields.clear();
-		this.modifiedProjectNestedFields.clear();
+		if (!globalUnsaved) {
+			this.modifiedFields.clear();
+			this.modifiedNestedFields.clear();
+		}
+		if (!projectUnsaved) {
+			this.modifiedProjectFields.clear();
+			this.modifiedProjectNestedFields.clear();
+		}
 
 		const projectLoad = SettingsManager.tryLoadFromStorage(this.storage, "project", this.projectTrusted);
 		if (!projectLoad.error) {
-			this.projectSettings = projectLoad.settings;
+			this.projectSettings = projectUnsaved
+				? withChangedFields(
+						projectLoad.settings,
+						this.projectSettings,
+						this.modifiedProjectFields,
+						this.modifiedProjectNestedFields,
+					)
+				: projectLoad.settings;
 			this.projectSettingsLoadError = null;
 		} else {
 			this.projectSettingsLoadError = projectLoad.error;
@@ -441,8 +494,36 @@ export class SettingsManager {
 		const tasks = [...this.pendingWrites];
 		this.pendingWrites.clear();
 		for (const [scope, task] of tasks) {
-			this.writeQueue = this.writeQueue.then(task).catch((error) => this.recordError(scope, error));
+			this.writeQueue = this.writeQueue.then(task).then(
+				() => {
+					this.writeFailures.delete(scope);
+				},
+				(error: unknown) => {
+					const failure = error instanceof Error ? error : new Error(String(error));
+					// Every flush writes a failed scope again: the same failure is listed once.
+					if (this.writeFailures.get(scope)?.message !== failure.message) this.recordError(scope, failure);
+					this.writeFailures.set(scope, failure);
+				},
+			);
 		}
+	}
+
+	/** Queues the changes of a scope whose last write failed once more. */
+	private retryFailedWrite(scope: SettingsScope): void {
+		if (this.pendingWrites.has(scope)) return;
+		if (scope === "global") this.save();
+		else if (this.projectTrusted && this.modifiedProjectFields.size > 0)
+			this.saveProjectSettings(this.projectSettings);
+	}
+
+	/** The scopes whose changes are not in their file, with the reason. */
+	private unsavedChanges(): SettingsError[] {
+		const unsaved: SettingsError[] = [];
+		const globalError = this.writeFailures.get("global") ?? this.globalSettingsLoadError;
+		if (this.modifiedFields.size > 0 && globalError) unsaved.push({ scope: "global", error: globalError });
+		const projectError = this.writeFailures.get("project") ?? this.projectSettingsLoadError;
+		if (this.modifiedProjectFields.size > 0 && projectError) unsaved.push({ scope: "project", error: projectError });
+		return unsaved;
 	}
 
 	private cloneModifiedNestedFields(source: Map<keyof Settings, Set<string>>): Map<keyof Settings, Set<string>> {
@@ -462,23 +543,12 @@ export class SettingsManager {
 		const write = this.storage.withLockAsync?.bind(this.storage) ?? this.storage.withLock.bind(this.storage);
 		await write(scope, (current) => {
 			const currentFileSettings = current ? migrateSettings(JSON.parse(current) as Record<string, unknown>) : {};
-			const mergedSettings: Settings = { ...currentFileSettings };
-			for (const field of modifiedFields) {
-				const value = snapshotSettings[field];
-				if (modifiedNestedFields.has(field) && typeof value === "object" && value !== null) {
-					const nestedModified = modifiedNestedFields.get(field)!;
-					const baseNested = (currentFileSettings[field] as Record<string, unknown>) ?? {};
-					const inMemoryNested = value as Record<string, unknown>;
-					const mergedNested = { ...baseNested };
-					for (const nestedKey of nestedModified) {
-						mergedNested[nestedKey] = inMemoryNested[nestedKey];
-					}
-					(mergedSettings as Record<string, unknown>)[field] = mergedNested;
-				} else {
-					(mergedSettings as Record<string, unknown>)[field] = value;
-				}
-			}
-
+			const mergedSettings = withChangedFields(
+				currentFileSettings,
+				snapshotSettings,
+				modifiedFields,
+				modifiedNestedFields,
+			);
 			return JSON.stringify(mergedSettings, null, 2);
 		});
 	}
@@ -525,11 +595,19 @@ export class SettingsManager {
 		this.saveProjectSettings(projectSettings);
 	}
 
-	async flush(): Promise<void> {
+	/**
+	 * Writes every pending change now, and once more the changes of a scope whose last write failed, then waits for the
+	 * files. Resolves with the scopes whose changes are still not in their file, and why: the write failed again, or the
+	 * file could not be read when it was loaded, which holds its saves back so it is never overwritten. Those changes
+	 * stay in memory and pending, and the failure is also recorded in `getErrors()`. Never rejects.
+	 */
+	async flush(): Promise<SettingsError[]> {
+		for (const scope of this.writeFailures.keys()) this.retryFailedWrite(scope);
 		do {
 			this.drainPendingWrites();
 			await this.writeQueue;
 		} while (this.pendingWrites.size);
+		return this.unsavedChanges();
 	}
 
 	drainErrors(): SettingsError[] {

@@ -3,8 +3,9 @@
 //   - the new value is on screen at once, so a toggle moves without waiting for the server;
 //   - a save that finishes quickly shows nothing else; "saving" is only shown for a save that is really slow (see
 //     useDelayedBusy in ui.js), and then until it has finished;
-//   - the server's answer decides what stays: after the save the real settings are read again, so a failed save puts the
-//     old value back, and the failure is reported.
+//   - the server's answer decides what stays: after the save the real settings are read again, so a refused value puts
+//     the old value back, and the failure is reported. A value the server took but could not write to the settings
+//     file stays in this chat, and that failure is reported too.
 import { attempt, emit, loadModels, loadResources, loadSettings, loadSnapshot, post, set, state, toast } from "./store.js";
 import { playNotificationSound } from "./notification-sounds.js";
 import { requestNotificationPermission } from "./notifications.js";
@@ -45,6 +46,5 @@ export async function saveSetting(id, value) {
 	// (other tabs follow via the settings_changed + resources_changed events).
 	if (id === "subAgent" || id.startsWith("subAgent")) loadResources().catch(() => {});
 	if (id === "webSearch.enabled" || id.startsWith("subAgent")) loadModels();
-	if (result?.errors?.length) toast(result.errors.map((e) => e.message).join("\n"), "error");
 	return result;
 }

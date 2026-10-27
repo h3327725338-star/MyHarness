@@ -1385,6 +1385,22 @@ describe("Web host (real runtime with a faux provider)", () => {
 		);
 	});
 
+	it("answers a setting it could not write to the settings file with an error, not with success", async () => {
+		const fx = await start();
+		const settings = fx.hub.host.session.settingsManager;
+		const path = join(process.env.MYHARNESS_CODING_AGENT_DIR!, "settings.json");
+		await settings.flush();
+		// The file can no longer be read, so saves are held back rather than overwrite it.
+		writeFileSync(path, "{ not json");
+		await settings.reload();
+		await expect(fx.post("/api/settings", { id: "popupNotifications", value: false })).rejects.toThrow(
+			/^500: The setting applies to this chat but was not saved to the settings file, so new chats still use the old value: global: /,
+		);
+		// The change is in use in this chat; the file is left as it was.
+		expect(settings.getPopupNotificationSettings().enabled).toBe(false);
+		expect(readFileSync(path, "utf8")).toBe("{ not json");
+	});
+
 	it("lists settings, resources and providers and validates setting writes", async () => {
 		const fx = await start();
 		const settings = await fx.get("/api/settings");

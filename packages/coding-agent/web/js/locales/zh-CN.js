@@ -3066,6 +3066,7 @@ export const serverTextZh = {
 		[/^No route for (.+)$/, (m) => `没有对应的接口：${m[1]}`],
 		[/^Could not delete the source: (.+)$/s, (m) => `无法删除这份资料：${m[1]}`],
 		[/^Unknown setting: (.+)$/, (m) => `未知的设置项：${m[1]}`],
+		[/^The setting applies to this chat but was not saved to the settings file, so new chats still use the old value: (.+)$/s, (m) => `设置已在当前对话生效，但没有保存到设置文件，新对话仍会使用旧值：${m[1]}`],
 		[/^"(.+)" must be a boolean$/, (m) => `“${m[1]}”必须是布尔值`],
 		[/^"(.+)" must be a string$/, (m) => `“${m[1]}”必须是字符串`],
 		[/^"(.+)" must be a non-empty string$/, (m) => `“${m[1]}”必须是非空字符串`],
