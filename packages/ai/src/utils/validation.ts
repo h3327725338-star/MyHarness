@@ -14,6 +14,36 @@ interface JsonSchemaObject {
 	allOf?: JsonSchemaObject[];
 	anyOf?: JsonSchemaObject[];
 	oneOf?: JsonSchemaObject[];
+	const?: unknown;
+}
+
+/**
+ * Tools whose parameters are one object per operation (a union whose branches each fix a constant such as
+ * `operation: "click"`): the one branch the call names by those constants, if exactly one does.
+ */
+function discriminatedBranch(value: unknown, schema: JsonSchemaObject | undefined): JsonSchemaObject | undefined {
+	if (!schema || value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const branches = [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])].filter((branch) => branch?.properties);
+	if (branches.length < 2) return undefined;
+	const record = value as Record<string, unknown>;
+	const matching = branches.filter((branch) => {
+		const constants = Object.entries(branch.properties ?? {}).filter(([, sub]) => sub.const !== undefined);
+		return constants.length > 0 && constants.every(([key, sub]) => key in record && record[key] === sub.const);
+	});
+	return matching.length === 1 ? matching[0] : undefined;
+}
+
+/** The field every branch of such a union fixes to a constant (e.g. `operation`), and the values it may take. */
+function discriminator(schema: JsonSchemaObject): { key: string; values: unknown[] } | undefined {
+	const branches = [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])];
+	if (branches.length < 2 || !branches.every((branch) => branch?.properties)) return undefined;
+	const keys = Object.entries(branches[0]!.properties ?? {})
+		.filter(([, sub]) => sub.const !== undefined)
+		.map(([key]) => key);
+	const key = keys.find((candidate) =>
+		branches.every((branch) => branch.properties?.[candidate]?.const !== undefined),
+	);
+	return key ? { key, values: branches.map((branch) => branch.properties![key]!.const) } : undefined;
 }
 
 function getSchemaTypes(schema: JsonSchemaObject): string[] {
@@ -314,7 +344,8 @@ function repairStringifiedContainers(value: unknown, schema: JsonSchemaObject | 
 	}
 	if (value && typeof value === "object") {
 		const record = value as Record<string, unknown>;
-		const properties = schema?.properties ?? {};
+		// One object per operation (no properties at the root): repair against the branch the call names.
+		const properties = (schema?.properties ? schema : discriminatedBranch(record, schema))?.properties ?? {};
 		for (const key of Object.keys(record)) {
 			if (properties[key]) record[key] = repairStringifiedContainers(record[key], properties[key]);
 		}
@@ -400,6 +431,44 @@ function applySemanticStringCoercion(value: unknown, schema: JsonSchemaObject | 
 }
 
 /**
+ * For one object per operation, the errors of every branch bury the one that matters (each branch the call did not
+ * name adds "root: must not have additional properties"), and the models that read them re-sent the same call. Report
+ * the named branch alone, with a property it does not take named outright next to what it does take; or, when the
+ * call names no branch, the values that select one.
+ */
+function describeValidationErrors(
+	schema: JsonSchemaObject,
+	args: unknown,
+	validator: ReturnType<typeof Compile>,
+): string {
+	const list = (errors: Iterable<TLocalizedValidationError>, skipExtra = false) =>
+		[...errors]
+			.filter((error) => !(skipExtra && error.keyword === "additionalProperties"))
+			.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`);
+	const branch = discriminatedBranch(args, schema);
+	const branchValidator = branch ? getSubSchemaValidator(branch) : undefined;
+	if (branch && branchValidator) {
+		const known = Object.keys(branch.properties ?? {});
+		const unknown =
+			branch.additionalProperties === false
+				? Object.keys(args as Record<string, unknown>).filter((key) => !known.includes(key))
+				: [];
+		const lines = [
+			...unknown.map((key) => `  - ${key}: not a parameter of this operation; it takes ${known.join(", ")}`),
+			...list(branchValidator.Errors(args), unknown.length > 0),
+		];
+		if (lines.length > 0) return lines.join("\n");
+	}
+	const named = discriminator(schema);
+	if (named && !branch && args !== null && typeof args === "object") {
+		const given = (args as Record<string, unknown>)[named.key];
+		const problem = given === undefined ? "missing" : `${JSON.stringify(given)} is not one of its values`;
+		return `  - ${named.key}: ${problem}; use one of ${named.values.map((value) => JSON.stringify(value)).join(", ")}`;
+	}
+	return list(validator.Errors(args)).join("\n") || "Unknown validation error";
+}
+
+/**
  * Finds a tool by name and validates the tool call arguments against its TypeBox schema
  * @param tools Array of tool definitions
  * @param toolCall The tool call from the LLM
@@ -457,11 +526,7 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
 		return args;
 	}
 
-	const errors =
-		validator
-			.Errors(args)
-			.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
-			.join("\n") || "Unknown validation error";
+	const errors = describeValidationErrors(tool.parameters as unknown as JsonSchemaObject, args, validator);
 
 	const errorMessage = `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`;
 

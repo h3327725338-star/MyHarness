@@ -78,7 +78,7 @@ function checkDuckDuckGoPage(page: TransportPage): void {
 	if (page.status !== 200) throw new WebSearchError("http", `DuckDuckGo 返回 HTTP ${page.status}。`);
 }
 
-const TIME_RANGE: Record<SearchTimeRange, string> = { day: "d", month: "m", year: "y" };
+const TIME_RANGE: Record<SearchTimeRange, string> = { day: "d", week: "w", month: "m", year: "y" };
 
 export const duckduckgo: SearchEngine = {
 	id: "duckduckgo",

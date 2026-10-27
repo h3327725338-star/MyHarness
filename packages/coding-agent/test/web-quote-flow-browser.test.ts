@@ -42,6 +42,13 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				name: "note-file.txt",
 				path: "C:/session/uploads/note-file.txt",
 			}));
+			// The composer sends a file that is not an inline image in chunks.
+			server.route("POST", "/api/files/upload/begin", () => ({ uploadId: "upload-1" }));
+			server.route("POST", "/api/files/upload/chunk", () => ({ written: 11 }));
+			server.route("POST", "/api/files/upload/finish", () => ({
+				name: "note-file.txt",
+				path: "C:/session/uploads/note-file.txt",
+			}));
 			server.route("POST", "/api/sessions/touched", () => ({ ok: true }));
 			server.route("POST", "/api/modes/state", () => ({
 				state: { lastSessionFile: null, model: null, drafts: {} },
@@ -69,7 +76,8 @@ import {h,render} from '/vendor/preact.js';
 import {Transcript} from '/js/transcript.js';
 import {Composer} from '/js/composer.js';
 import {FloatingQuoteToolbar} from '/js/quote-toolbar.js';
-import {set,state} from '/js/store.js';
+import {activateSlot,set,state} from '/js/store.js';
+import {t} from '/js/i18n.js';
 const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
 const check=(c,m)=>{if(!c) throw Error(m);};
 const tell=(m)=>document.body.insertAdjacentHTML('beforeend','<p id="ready">'+m+'</p>');
@@ -78,6 +86,13 @@ window.addEventListener('unhandledrejection',e=>tell('rejected: '+(e.reason&&e.r
 const snap={session:{id:'test',file:'C:/t/test.jsonl',persisted:true,name:null},cwd:'C:/t',flags:{},active:false,
  model:{id:'m',label:'M',input:['text'],contextWindow:8000,maxTokens:1000},thinking:{supported:false},trust:{trusted:true,requiresTrust:false},
  context:{budget:{activeTokens:120,effectiveWindow:8000,percent:2}},queue:{steering:[],followUp:[]},dialogs:[],surface:{widgets:{},statuses:{}}};
+// Sends go to a loaded chat only: open s1 first, its snapshot and (empty) transcript answered from the page.
+const serverFetch=window.fetch.bind(window);
+window.fetch=async(url,init)=>{const u=String(url);
+ if(u==='/api/state') return new Response(JSON.stringify({...snap,slot:'s1',mode:'coding',run:{},app:{}}),{headers:{'content-type':'application/json'}});
+ if(u.startsWith('/api/transcript')) return new Response(JSON.stringify({items:[]}),{headers:{'content-type':'application/json'}});
+ return serverFetch(url,init);};
+await activateSlot('s1');
 set({connected:true,everConnected:true,models:[],slots:[],activeSlot:'s1',gitStatus:null,dialogs:[],queue:{steering:[],followUp:[]},runs:{},toolRuns:{},userBash:{},userBashOrder:[],
  surface:{widgets:{},statuses:{}},resources:{commands:[],tools:[],skills:[],prompts:[],extensions:[],contextFiles:[]},modeState:{coding:{drafts:{}},general:{drafts:{}}},
  items:[{kind:'user',id:'u1',ts:1,text:'alpha beta gamma delta epsilon zeta',images:[]},
@@ -209,7 +224,10 @@ for (const [host,needle] of [['.sidebar','sidebar passage'],['.panel','panel pas
  selectText(el,needle);
  await release();
  await wait(80);
- check(!document.querySelector('.floating-quote-bar'),'the Quote bubble appears in '+host);
+ // Other page text may still be offered for translation, never for a quote; typed text and dialogs get no bubble.
+ const offered=[...document.querySelectorAll('.floating-quote-bar .floating-quote-btn')].map(b=>b.title);
+ check(!offered.includes(t('Quote')),'the Quote bubble offers a quote in '+host);
+ if(host==='.modal'||host==='.composer-input') check(!document.querySelector('.floating-quote-bar'),'a selection bubble appears in '+host);
  getSelection().removeAllRanges();
 }
 
@@ -519,7 +537,8 @@ for (const theme of themes) {
   areaColor && contrast(areaColor, areaBg.c) >= 4.5,
   'the annotation text is hard to read in ' + name + ': ' + getComputedStyle(area).color + ' on ' + areaBg.from + ' = ' + (areaColor ? contrast(areaColor, areaBg.c).toFixed(2) : 'unparsed'),
  );
- check(!!card.querySelector('.quote-note-keys'),'the box does not explain its keys in '+name);
+ // The minimal box has no key hint line: its ⏎ save control names itself.
+ check(!!card.querySelector('.quote-note-save')?.getAttribute('aria-label'),'the box has no named save control in '+name);
 
  area.value='readable here';
  area.dispatchEvent(new InputEvent('input',{bubbles:true}));
@@ -607,6 +626,13 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				name: "note-file.txt",
 				path: "C:/session/uploads/note-file.txt",
 			}));
+			// The composer sends a file that is not an inline image in chunks.
+			server.route("POST", "/api/files/upload/begin", () => ({ uploadId: "upload-1" }));
+			server.route("POST", "/api/files/upload/chunk", () => ({ written: 11 }));
+			server.route("POST", "/api/files/upload/finish", () => ({
+				name: "note-file.txt",
+				path: "C:/session/uploads/note-file.txt",
+			}));
 			server.route("POST", "/api/sessions/touched", () => ({ ok: true }));
 			server.route("POST", "/api/modes/state", () => ({
 				state: { lastSessionFile: null, model: null, drafts: {} },
@@ -688,7 +714,7 @@ async function pasteInto(el,file){
  if(!ev.clipboardData) Object.defineProperty(ev,'clipboardData',{value:dt,configurable:true});
  return el.dispatchEvent(ev);
 }
-const saveQuote=(card)=>card.querySelector('.quote-note-foot .btn.primary');
+const saveQuote=(card)=>card.querySelector('.quote-note-save');
 const thumbs=()=>document.querySelectorAll('.composer .attachments .thumb').length;
 const boxFiles=(card)=>card.querySelectorAll('.quote-note-file').length;
 
@@ -751,17 +777,17 @@ check(!document.querySelector('.quote-note-card'),'Escape left the box open');
 check(!document.querySelector('.quote-note-file'),'an attachment chip survived the closed box');
 check(thumbs()===2,'a cancelled paste still reached the input attachments: '+thumbs()+' thumbs');
 
-// 5) the compact numbers hold in both languages: narrow box, one-line hint, roomy enough note field, no overflow.
+// 5) the compact numbers hold in both languages: narrow box, one-line tool bar, roomy enough note field, no overflow.
 for (const lang of ['en','zh-CN']) {
  setLang(lang);
  const card=await pick('alpha beta');
  const box=card.getBoundingClientRect();
  check(box.width>0&&box.width<=320,'the box is wider than 320px in '+lang+': '+box.width);
  check(box.height>0&&box.height<=190,'the box is taller than 190px in '+lang+': '+box.height);
- const keys=card.querySelector('.quote-note-keys');
- check(keys.scrollWidth<=keys.clientWidth,'the key hint overflows its line in '+lang+': '+keys.scrollWidth+' > '+keys.clientWidth);
- const keysH=keys.getBoundingClientRect().height;
- check(keysH>0&&keysH<=20,'the key hint is not a single line in '+lang+': '+keysH+'px');
+ const tools=card.querySelector('.quote-note-bar');
+ check(tools.scrollWidth<=tools.clientWidth,'the tool bar overflows its line in '+lang+': '+tools.scrollWidth+' > '+tools.clientWidth);
+ const toolsH=tools.getBoundingClientRect().height;
+ check(toolsH>0&&toolsH<=32,'the tool bar is not a single line in '+lang+': '+toolsH+'px');
  const area=card.querySelector('.quote-note-input');
  check(area.getBoundingClientRect().height>=40,'the note field is shorter than 40px in '+lang+': '+area.getBoundingClientRect().height);
  check(card.scrollWidth<=card.clientWidth,'the box overflows horizontally in '+lang);

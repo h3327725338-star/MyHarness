@@ -6,7 +6,7 @@ import type { EngineQuery, EngineResult, SearchEngine, SearchTimeRange } from ".
 
 /** Brave Search web page. Plain HTTP works until Brave rate-limits the network; then Firefox renders the same page. */
 
-export const BRAVE_TIME_RANGE: Record<SearchTimeRange, string> = { day: "pd", month: "pm", year: "py" };
+export const BRAVE_TIME_RANGE: Record<SearchTimeRange, string> = { day: "pd", week: "pw", month: "pm", year: "py" };
 
 /** Parse web results from a search.brave.com results page. */
 export function parseBraveHtml(html: string, now: number): EngineResult[] {

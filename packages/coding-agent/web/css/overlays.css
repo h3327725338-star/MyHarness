@@ -95,7 +95,11 @@
 .set-row:not(.wide):has(> .set-control > .select-sizer) { grid-template-columns: minmax(0, 1fr) minmax(var(--set-control-w), max-content); }
 .set-row:not(.wide) > .set-control:has(> .select-sizer) { display: grid; grid-template-columns: auto minmax(0, max-content); justify-content: end; column-gap: 0; width: auto; max-width: 340px; }
 .set-row:not(.wide) > .set-control > :is(.select-like, .select-sizer) { grid-area: 1 / 2; justify-self: end; }
-.set-row:not(.wide) > .set-control:has(> .select-sizer) > :not(.select-like, .select-sizer, .saving, .popover) { grid-area: 1 / 1; margin-right: 8px; }
+/* What is shown in front of the dropdown comes before it, so it is found from its own side (`~ .select-sizer`). Written as
+   `.set-control:has(> .select-sizer) > :not(...)`, the rule's open-ended right-hand part made Chrome restyle the whole page
+   for every element added anywhere while the side panel was open, even with Settings closed: 17-23 ms per added node,
+   so every streamed reply piece and every mounted turn (2026-10-27). */
+.set-row:not(.wide) > .set-control > :not(.select-like, .select-sizer, .saving, .popover):has(~ .select-sizer) { grid-area: 1 / 1; margin-right: 8px; }
 .set-row:not(.wide) > .set-control > .select-sizer { display: grid; justify-self: stretch; height: 0; overflow: hidden; visibility: hidden; }
 .set-control > .field.num, .set-control > input[type="number"] { flex: none; width: var(--set-num-w); min-width: 0; text-align: right; }
 .set-control > .field, .set-control > .model-ref, .set-control > .segmented, .set-control > .input-group, .set-control > .mref, .set-control > .set-multiselect { flex: 1 1 auto; width: 100%; min-width: 0; max-width: none; }

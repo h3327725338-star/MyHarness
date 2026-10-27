@@ -432,6 +432,9 @@ export function useHeightGlide() {
 		gliding.current?.cancel();
 		gliding.current = null;
 		if (!el?.animate || !motionEnabled()) return;
+		// So would a fold inside the block that is still opening or closing, and the block would jump the rest of the way
+		// when the glide ends: the glide takes over the fold's motion.
+		for (const motion of el.getAnimations?.({ subtree: true }) ?? []) if (motion.transitionProperty === "grid-template-rows") motion.finish();
 		const end = el.offsetHeight;
 		if (end === start) return;
 		const keyframes = [Math.min(start, end + innerHeight), Math.min(end, start + innerHeight)].map((px) => ({ height: `${px}px`, overflow: "hidden" }));

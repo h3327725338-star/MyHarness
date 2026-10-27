@@ -1,6 +1,7 @@
 // Browser lock for the chunked "Show all" of oversized tool output (W188): on a real page, a 1 MB
 // bash result expands with the first block (<= 100 KB) painted in well under 100 ms, the rest is
-// appended without a single > 50 ms main-thread task, the finished text is verbatim (length + SHA-1)
+// appended without a single > 50 ms main-thread task while the page keeps drawing frames, the blocks lay
+// out exactly like the text as one node, the finished text is verbatim (length + SHA-1)
 // with no replacement characters, collapsing mid-append stops the chain immediately, unmounting
 // leaves no orphan callbacks, and a > 200 KB Markdown block degrades to a plain <pre> while a small
 // one still renders as Markdown. The in-page source text is ASCII-dominant with CJK+emoji lines
@@ -44,7 +45,7 @@ import {h,render} from '/vendor/preact.js';
 import {Transcript} from '/js/transcript.js';
 import {set,setView} from '/js/store.js';
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-const poll=(fn,ms,label)=>new Promise((resolve,reject)=>{const t0=Date.now();const iv=setInterval(()=>{let ok=false;try{ok=fn()}catch(e){ok=false}if(ok){clearInterval(iv);resolve(Date.now())}else if(Date.now()-t0>ms){clearInterval(iv);reject(Error('timeout: '+label))}},5);});
+const poll=(fn,ms,label)=>new Promise((resolve,reject)=>{const t0=Date.now();const iv=setInterval(()=>{let ok=false;try{ok=fn()}catch(e){ok=false}if(ok){clearInterval(iv);resolve(performance.now())}else if(Date.now()-t0>ms){clearInterval(iv);reject(Error('timeout: '+label))}},5);});
 const sha=async s=>{const b=new TextEncoder().encode(s);const d=await crypto.subtle.digest('SHA-1',b);return [...new Uint8Array(d)].map(x=>x.toString(16).padStart(2,'0')).join('')};
 window.__lt=[];window.__errors=[];
 new PerformanceObserver(list=>{for(const e of list.getEntries())window.__lt.push({ms:e.duration,start:e.startTime})}).observe({entryTypes:['longtask']});
@@ -89,6 +90,9 @@ try {
  const btn1=showAllBtn(raw1);
  if(!btn1) throw Error('card 1 Show all button missing');
  await wait(300);
+ // Keep the page drawing frames, as a shown app window does: a test page nothing animates can skip drawing between
+ // appends, and then the layout an append costs never runs inside the measured window at all.
+ let drawing=true;const draw=()=>{if(drawing)requestAnimationFrame(draw)};requestAnimationFrame(draw);
  const clickStart=performance.now();
  btn1.click();
  await poll(()=>pre1.textContent.length>20000,5000,'first block paint');
@@ -105,9 +109,14 @@ try {
  if(bad!==0) throw Error(bad+' replacement characters in final text');
  const h1=await sha(finalText); const h2=await sha(src);
  if(h1!==h2) throw Error('SHA-1 mismatch '+h1+' != '+h2);
+ drawing=false;
  const windowTasks=window.__lt.filter(e=>e.start>=clickStart-50&&e.start<=tFull+clickStart+250);
  const maxTask=windowTasks.length?Math.max(...windowTasks.map(e=>e.ms)):0;
  if(maxTask>=50) throw Error('long task '+maxTask.toFixed(1)+'ms during expansion (limit 50)');
+ // The blocks are separate boxes cut at line ends: together they must lay out exactly like the text as one node.
+ const twin=document.createElement('pre');twin.className='raw-pre';twin.textContent=finalText;pre1.parentElement.insertBefore(twin,pre1);
+ const twinHeight=twin.offsetHeight;twin.remove();
+ if(pre1.offsetHeight!==twinHeight) throw Error('blocks lay out '+pre1.offsetHeight+'px high, the same text as one node '+twinHeight+'px');
  // ---- Phase 2: collapse mid-append must stop the chain immediately -------------------------------
  rows[2].click(); await wait(450);
  const raw2=rawOf(rows[2]);
@@ -133,12 +142,15 @@ try {
  // ---- Phase 4: Markdown degradation past 200 KB ---------------------------------------------------
  rows[1].click(); await wait(450);
  const rawBig=rawOf(rows[1]);
- const mdBig=rawBig.querySelector('.raw-md');
- if(!mdBig) throw Error('big markdown block missing');
- if(!mdBig.querySelector('pre.raw-pre')) throw Error('big markdown did not degrade to pre');
- if(mdBig.querySelector('h1,h2,p,ul')) throw Error('big markdown still rendering markdown elements');
- if(mdBig.querySelector('pre.raw-pre').textContent.length!==60000) throw Error('big markdown preview length wrong');
+ // A big Markdown read opens as plain chunked output; past 200 KB it offers no render pass, which would stay plain.
+ const bigBlock=rawBig.querySelector('.raw-block');
+ if(!bigBlock) throw Error('big markdown block missing');
+ if(rawBig.querySelector('.raw-md')) throw Error('big markdown still rendered as markdown');
+ if(!bigBlock.querySelector('pre.raw-pre')) throw Error('big markdown did not degrade to pre');
+ if(bigBlock.querySelector('h1,h2,p,ul')) throw Error('big markdown still rendering markdown elements');
+ if(bigBlock.querySelector('pre.raw-pre').textContent.length!==20000) throw Error('big markdown preview length wrong');
  if(!showAllBtn(rawBig)) throw Error('big markdown Show all button missing');
+ if([...rawBig.querySelectorAll('button')].some(b=>/Render as Markdown/.test(b.textContent))) throw Error('big markdown offers a render pass that would stay plain');
  rows[3].click(); await wait(450);
  const rawSmall=rawOf(rows[3]);
  const mdSmall=rawSmall.querySelector('.raw-md');

@@ -70,7 +70,16 @@ export class WorktreeLauncher {
 		const id = worktreeId(worktree.path);
 		const directory = join(this.agentDir, "worktrees", "services", id);
 		mkdirSync(directory, { recursive: true });
-		const release = await lockfile.lock(directory, { retries: { retries: 80, minTimeout: 250, maxTimeout: 1000 } });
+		let lost = false;
+		const release = await lockfile.lock(directory, {
+			retries: { retries: 80, minTimeout: 250, maxTimeout: 1000 },
+			// The folder vanished or another process took the lock over while a long startup waited here: carry on
+			// (the service record is written once the copy answers) instead of the default handler throwing from a
+			// timer, which would end this server.
+			onCompromised: () => {
+				lost = true;
+			},
+		});
 		try {
 			const record = join(directory, "service.json");
 			if (existsSync(record)) {
@@ -155,7 +164,9 @@ ${output.slice(-2000)}`,
 				spawn("taskkill.exe", ["/PID", String(child.pid), "/T"], { windowsHide: true, stdio: "ignore" });
 			throw new Error(`Copy startup timed out. Log: ${join(directory, "startup.log")}`);
 		} finally {
-			await release();
+			await release().catch((error: unknown) => {
+				if (!lost) throw error;
+			});
 		}
 	}
 

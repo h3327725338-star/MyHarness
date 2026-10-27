@@ -383,3 +383,88 @@ describe("applySemanticStringCoercion", () => {
 		expect(() => validateToolArguments(tool, toolCall)).toThrow("Validation failed");
 	});
 });
+
+describe("one object per operation", () => {
+	// Like the workspace tool: a plain object root whose anyOf branches each fix `operation`.
+	const tool: Tool = {
+		name: "browser",
+		description: "",
+		parameters: {
+			type: "object",
+			anyOf: [
+				Type.Object({ operation: Type.Literal("tabs") }, { additionalProperties: false }),
+				Type.Object(
+					{
+						operation: Type.Literal("click"),
+						tabId: Type.String(),
+						label: Type.Optional(Type.String()),
+						screenshot: Type.Optional(Type.Boolean()),
+					},
+					{ additionalProperties: false },
+				),
+				Type.Object(
+					{
+						operation: Type.Literal("batch"),
+						tabId: Type.String(),
+						steps: Type.Array(Type.Object({ operation: Type.String() }), { minItems: 1 }),
+						screenshot: Type.Optional(Type.Boolean()),
+					},
+					{ additionalProperties: false },
+				),
+				Type.Object(
+					{
+						operation: Type.Literal("wait"),
+						tabId: Type.String(),
+						timeoutMs: Type.Optional(Type.Integer({ maximum: 60000 })),
+					},
+					{ additionalProperties: false },
+				),
+			],
+		} as unknown as Tool["parameters"],
+	};
+	const call = (args: Record<string, unknown>): ToolCall => ({
+		type: "toolCall",
+		id: "call-op",
+		name: "browser",
+		arguments: args,
+	});
+	const failure = (args: Record<string, unknown>): string => {
+		try {
+			validateToolArguments(tool, call(args));
+		} catch (error) {
+			return (error as Error).message.split("\n\nReceived arguments")[0]!;
+		}
+		throw new Error("expected a validation failure");
+	};
+
+	it("parses a stringified array inside the operation the call names", () => {
+		expect(
+			validateToolArguments(
+				tool,
+				call({ operation: "batch", tabId: "t1", screenshot: "false", steps: '[{"operation": "find"}]' }),
+			),
+		).toEqual({ operation: "batch", tabId: "t1", screenshot: false, steps: [{ operation: "find" }] });
+	});
+
+	it("names a property the operation does not take and what it does take", () => {
+		const message = failure({ operation: "click", tabId: "t1", text: "Sign in" });
+		expect(message).toContain(
+			"  - text: not a parameter of this operation; it takes operation, tabId, label, screenshot",
+		);
+		expect(message).not.toContain("must be equal to constant");
+		expect(message).not.toContain("must not have additional properties");
+	});
+
+	it("reports only the named operation's own errors", () => {
+		expect(failure({ operation: "wait", tabId: "t1", timeoutMs: 120000 })).toBe(
+			'Validation failed for tool "browser":\n  - timeoutMs: must be <= 60000',
+		);
+	});
+
+	it("lists the operations when the call names none or an unknown one", () => {
+		expect(failure({ tabId: "t1" })).toContain('  - operation: missing; use one of "tabs", "click", "batch", "wait"');
+		expect(failure({ operation: "tab" })).toContain(
+			'  - operation: "tab" is not one of its values; use one of "tabs", "click", "batch", "wait"',
+		);
+	});
+});

@@ -31,7 +31,10 @@ const original=document.startViewTransition?.bind(document);
 let atCapture=null;
 if(original)document.startViewTransition=(update)=>{atCapture={...geo(),skipped:sections().filter(n=>n.style.contentVisibility==='hidden').length,revealing:revealing()};return original(update);};
 const app=document.querySelector('.app');
-const slow=()=>getComputedStyle(app).transitionDuration!=='0s'&&getComputedStyle(app.firstElementChild).transitionDuration!=='0s';
+// The columns, the conversation's own margin (it changes when only one mode has the panel open) and the panel slot.
+const durations=()=>[app,app.querySelector('.main'),app.querySelector('.panel-slot')].map(n=>getComputedStyle(n).transitionDuration);
+const slow=()=>durations().every(d=>d!=='0s');
+const still=()=>durations().every(d=>d==='0s');
 try{
  setView({lang:'en',motion:'on',processDefault:'collapsed'});
  must(original&&document.visibilityState==='visible','no View Transition here: the mode reveal is not exercised');
@@ -52,7 +55,7 @@ try{
  const t0=performance.now();
  // Counted once the new chat is on the page (the first frames still show the old one, before the capture).
  const fresh=()=>sections().some(n=>n.dataset.turnKey?.startsWith('t-v'));
- while(performance.now()-t0<2000){await frame();if(!revealing())break;off=off&&!slow();if(fresh())counts.push(sections().length);}
+ while(performance.now()-t0<2000){await frame();if(!revealing())break;off=off&&still();if(fresh())counts.push(sections().length);}
  await reveal;
  must(atCapture&&atCapture.revealing,'the layout transitions were not off at the capture: '+JSON.stringify(atCapture));
  must(atCapture.skipped>=100,'the turns out of view did not skip their contents at the capture: '+JSON.stringify(atCapture));
@@ -94,7 +97,7 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 			// The .mode-switch button gives the reveal a place to start from; the hidden .app carries the layout's transitions.
 			writeFileSync(
 				join(root, "index.html"),
-				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/layout.css"><link rel="stylesheet" href="/css/transcript.css"><button class="mode-switch">mode</button><div class="app" style="position:absolute;left:-9999px;width:10px;height:10px"><div class="panel-slot"></div></div><div id="chat" style="height:600px;display:flex;flex-direction:column"></div><script type="module" src="/test/test.js"></script>',
+				'<!doctype html><link rel="stylesheet" href="/css/tokens.css"><link rel="stylesheet" href="/css/base.css"><link rel="stylesheet" href="/css/layout.css"><link rel="stylesheet" href="/css/transcript.css"><button class="mode-switch">mode</button><div class="app" style="position:absolute;left:-9999px;width:10px;height:10px"><main class="main"></main><div class="panel-slot"></div></div><div id="chat" style="height:600px;display:flex;flex-direction:column"></div><script type="module" src="/test/test.js"></script>',
 			);
 			writeFileSync(join(root, "test.js"), page);
 			const { port } = await server.listen(0);

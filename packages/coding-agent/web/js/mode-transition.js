@@ -33,18 +33,23 @@ function release() {
 }
 // Capturing the old page restyles the whole document, and so does the end of the transition. Parts of the page that can
 // make that cheaper without changing what is on screen (the transcript: turns out of view skip their contents) are asked
-// right before the capture, and each returns how to put things back once the new page is in.
+// right before the capture, and each returns how to put things back once the new page is in. The collaboration-mode
+// morph (layout-morph.js) asks them too.
 const captureHooks = new Set();
-/** Register `hook` for the next captures; returns the unregister function. */
-export function beforeModeCapture(hook) {
+/** Register `hook` for the next captures (mode reveals and layout morphs); returns the unregister function. */
+export function beforePageCapture(hook) {
 	captureHooks.add(hook);
 	return () => captureHooks.delete(hook);
 }
-function prepareCapture() {
+/**
+ * Get the page ready for a capture; returns how to put it back. `reach` (in heights of the view) is how much around
+ * what is on screen must stay drawn: a morph that widens the conversation brings more of it into view.
+ */
+export function preparePageCapture({ reach = 0 } = {}) {
 	const undo = [];
 	for (const hook of captureHooks) {
 		try {
-			const back = hook();
+			const back = hook({ reach });
 			if (typeof back === "function") undo.push(back);
 		} catch {}
 	}
@@ -112,7 +117,7 @@ export async function revealMode(update, { from, to, restore } = {}) {
 	const y = rect ? rect.top + rect.height / 2 : 0;
 	const radius = Math.ceil(Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y)));
 	let transition;
-	const putBack = prepareCapture();
+	const putBack = preparePageCapture();
 	document.documentElement.classList.add("mode-revealing");
 	try { transition = document.startViewTransition(settled); }
 	catch { putBack(); release(); await settled(); return; }

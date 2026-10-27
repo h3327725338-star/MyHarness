@@ -66,14 +66,24 @@ export async function withMemoryLock<T>(dataRoot: string, action: () => Promise<
 	const root = path.join(path.resolve(dataRoot), "memory");
 	assertDirectPath(root);
 	await fs.promises.mkdir(root, { recursive: true });
+	let lost = false;
 	const release = await lockfile.lock(root, {
 		realpath: false,
 		retries: { retries: 5, minTimeout: 20, maxTimeout: 100 },
+		// The lock folder vanished or another process took the lock over while this one was held (a pause longer than
+		// the stale time). proper-lockfile's default handler throws from a timer, which ended the whole server; the
+		// write in progress finishes on its own either way.
+		onCompromised: (error) => {
+			lost = true;
+			console.error(`Memory lock lost: ${error.message}`);
+		},
 	});
 	try {
 		return await action();
 	} finally {
-		await release();
+		await release().catch((error: unknown) => {
+			if (!lost) throw error;
+		});
 	}
 }
 

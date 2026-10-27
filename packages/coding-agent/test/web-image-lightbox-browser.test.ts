@@ -59,7 +59,7 @@ async function attachImage(name){
  need($('.attachments .thumb img'),'attachment thumbnail did not appear');
 }
 try {
- set({snap:{active:false,trust:{trusted:true},cwd:'C:/test',flags:{},queue:{steering:[],followUp:[]},model:null,session:{id:'test'},thinking:{supported:false,levels:[]}},dialogs:[],runs:{},toolRuns:{},userBash:{},userBashOrder:[],items:[
+ set({snap:{active:false,trust:{trusted:true},cwd:'C:/test',flags:{},queue:{steering:[],followUp:[]},model:null,session:{id:'test',persisted:true},thinking:{supported:false,levels:[]}},dialogs:[],runs:{},toolRuns:{},userBash:{},userBashOrder:[],items:[
   {kind:'user',id:'u1',ts:1,text:'with image',images:[{mimeType:'image/png',data:PNG}]},
   {kind:'assistant',id:'a1',ts:2,final:true,stopReason:'stop',blocks:[{type:'toolCall',id:'c1',name:'read',args:{path:'C:/test/x.png'}}]},
   {kind:'toolResult',id:'r1',ts:3,toolCallId:'c1',content:'read done',details:{},images:[{mimeType:'image/png',data:PNG}]}

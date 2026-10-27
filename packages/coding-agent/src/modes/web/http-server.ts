@@ -143,8 +143,11 @@ export class WebHttpServer {
 		this.requestScope = scope;
 	}
 
-	/** Log event-loop stalls with the API requests in progress (the real Web service turns this on). */
-	watchStalls(watch: StallWatch = new StallWatch()): void {
+	/**
+	 * Log event-loop stalls with the API requests in progress, and the functions they were spent in (the real Web
+	 * service turns this on).
+	 */
+	watchStalls(watch: StallWatch = new StallWatch(undefined, undefined, undefined, { profile: true })): void {
 		this.stallWatch?.stop();
 		this.stallWatch = watch;
 		watch.start();

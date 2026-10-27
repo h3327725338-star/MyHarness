@@ -141,6 +141,9 @@ function specFor(name) {
             NUGET_PACKAGES: path.join(dataRoot, "nuget-packages"),
             DOTNET_CLI_TELEMETRY_OPTOUT: "1",
             DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1",
+            // A first CLI run (the server loads projects through the SDK) would add the private home's tools folder to
+            // the user's own PATH in the registry.
+            DOTNET_ADD_GLOBAL_TOOLS_TO_PATH: "false",
             PATH: [dotnetRoot, process.env.PATH || ""].join(path.delimiter),
           },
         };

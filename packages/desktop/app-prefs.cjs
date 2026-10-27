@@ -46,4 +46,38 @@ function loginItem(app) {
   return { path: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--autostart'] };
 }
 
-module.exports = { createAppPrefs, loginItem, CLOSE_ACTIONS };
+/**
+ * The executable a Run entry named `name` starts, from `reg query` output; undefined when there is no such entry or
+ * its path cannot be read reliably (reg.exe prints characters outside its console code page as "?").
+ */
+function runEntryProgram(output, name) {
+  const pattern = new RegExp(`^\\s*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+REG_(?:EXPAND_)?SZ\\s+(.*?)\\s*$`, 'im');
+  const command = String(output).match(pattern)?.[1];
+  if (!command) return undefined;
+  const program = command.startsWith('"') ? command.slice(1, command.indexOf('"', 1)) : command.split(/\s+/)[0];
+  return program && /^[\x20-\x7e]+$/.test(program) && !program.includes('?') ? program : undefined;
+}
+
+/**
+ * Start at sign-in that the user turned on, rewritten for this executable when its Run entry names one that no longer
+ * exists: Windows keeps the path the entry was written with, so a build that moved the app (builds used to live in
+ * dated release folders) left an entry that started nothing while the setting showed as off. Packaged app only.
+ */
+function repairLoginItem(app, { log = () => {}, exists, readRunEntry } = {}) {
+  const item = loginItem(app);
+  if (!app.isPackaged || app.getLoginItemSettings(item).openAtLogin) return Promise.resolve(false);
+  const name = 'MyHarness';
+  const read = readRunEntry || ((value) => new Promise((resolve) => {
+    require('node:child_process').execFile('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', value], { encoding: 'latin1', windowsHide: true, timeout: 5000 }, (error, stdout) => resolve(error ? '' : stdout));
+  }));
+  const fileExists = exists || require('node:fs').existsSync;
+  return read(name).then((output) => {
+    const program = runEntryProgram(output, name);
+    if (!program || fileExists(program)) return false;
+    app.setLoginItemSettings({ openAtLogin: true, ...item });
+    log(`开机启动项指向已不存在的 ${program}，已改为当前程序`);
+    return true;
+  }, () => false);
+}
+
+module.exports = { createAppPrefs, loginItem, runEntryProgram, repairLoginItem, CLOSE_ACTIONS };

@@ -18,6 +18,15 @@ function makeParas(prefix: string, count: number, filler = "xxxxxxxxxxxxxxxxxxxx
 	return parts.join("\n\n");
 }
 
+/** The placeholder of not-yet-parsed text: one paragraph per blank-line-separated block (the inputs here need no escaping). */
+function pendingParagraphs(text: string): string {
+	return text
+		.split(/\n[ \t]*\n\s*/)
+		.filter((block) => block.trim())
+		.map((block) => `<p class="md-pending">${block}</p>`)
+		.join("");
+}
+
 function createHarness() {
 	const lexerCalls: LexerCall[] = [];
 	const parserCalls: ParserCall[] = [];
@@ -247,7 +256,7 @@ describe("web markdown incremental parse contract", () => {
 		inst.small = null;
 		const vnode = inst.render({ text: T2 });
 		const html = vnode.props.dangerouslySetInnerHTML.__html;
-		expect(html).toBe(`${s1.html}<div class="md-pending">${append}</div>`);
+		expect(html).toBe(`${s1.html}${pendingParagraphs(append)}`);
 		expect(html).not.toContain("<pre");
 		expect(html.startsWith(s1.html)).toBe(true);
 	});
@@ -275,7 +284,7 @@ describe("web markdown incremental parse contract", () => {
 		expect(largeText.length).toBeGreaterThanOrEqual(16000);
 		const v2 = inst.render({ text: largeText });
 		const html2 = v2.props.dangerouslySetInnerHTML.__html;
-		expect(html2).toBe(`${html1}<div class="md-pending">${append}</div>`);
+		expect(html2).toBe(`${html1}${pendingParagraphs(append)}`);
 		expect(html2.startsWith(html1)).toBe(true);
 		expect(html2).not.toContain("<pre");
 	});
@@ -301,7 +310,7 @@ describe("web markdown incremental parse contract", () => {
 		inst.small = null;
 		const v = inst.render({ text: fresh });
 		const html = v.props.dangerouslySetInnerHTML.__html;
-		expect(html).toBe(`<div class="md-pending">${fresh}</div>`);
+		expect(html).toBe(pendingParagraphs(fresh));
 		expect(html).not.toContain("<pre");
 		expect(html).not.toContain("<p>");
 	});
@@ -320,7 +329,7 @@ describe("web markdown incremental parse contract", () => {
 		inst.small = null;
 		const v = inst.render({ text: T });
 		const html = v.props.dangerouslySetInnerHTML.__html;
-		expect(html).toBe(`<div class="md-pending">${T}</div>`);
+		expect(html).toBe(pendingParagraphs(T));
 		expect(html).not.toContain("<pre");
 	});
 });

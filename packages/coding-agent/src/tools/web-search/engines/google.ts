@@ -26,7 +26,7 @@ const WML_USER_AGENTS = [
 /** Lightweight attempts per query. Google's CAPTCHA answers are per request, so one retry with another UA often passes. */
 const WML_ATTEMPTS = 2;
 
-const TIME_RANGE: Record<SearchTimeRange, string> = { day: "qdr:d", month: "qdr:m", year: "qdr:y" };
+const TIME_RANGE: Record<SearchTimeRange, string> = { day: "qdr:d", week: "qdr:w", month: "qdr:m", year: "qdr:y" };
 
 let nextUserAgent = 0;
 

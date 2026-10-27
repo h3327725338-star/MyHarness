@@ -1985,10 +1985,11 @@ describe("Web UI: store.js first-screen ordering of the unbound and archived lis
 	});
 });
 
-describe("Web UI: applyAppearance writes <html> only when a value changed", () => {
+describe("Web UI: applyAppearance writes <html> and .app only when a value changed", () => {
 	let store: any;
 	let lang: any;
 	let root: any;
+	let app: any;
 	let writes: string[];
 	let savedView: Record<string, unknown>;
 	let savedLang: string;
@@ -2055,11 +2056,16 @@ describe("Web UI: applyAppearance writes <html> only when a value changed", () =
 		store.state.view.panelW = 560;
 		store.state.view.lang = "en";
 		root = freshRoot();
+		// The column widths go on the `.app` App hands over (store.js applyColumnWidths); both stubs record into `writes`.
+		app = freshRoot();
 		vi.stubGlobal("document", { documentElement: root });
+		store.applyColumnWidths(app);
+		writes = [];
 		vi.stubGlobal("matchMedia", () => ({ matches: false }));
 	});
 
 	afterEach(() => {
+		store.applyColumnWidths(null);
 		Object.assign(store.state.view, { ...savedView, colorThemes: { ...(savedView.colorThemes as object) } });
 		lang.setLang(savedLang);
 		vi.unstubAllGlobals();
@@ -2079,6 +2085,8 @@ describe("Web UI: applyAppearance writes <html> only when a value changed", () =
 		store.state.view.sidebarW = 300;
 		store.applyAppearance();
 		expect(writes).toEqual(["--sidebar-w"]);
+		expect(app.style.getPropertyValue("--sidebar-w")).toBe("300px");
+		expect(root.style.getPropertyValue("--sidebar-w")).toBe("");
 		writes = [];
 		store.state.view.lang = "zh-CN";
 		store.applyAppearance();

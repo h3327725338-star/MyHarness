@@ -1,6 +1,20 @@
 /* The sidebar and the right-hand panel are grid tracks that animate open and closed; the main area is the track between them,
    so the conversation reflows in the same frames. The one row is exactly as tall as the window (never as tall as its
    content): whatever a column holds scrolls inside that column and cannot make the other columns taller. */
+/* The column widths are custom properties of `.app` (store.js applyColumnWidths) that are not inherited: a change (each
+   frame of a drag on a column edge, the panel opening or closing, the sidebar folding beside an open panel, collaboration
+   mode) restyles `.app` and the few elements sized by them, which take them over explicitly. Inherited, and the dragged
+   ones set on the page root, every change restyled every element of the page: about 30 ms a frame on a long chat
+   (2026-10-27). The initial values are the defaults of store.js. */
+@property --sidebar-w { syntax: "*"; inherits: false; initial-value: 272px; }
+@property --panel-w { syntax: "*"; inherits: false; initial-value: 560px; }
+@property --chat-w { syntax: "*"; inherits: false; initial-value: 420px; }
+@property --panel-width { syntax: "*"; inherits: false; }
+@property --panel-current { syntax: "*"; inherits: false; }
+@property --chat-col { syntax: "*"; inherits: false; }
+@property --chat-min-ws { syntax: "*"; inherits: false; }
+:where(.app > .sidebar, .sidebar > :not(.resizer)) { --sidebar-w: inherit; }
+:where(.app > .panel-slot, .panel-slot > .panel) { --panel-w: inherit; --panel-width: inherit; }
 .app { --panel-width: min(var(--panel-w), max(340px, calc(100vw - var(--sidebar-w) - 520px))); display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--panel-current, 0px); grid-template-rows: minmax(0, 1fr); height: 100%; transition: grid-template-columns var(--t-slow) var(--ease); }
 .app:has(> .sidebar.is-collapsed) { grid-template-columns: 0px minmax(0, 1fr) var(--panel-current, 0px); }
 .app:has(> .sidebar.is-collapsed).panel-open { --panel-current: calc(min(var(--panel-w), max(340px, calc(100vw - 520px))) + 6px); }
@@ -282,7 +296,7 @@
 ::view-transition-new(root) { clip-path: circle(0px at 0 0); }
 /* Inside the mode reveal (mode-transition.js) the new mode is drawn as it stays: its columns and panel take their place at
    once instead of sliding and fading in under the circle, which also keeps the reveal's frames free of layout work. */
-html.mode-revealing .app, html.mode-revealing .panel-slot { transition: none; }
+html.mode-revealing .app, html.mode-revealing .main, html.mode-revealing .panel-slot { transition: none; }
 /* Keep the switch above the page reveal so its soft motion and icon morph remain visible. */
 ::view-transition-group(mode-switch), ::view-transition-new(mode-switch) { animation: none; }
 ::view-transition-old(mode-switch) { display: none; }
@@ -439,7 +453,10 @@ html.mode-revealing .app, html.mode-revealing .panel-slot { transition: none; }
 .app.ws-max.panel-open { grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--chat-col); }
 .app.ws-max.panel-open:has(> .sidebar.is-collapsed) { grid-template-columns: 0px minmax(0, 1fr) var(--chat-col); }
 .app.ws-max { --chat-col: min(calc(var(--chat-w) + 6px), max(326px, calc(100vw - 480px))); }
-.app.ws-switching, .app.ws-switching * { transition: none !important; }
+/* No transition runs while the columns swap: for a moment after the swap (`.ws-switching`, app.js), or for the whole
+   morph (`html.ws-morph`, layout-morph.js). Turning them off for every element restyles every element; the morph's View
+   Transition restyles the whole page anyway as it starts and ends, so there it costs nothing extra. */
+.app.ws-switching, .app.ws-switching *, html.ws-morph .app, html.ws-morph .app * { transition: none !important; }
 .app.ws-max .panel-slot { order: 1; box-shadow: none; }
 .app.ws-max .main { order: 2; margin: 6px 6px 6px 6px; border-radius: var(--r-lg); }
 .app.ws-max .panel { --panel-width: 100%; width: 100%; margin: 6px 0 6px 0; border-left: 1px solid var(--border); border-radius: var(--r-lg); }

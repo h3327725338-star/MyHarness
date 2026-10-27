@@ -112,6 +112,9 @@ My Drive/
 
 ## Local polling cost
 
+The upload queue streams a file through the hash instead of reading it as one buffer, yields between entities, and
+reuses the hash saved for a file whose size and modification time did not change (`hashes-<account>.json`, kept across
+restarts), so no pass holds the server's event loop for long, however large the library.
 Memory scans reuse ancestor safety checks within each traversal and retain only file identity metadata between polls.
 Unchanged Markdown is not read or YAML-parsed again; replacement, modification and deletion are checked on the next scan.
 A successful poll that changes only `lastCheckAt` writes a small `state-<hash>.json.check.json` sidecar rather than
@@ -310,6 +313,10 @@ Everything device-specific lives below `<agentDir>/sync/`:
 - `state-<account>.json` — vectors, tombstones, applied batches, conflicts, bindings (one file per Google account);
 - `bases-<account>/` — the last content both devices committed for each memory, used as the common ancestor of a
   three-way merge. Never uploaded; one content file per hash plus an index.
+- `hashes-<account>.json` — the content hash of each synced local file with the size and modification time it was
+  taken at. A file that still has both is not read again, also after a restart; anything else is streamed through the
+  hash again. Without it the first pass after every start read and hashed every synced file (about 1.2 GB for a large
+  library) and held the server for 10–20 s. Deleting it only costs that one slower pass.
 - `credentials.json` — access/refresh token, written with mode 0600 and atomic replace;
 - `backups/`, `recovered/` — previous and unapplied versions, at most 20 per key.
 

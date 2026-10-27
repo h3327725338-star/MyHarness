@@ -37,8 +37,6 @@
 	/* The inset of everything in the sidebar and in the right-hand panel: rows, bars and text start and end on it. */
 	--pad-side: 8px;
 	--pad-panel: 12px;
-	--sidebar-w: 272px;
-	--panel-w: 560px;
 	--read-w: 780px;
 
 	--ease: cubic-bezier(0.2, 0, 0, 1);

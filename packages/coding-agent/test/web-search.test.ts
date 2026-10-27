@@ -872,6 +872,26 @@ describe("web tools", () => {
 		]);
 	});
 
+	it("reads one query or URL written as plain text as a one-item list, and accepts a week time range", () => {
+		const search = createWebSearchToolDefinition("C:/myharness", { service: {} as WebSearchService });
+		const fetchTool = createWebFetchToolDefinition("C:/myharness", { service: {} as WebSearchService });
+		expect(search.prepareArguments!({ queries: "Starbucks SS15 opening hours", timeRange: "week" })).toEqual({
+			queries: ["Starbucks SS15 opening hours"],
+			timeRange: "week",
+		});
+		expect(fetchTool.prepareArguments!({ urls: " https://site.example/a " })).toEqual({
+			urls: ["https://site.example/a"],
+		});
+		// A real list, or a string that only failed to be a JSON list, is left for validation to judge.
+		const list = { queries: ["a", "b"] };
+		expect(search.prepareArguments!(list)).toBe(list);
+		const broken = { queries: '["a", "b' };
+		expect(search.prepareArguments!(broken)).toBe(broken);
+		const timeRange = (search.parameters as { properties: { timeRange: { anyOf: Array<{ const: string }> } } })
+			.properties.timeRange;
+		expect(timeRange.anyOf.map((branch) => branch.const)).toEqual(["day", "week", "month", "year"]);
+	});
+
 	it("ends a call at once on a stop, even while the search itself is stuck", async () => {
 		const stuck = new Promise<never>(() => {});
 		const service = { search: () => stuck, fetch: () => stuck } as unknown as WebSearchService;

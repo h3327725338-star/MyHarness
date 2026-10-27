@@ -231,6 +231,27 @@ describe("ask_user_question", () => {
 		]);
 	});
 
+	it("takes options written as { label, description } objects as their text", async () => {
+		const prepared = definition.prepareArguments!({
+			questions: [
+				{
+					question: "怎么存？",
+					options: [{ label: "加密后放网盘", description: "最稳" }, { label: "放密码管理器" }, "不存了"],
+				},
+			],
+		});
+		expect(prepared.questions[0]!.options).toEqual(["加密后放网盘 — 最稳", "放密码管理器", "不存了"]);
+		const select = vi.fn().mockResolvedValueOnce("加密后放网盘 — 最稳");
+		const result = await run(prepared, { hasUI: true, ui: { select, input: vi.fn() } });
+		expect(textOf(result)).toBe("问题：怎么存？\n回答：加密后放网盘 — 最稳");
+		// Plain string options pass through untouched, and an object without a label is left for validation to report.
+		const plain = { questions: [{ question: "Q?", options: ["A", "B"] }] };
+		expect(definition.prepareArguments!(plain)).toBe(plain);
+		expect(definition.prepareArguments!({ questions: [{ question: "Q?", options: [{ text: "A" }, "B"] }] })).toEqual({
+			questions: [{ question: "Q?", options: [{ text: "A" }, "B"] }],
+		});
+	});
+
 	it("uses the execution mode and prompt snippet the registry expects", () => {
 		expect(definition.executionMode).toBe("sequential");
 		expect(definition.name).toBe("ask_user_question");

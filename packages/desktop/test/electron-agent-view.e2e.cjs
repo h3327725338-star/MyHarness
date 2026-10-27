@@ -56,7 +56,13 @@ const until = async (fn, ms = 10000) => {
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Agent View</title></head>
 <body style="margin:0;font:14px sans-serif">
 <button id="far" style="position:absolute;left:300px;top:30px;width:60px;height:40px">Far</button>
-<div style="position:absolute;left:416px;top:0;width:10px;height:10px;background:rgb(255,0,0)"></div>
+<canvas id="mark" width="10" height="10" style="position:absolute;left:416px;top:0;width:10px;height:10px"></canvas>
+<script>
+// Painted pixels, not a CSS background: dark mode (Dark Reader, when installed) recolors styles but not drawings.
+const markPen = document.getElementById('mark').getContext('2d');
+markPen.fillStyle = 'rgb(255,0,0)';
+markPen.fillRect(0, 0, 10, 10);
+</script>
 <div id="pages" style="position:absolute;left:40px;top:160px;width:120px;height:30px"><a href="#1" style="position:absolute;left:0;top:6px">1</a><a href="#2" style="position:absolute;left:40px;top:6px">2</a></div>
 <a id="file" href="/files/notes.docx" style="position:absolute;left:40px;top:120px">Download notes.docx</a>
 <div id="log" style="position:absolute;left:20px;top:200px"></div>

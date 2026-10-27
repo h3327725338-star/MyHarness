@@ -1,6 +1,7 @@
 // Which chat this page shows and whether its window has the focus, told to the server (POST /api/presence). The server
 // uses it for the task-end popup it shows itself when no page answered in time (a page busy rendering, say): a chat the
 // user is looking at gets no popup. The page applies the same rule to its own notifications through appFocused().
+import { exportReadOnly } from "./export-mode.js";
 
 const page = crypto.randomUUID();
 const HEARTBEAT_MS = 60_000;
@@ -16,6 +17,8 @@ export function appFocused() {
 }
 
 function send(body) {
+	// A read-only export is a file with no server behind it: there is nobody to tell.
+	if (exportReadOnly()) return;
 	fetch("/api/presence", {
 		method: "POST",
 		headers: { "x-myharness-web": "1", "content-type": "application/json" },

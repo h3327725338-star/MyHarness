@@ -9,6 +9,7 @@ import { actions } from "./actions.js";
 import { PanelBody } from "./command-panel.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
 import { DiffView, languageFor } from "./diff.js";
+import { columnsSettled } from "./column-motion.js";
 import { basename, dirname, fmtDateTime, plural } from "./util.js";
 import { t, N_, serverText } from "./i18n.js";
 
@@ -161,6 +162,8 @@ export function ChangesPanel() {
 		try {
 			const q = `scope=${scope}${fresh ? "&fresh=1" : ""}`;
 			const result = await api(`/api/changes?${q}`, { slot: targetSlot });
+			// The list (and the diff it brings) is drawn after the panel has slid open, not in the middle of the slide.
+			await columnsSettled();
 			if (version !== loadVersion.current) return;
 			if (slotRef.current !== targetSlot) return;
 			freshLoadRef.current = !!fresh;

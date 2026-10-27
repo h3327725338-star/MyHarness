@@ -25,8 +25,8 @@ const webSearchSchema = Type.Object({
 		description: "一个或多个相互独立的搜索问题；每个问题会发给所有已启用的搜索引擎，结果合并去重",
 	}),
 	timeRange: Type.Optional(
-		Type.Union([Type.Literal("day"), Type.Literal("month"), Type.Literal("year")], {
-			description: "只要最近一天/一月/一年的结果",
+		Type.Union([Type.Literal("day"), Type.Literal("week"), Type.Literal("month"), Type.Literal("year")], {
+			description: "只要最近一天/一周/一月/一年的结果",
 		}),
 	),
 	maxResults: Type.Optional(
@@ -252,6 +252,19 @@ function formatFetchResponse(response: WebFetchResponse): { preview: string; ful
 	};
 }
 
+/**
+ * A single query or URL written as plain text instead of a one-item list: there is only one way to read it, so it is
+ * used as that list rather than failing validation and costing the model a round trip (seen in real use for queries).
+ * A string holding a JSON list was already turned into the list by the shared argument recovery before this runs.
+ */
+function listFromPlainText<T>(args: T, key: "queries" | "urls"): T {
+	const value = (args as Record<string, unknown> | undefined)?.[key];
+	if (typeof value !== "string") return args;
+	const text = value.trim();
+	if (!text || text.startsWith("[")) return args;
+	return { ...(args as Record<string, unknown>), [key]: [text] } as T;
+}
+
 export function createWebSearchToolDefinition(
 	_cwd: string,
 	options?: WebSearchToolOptions,
@@ -265,6 +278,7 @@ export function createWebSearchToolDefinition(
 		promptSnippet: loadSystemPrompt("tools/web-search/snippet.md"),
 		promptGuidelines: loadSystemPromptLines("tools/web-search/guidelines.md"),
 		parameters: webSearchSchema,
+		prepareArguments: (args) => listFromPlainText(args as WebSearchToolInput, "queries"),
 		async execute(_toolCallId, params: WebSearchToolInput, signal, onUpdate) {
 			const response = await untilStopped(
 				service.search(
@@ -319,6 +333,7 @@ export function createWebFetchToolDefinition(
 		promptSnippet: loadSystemPrompt("tools/web-fetch/snippet.md"),
 		promptGuidelines: loadSystemPromptLines("tools/web-fetch/guidelines.md"),
 		parameters: webFetchSchema,
+		prepareArguments: (args) => listFromPlainText(args as WebFetchToolInput, "urls"),
 		async execute(_toolCallId, params: WebFetchToolInput, signal, onUpdate) {
 			const response = await untilStopped(
 				service.fetch(

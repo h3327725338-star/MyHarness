@@ -817,13 +817,22 @@ export class SessionManager {
 		}
 		let release: (() => void) | undefined;
 		let owner: WriterLockOwnerMarker | undefined;
+		let ownerRefresh: ReturnType<typeof setInterval> | undefined;
+		const sessionFile = this.sessionFile;
 		try {
 			const acquire = () =>
-				lockfile.lockSync(this.sessionFile!, {
+				lockfile.lockSync(sessionFile, {
 					realpath: false,
 					lockfilePath: lockPath,
 					stale: WRITER_LOCK_STALE_MS,
 					update: WRITER_LOCK_UPDATE_MS,
+					// The lock folder vanished (the chat was moved or deleted while open) or another process took the lock
+					// over after a long pause. proper-lockfile's default handler throws from a timer, which ended the whole
+					// server and every chat in it; the chat keeps its state, so only report the loss.
+					onCompromised: (error) => {
+						clearInterval(ownerRefresh);
+						console.error(`Session writer lock lost for ${sessionFile}: ${error.message}`);
+					},
 				});
 			try {
 				release = acquire();
@@ -838,14 +847,20 @@ export class SessionManager {
 			};
 			writeFileSync(getWriterLockOwnerPath(lockPath), `${JSON.stringify(owner)}\n`, "utf8");
 			const heldOwner = owner;
-			const ownerRefresh = setInterval(() => {
-				if (!refreshWriterLockOwner(lockPath, heldOwner)) clearInterval(ownerRefresh);
+			const refresh = setInterval(() => {
+				if (!refreshWriterLockOwner(lockPath, heldOwner)) clearInterval(refresh);
 			}, WRITER_LOCK_UPDATE_MS);
-			ownerRefresh.unref();
+			refresh.unref();
+			ownerRefresh = refresh;
 			const releaseOwnedLock = () => {
-				clearInterval(ownerRefresh);
+				clearInterval(refresh);
 				removeWriterLockOwner(lockPath, owner!.token);
-				release?.();
+				try {
+					release?.();
+				} catch (error) {
+					// A lock lost meanwhile (see onCompromised) is already released.
+					if (getErrorCode(error) !== "ERELEASED") throw error;
+				}
 			};
 			localWriterLeases.set(lockKey, { count: 1, release: releaseOwnedLock });
 			this.writerLockRelease = () => {

@@ -1,7 +1,7 @@
 import type { WebSearchEngineId } from "../../../config/settings/types.ts";
 import type { BrowserPageRequest, HttpTransport, TransportPage } from "../transport.ts";
 
-export type SearchTimeRange = "day" | "month" | "year";
+export type SearchTimeRange = "day" | "week" | "month" | "year";
 
 export interface EngineQuery {
 	query: string;

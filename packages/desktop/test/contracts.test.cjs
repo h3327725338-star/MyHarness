@@ -89,6 +89,28 @@ test('desktop preferences: close action defaults to ask, saves valid choices and
     assert.deepEqual(loginItem({ isPackaged: false, getAppPath: () => 'C:/app' }).args, ['C:/app', '--autostart']);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+test('start at sign-in: a Run entry naming a build that no longer exists is written again for this executable', async () => {
+  const { runEntryProgram, repairLoginItem } = require('../app-prefs.cjs');
+  const stale = '\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\r\n    MyHarness    REG_SZ    "C:\\myharness\\dist\\desktop\\release-2026-10-24\\win-unpacked\\MyHarness.exe" --autostart\r\n\r\n';
+  assert.equal(runEntryProgram(stale, 'MyHarness'), 'C:\\myharness\\dist\\desktop\\release-2026-10-24\\win-unpacked\\MyHarness.exe');
+  assert.equal(runEntryProgram('    MyHarness    REG_SZ    C:\\Apps\\MyHarness.exe --autostart', 'MyHarness'), 'C:\\Apps\\MyHarness.exe');
+  assert.equal(runEntryProgram('    MyHarness    REG_SZ    "C:\\Users\\??\\MyHarness.exe" --autostart', 'MyHarness'), undefined, 'a path reg.exe could not print is left alone');
+  assert.equal(runEntryProgram('    Other    REG_SZ    "C:\\Other.exe"', 'MyHarness'), undefined);
+  const fakeApp = (openAtLogin) => {
+    const calls = [];
+    return { calls, isPackaged: true, getAppPath: () => 'x', getLoginItemSettings: () => ({ openAtLogin }), setLoginItemSettings: (settings) => calls.push(settings) };
+  };
+  const moved = fakeApp(false);
+  assert.equal(await repairLoginItem(moved, { readRunEntry: async () => stale, exists: () => false }), true);
+  assert.deepEqual(moved.calls, [{ openAtLogin: true, path: process.execPath, args: ['--autostart'] }]);
+  const elsewhere = fakeApp(false);
+  assert.equal(await repairLoginItem(elsewhere, { readRunEntry: async () => stale, exists: () => true }), false, 'an entry for another copy that exists is the user\'s choice');
+  const none = fakeApp(false);
+  assert.equal(await repairLoginItem(none, { readRunEntry: async () => '', exists: () => false }), false, 'turned off: nothing to repair');
+  const current = fakeApp(true);
+  assert.equal(await repairLoginItem(current, { readRunEntry: async () => { throw new Error('not read'); } }), false);
+  assert.deepEqual([...elsewhere.calls, ...none.calls, ...current.calls], []);
+});
 test('zoom: Chrome-like steps, keys and a per-site store', () => {
   const os = require('node:os');
   const { stepZoom, zoomKey, cleanZoom, createSiteZoomStore } = require('../zoom.cjs');

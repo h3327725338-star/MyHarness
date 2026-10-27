@@ -637,9 +637,21 @@ export function applyAppearance() {
 	setDataset(root, "motion", state.view.motion === "system" ? "" : state.view.motion);
 	setDataset(root, "chatMode", state.view.chatMode);
 	setCssVar(root, "--read-w", state.view.readWidth === "auto" ? "clamp(720px, 82%, 1060px)" : `${state.view.readWidth}px`);
-	setCssVar(root, "--sidebar-w", `${state.view.sidebarW}px`);
-	setCssVar(root, "--panel-w", `${state.view.panelW}px`);
-	setCssVar(root, "--chat-w", `${state.view.chatW}px`);
+	applyColumnWidths();
+}
+
+/** `.app` as App last mounted it: the element that carries the column widths. */
+let columnsHost = null;
+/**
+ * The column widths go on `.app`, where layout.css keeps them from being inherited: set on the page root, each change
+ * restyled every element of the page, each frame of a drag on a column edge. App hands over a newly mounted `.app`.
+ */
+export function applyColumnWidths(el = columnsHost) {
+	columnsHost = el;
+	if (!el) return;
+	setCssVar(el, "--sidebar-w", `${state.view.sidebarW}px`);
+	setCssVar(el, "--panel-w", `${state.view.panelW}px`);
+	setCssVar(el, "--chat-w", `${state.view.chatW}px`);
 }
 
 // Every setView() funnels through applyAppearance(), so each write below first reads the live DOM value and skips

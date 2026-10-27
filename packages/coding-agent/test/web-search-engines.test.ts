@@ -152,6 +152,17 @@ describe("Google engine", () => {
 		expect(blocked.calls).toHaveLength(2);
 	});
 
+	it("asks Google for the past week when the time range is a week", async () => {
+		const { http, calls } = scriptedHttp(
+			() =>
+				new Response(googleWml([{ title: "A", url: "https://a.example/" }]), {
+					headers: { "content-type": "text/html" },
+				}),
+		);
+		await expect(google.search({ query: "x", timeRange: "week" }, context(http))).resolves.toHaveLength(1);
+		expect(calls[0]!.url.searchParams.get("tbs")).toBe("qdr:w");
+	});
+
 	it("falls back to the system address family only when IPv4 cannot connect", async () => {
 		const { http, calls } = scriptedHttp((_url, init) => {
 			if (init?.ipFamily === 4) {

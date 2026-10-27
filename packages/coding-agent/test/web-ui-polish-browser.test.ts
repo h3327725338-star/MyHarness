@@ -95,6 +95,8 @@ import {GitRecord} from '/js/git-record.js';
 import {ContextPanel} from '/js/panel-context.js';
 import {SettingsModal,sectionOf} from '/js/overlays-settings.js';
 import {set,setView} from '/js/store.js';
+import {t} from '/js/i18n.js';
+import {Icon} from '/js/icons.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const app=document.getElementById('app');
 try {
@@ -112,7 +114,7 @@ try {
  if(add?.textContent!=='+12'||del?.textContent!=='-3'||getComputedStyle(add).color===getComputedStyle(del).color) throw Error('Git colours');
  render(null,app);
  const repairItems=[{kind:'user',id:'task',ts:1,text:'original task',images:[]},{kind:'assistant',ts:2,blocks:[{type:'text',text:'original answer'}],stopReason:'stop',final:true},{kind:'custom',id:'repair',ts:3,customType:'git-commit-repair',display:false},{kind:'assistant',ts:4,blocks:[{type:'toolCall',id:'r',name:'read',args:{path:'repair.ts'}}],stopReason:'toolUse'}];
- set({items:repairItems,gitTask:{active:true,kind:'commit',activity:'Repairing and recommitting'},toolRuns:{r:{status:'running'}},snap:{active:true,cwd:'C:/test',flags:{},session:{id:'test'},thinking:{supported:false},run:{startedAt:Date.now()}}});
+ set({items:repairItems,gitTask:{active:true,kind:'commit',phase:'repairing',activity:'Repairing and recommitting'},toolRuns:{r:{status:'running'}},snap:{active:true,cwd:'C:/test',flags:{},session:{id:'test'},thinking:{supported:false},run:{startedAt:Date.now()}}});
  render(h(Transcript,{}),app);await wait(100);
  let card=document.querySelector('.git-result');
  if(document.querySelectorAll('.git-result').length!==1) throw Error('duplicate Commit card');
@@ -121,8 +123,9 @@ try {
  card.querySelector('[aria-expanded]').click();await wait(100);
  const summary=card.querySelector('.summary-head[aria-expanded]');summary.click();await wait(100);
  if(!card.querySelector('.action')||document.querySelector('.action')?.closest('.git-result')!==card) throw Error('repair tool escaped Commit');
+ // A result the server wrote in English is shown in the interface language.
  set({items:[...repairItems,{kind:'toolResult',ts:5,toolCallId:'r',toolName:'read',text:'source',isError:false},{kind:'gitStatus',id:'git',ts:6,result:{tone:'ok',title:'Commit succeeded',hash:'abc1234'}}],gitTask:null,snap:{active:false,cwd:'C:/test',flags:{},session:{id:'test'},thinking:{supported:false}}});await wait(100);
- if(document.querySelector('.git-result')!==card||!card.textContent.includes('Commit succeeded')||!card.querySelector('.action')) throw Error('Commit result did not update in place');
+ if(document.querySelector('.git-result')!==card||!card.textContent.includes(t('Commit succeeded'))||!card.querySelector('.action')) throw Error('Commit result did not update in place');
  set({items:[...repairItems,{kind:'gitStatus',id:'git',ts:6,result:{tone:'error',title:'Commit failed',detail:'hook failed',lines:'hook failed and diagnostic'}}]});await wait(100);
  if(document.querySelector('.git-result')!==card||card.getAttribute('role')!=='alert'||!card.textContent.includes('hook failed')||document.querySelector('.action')?.closest('.git-result')!==card) throw Error('failed repair escaped Commit');
  render(h(SettingsModal,{}),app); await wait(150);
@@ -147,7 +150,8 @@ try {
  (document.querySelector('.set-multiselect-btn') || document.querySelector('.select-like'))?.click();await wait(100);
  if(sectionOf(items[0])!=='conversation'||sectionOf(items[2])!=='search') throw Error('wrong settings ownership');
  if(document.querySelector('.settings-nav').textContent.includes('工具调用')) throw Error('empty tools page still in the navigation');
- if([...document.querySelectorAll('.settings-nav button')].filter(b=>b.querySelector('svg')?.innerHTML.startsWith('<path d="M14.7 6.3')).length!==1) throw Error('wrench icon not used exactly once');
+ const probe=document.createElement('div');render(h(Icon,{name:'wrench',size:14}),probe);const wrench=probe.querySelector('svg path').getAttribute('d');
+ if([...document.querySelectorAll('.settings-nav button')].filter(b=>b.querySelector('svg path')?.getAttribute('d')===wrench).length!==1) throw Error('wrench icon not used exactly once');
  setView({settingsSection:'agent'});await wait(100);
  if(!document.querySelector('.settings-body').textContent.includes('禁止发送图片')||document.querySelector('.set-card-toggle')) throw Error('images not flat in Agent');
  setView({settingsSection:'code'});await wait(150);

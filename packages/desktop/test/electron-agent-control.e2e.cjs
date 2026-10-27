@@ -61,6 +61,9 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Agent Cont
 <script>
 const log = [];
 const add = (text) => { log.push(text); document.getElementById('log').textContent = log.join('|'); };
+// Painted pixels, not only the CSS background: dark mode (Dark Reader, when installed) recolors styles but not drawings.
+canvas.getContext('2d').fillStyle = 'rgb(255,0,0)';
+canvas.getContext('2d').fillRect(0, 0, 200, 100);
 canvas.addEventListener('click', (e) => add('canvas:' + e.offsetX + ',' + e.offsetY + ':' + e.isTrusted));
 pic.addEventListener('click', (e) => add('img:' + e.isTrusted));
 pic.addEventListener('dblclick', () => add('img-dbl'));

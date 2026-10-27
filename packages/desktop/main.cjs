@@ -8,7 +8,7 @@ const { createBrowser, httpUrl } = require('./browser-view.cjs');
 const { readLegacyPrefs } = require('./legacy-prefs.cjs');
 const { pointShortcutIcons, removeForeignShortcuts } = require('./notification-routing.cjs');
 const { attachPreviewLinks } = require('./preview-links.cjs');
-const { createAppPrefs, loginItem } = require('./app-prefs.cjs');
+const { createAppPrefs, loginItem, repairLoginItem } = require('./app-prefs.cjs');
 const { attachZoom, cleanZoom, stepZoom } = require('./zoom.cjs');
 const { applyEngineLanguage } = require('./browser-language.cjs');
 const root = resolve(__dirname, '../..');
@@ -261,6 +261,7 @@ else {
     if (app.isPackaged) {
       void removeForeignShortcuts({ aumid: notificationAppId, log })
         .then(() => pointShortcutIcons({ aumid: notificationAppId, exe: process.execPath, icon: taskbarIcon(), log }));
+      void repairLoginItem(app, { log });
     }
     window = new BrowserWindow({ width: 1440, height: 960, minWidth: 980, minHeight: 600, show: false, frame: false, title: 'MyHarness', backgroundColor: '#1e1f1f', icon: APP_ICON, webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.setMenu(null);

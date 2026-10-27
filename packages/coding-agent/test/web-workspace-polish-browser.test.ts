@@ -65,6 +65,13 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				return { ok: true };
 			});
 			server.route("POST", "/api/files/upload", () => ({ name: "notes.txt", path: "C:/session/uploads/notes.txt" }));
+			// The composer sends a file that is not an inline image in chunks.
+			server.route("POST", "/api/files/upload/begin", () => ({ uploadId: "upload-1" }));
+			server.route("POST", "/api/files/upload/chunk", () => ({ written: 5 }));
+			server.route("POST", "/api/files/upload/finish", () => ({
+				name: "notes.txt",
+				path: "C:/session/uploads/notes.txt",
+			}));
 			server.route("POST", "/api/sessions/touched", () => ({ ok: true }));
 			server.route("GET", "/api/resources", () => ({ commands: [] }));
 			server.route("GET", "/hold", async () => {
@@ -86,7 +93,7 @@ import {BranchChip} from '/js/branch-menu.js';
 import {Composer} from '/js/composer.js';
 import {ContextDetails} from '/js/context-usage.js';
 import {ProviderForm} from '/js/provider-form.js';
-import {set,setView,state} from '/js/store.js';
+import {activateSlot,set,setView,state} from '/js/store.js';
 import {actions} from '/js/actions.js';
 import {setLang} from '/js/lang.js';
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -122,7 +129,8 @@ try {
  set({slots:[{slot:'new-slot',cwd:'C:/project',sessionFile:'new-draft',sessionId:'new-id'}],activeSlot:'new-slot',snap:{session:{file:'new-draft'},workspace:{id:'w',rootPath:'C:/project'}}});await wait(70);
  check(document.querySelector('.chat-row').textContent.includes('新对话'),'new draft inserted below history');
  check(document.querySelectorAll('.chat-row').length===3,'exit not retained during insertion');
- await wait(450);check(document.querySelectorAll('.chat-row').length===2,'old draft retained too long');
+ // The left draft waits for the new one to grow in (260 ms), then folds away (260 ms + 60 ms).
+ await wait(600);check(document.querySelectorAll('.chat-row').length===2,'old draft retained too long');
  set({activeSlot:'other',slots:[]}); await wait(60);
  check(document.querySelector('.chat-row'),'draft removed instantly');
  await wait(600);check(document.querySelectorAll('.chat-row').length===1,'draft not cleaned up');
@@ -190,7 +198,14 @@ try {
  render(null,document.getElementById('app'));
  document.getElementById('app').style.cssText='';
  if (${process.env.MYHARNESS_BRANCH_MENU_ONLY !== "1"}) {
- set({snap:{session:{id:'import'},flags:{},trust:{trusted:true},model:{id:'m',input:['text','image']}},gitStatus:null,resources:{commands:[]},items:[],dialogs:[],queue:{steering:[],followUp:[]},surface:{widgets:{},statuses:{}}});
+ // Sends go to a loaded chat only: open one, its snapshot and (empty) transcript answered here.
+ const serverFetch=window.fetch.bind(window);
+ window.fetch=async(url,init)=>{const u=String(url);
+  if(u==='/api/state') return new Response(JSON.stringify({slot:'import',mode:'coding',session:{id:'import',persisted:true},flags:{},trust:{trusted:true},model:{id:'m',input:['text','image']},queue:{steering:[],followUp:[]},dialogs:[],surface:{widgets:{},statuses:{}},thinking:{levels:[]},run:{},app:{}}),{headers:{'content-type':'application/json'}});
+  if(u.startsWith('/api/transcript')) return new Response(JSON.stringify({items:[]}),{headers:{'content-type':'application/json'}});
+  return serverFetch(url,init);};
+ await activateSlot('import');
+ set({connected:true,snap:{session:{id:'import',persisted:true},flags:{},trust:{trusted:true},model:{id:'m',input:['text','image']}},gitStatus:null,resources:{commands:[]},items:[],dialogs:[],queue:{steering:[],followUp:[]},surface:{widgets:{},statuses:{}}});
  render(h(Composer,{}),document.getElementById('app'));await wait(200);
  const dt=new DataTransfer();dt.items.add(new File(['hello'],'notes.txt',{type:'text/plain'}));
  document.body.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:dt}));await wait(350);
@@ -198,14 +213,16 @@ try {
  check(!document.querySelector('input[type=file]').hasAttribute('accept'),'picker restricts files');
  let sent;actions.submit=async(text,options)=>{sent={text,options};return {handled:false,ok:true}};
  document.querySelector('.send').click();await wait(120);
- check(sent?.text.includes('C:/session/uploads/notes.txt')&&sent.options.images.length===0,'file reference not sent');
+ // A file goes as an attachment record (its stored path), not as text in the message.
+ check(sent?.options.attachments?.some(a=>a.path==='C:/session/uploads/notes.txt')&&sent.options.images.length===0,'file reference not sent');
  const editorDrop=new DataTransfer();editorDrop.items.add(new File(['again'],'notes.txt',{type:'text/plain'}));
  document.querySelector('.composer-input').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:editorDrop}));await wait(250);
  check(document.querySelectorAll('.file-attachment').length===1,'editor drop ignored or duplicated');
  document.querySelector('[aria-label="附加或插入"]').click();await wait(100);
- check([...document.querySelectorAll('.menu-item')].some(el=>el.textContent.includes('Explorer')),'Explorer entry missing');
+ // The + menu offers "Add files" (any type, images included) and "Add folder".
+ check([...document.querySelectorAll('.menu-item')].some(el=>el.textContent.trim()==='添加文件'),'Add files entry missing');
  const chooser=document.querySelector('input[type=file]');let pickerOpened=false;chooser.click=()=>{pickerOpened=true};
- [...document.querySelectorAll('.menu-item')].find(el=>el.textContent.includes('Explorer')).click();await wait(80);
+ [...document.querySelectorAll('.menu-item')].find(el=>el.textContent.trim()==='添加文件').click();await wait(80);
  check(pickerOpened&&chooser.accept==='','file menu did not invoke unrestricted picker');
  chooser.files=dt.files;chooser.dispatchEvent(new Event('change',{bubbles:true}));await wait(250);
  check(document.querySelectorAll('.file-attachment').length===2,'selected file not loaded');

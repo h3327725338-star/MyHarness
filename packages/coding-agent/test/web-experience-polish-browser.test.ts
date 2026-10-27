@@ -132,8 +132,7 @@ try {
  proj.click(); await wait(450);
  must(proj.getAttribute('aria-expanded')==='true' && angle(proj.querySelector('.chev'))===90,'open group arrow is not pointing down: '+angle(proj.querySelector('.chev')));
  must(side.textContent.includes('Chat p1'),'the open Workspace shows no chats');
- const archive=[...side.querySelectorAll('.ws-row')].find(r=>r.textContent.includes('Archive'));
- must(archive.getAttribute('aria-expanded')==='false' && angle(archive.querySelector('.chev'))===0,'Archive arrow is not pointing right');
+ must(![...side.querySelectorAll('.ws-row')].some(r=>r.textContent.includes('Archive')),'archived chats got a group in the sidebar');
 
  // 3. The other fold controls: the arrow is the same right-pointing glyph, turned a quarter by aria-expanded.
  const glyph=(name)=>h(Icon,{name:'chevronRight',size:13,class:name});
@@ -171,10 +170,8 @@ try {
  must(!slotOf('C:/fixture/a.jsonl')||slotOf('C:/fixture/a.jsonl').getBoundingClientRect().height<2,'a left-behind chat is still seen although animations are off');
  await wait(500);
  document.documentElement.dataset.motion='on';
- // What was archived on purpose is always listed.
- setView({expanded:{...state.view.expanded,'<archived>':true}}); await wait(500);
- must(slotOf('C:/fixture/z.jsonl'),'an archived blank chat is not listed');
- must(angle(archive.querySelector('.chev'))===90,'Archive arrow did not turn down');
+ // What was archived on purpose has no place in the sidebar.
+ must(!slotOf('C:/fixture/z.jsonl'),'an archived chat is listed in the sidebar');
 
  // 5. Escape leaves the name as it was (the box that closes also loses focus, which must not save what was typed); Enter saves it.
  const rename=async(key,text)=>{

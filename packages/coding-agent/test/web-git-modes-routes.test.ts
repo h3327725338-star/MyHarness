@@ -114,7 +114,8 @@ describe.skipIf(!gitAvailable)("Git commit and push modes (routes)", () => {
 		server = new WebHttpServer();
 		registerGitRoutes(server, host);
 		port = (await server.listen(0)).port;
-	});
+		// Nine git processes build the repository; with the whole suite running on Windows they outlast the 10 s hook default.
+	}, 60_000);
 
 	afterEach(async () => {
 		await server.close();

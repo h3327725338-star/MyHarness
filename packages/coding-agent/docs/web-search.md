@@ -156,8 +156,8 @@ Windows 上只对专用验证浏览器进程及其子进程的主窗口（可见
 
 | Tool | 参数 | 返回 |
 | --- | --- | --- |
-| `web_search` | `queries`（1–10 个独立问题）、可选 `timeRange`（`day`/`month`/`year`）、`maxResults`（1–50，默认 10，且不少于 Pages to Read per Search）、`readPages`（只有 0 有效，表示不读网页；其他值都按 Pages to Read per Search 读取）、`fresh` | `Engines:` 行写明每个引擎实际走的方式（如 `Google (HTTP), Bing (Firefox)`）；合并去重后的结果（标题、URL、来源引擎、摘要、发布日期）；以及前几个结果网页里与问题最相关的片段。`details.routes` 里有每个引擎 × 问题的方式和改用 Firefox 的原因 |
-| `web_fetch` | `urls`（1–60 个，实际最多读取 Max URLs per Fetch 个）、`fresh` | 每个 URL 的 Markdown 正文或独立的失败原因 |
+| `web_search` | `queries`（1–10 个独立问题；只写一个纯文本问题时按一个问题的列表处理）、可选 `timeRange`（`day`/`week`/`month`/`year`；Bing 没有“过去一年”筛选，`year` 在 Bing 上不限时间）、`maxResults`（1–50，默认 10，且不少于 Pages to Read per Search）、`readPages`（只有 0 有效，表示不读网页；其他值都按 Pages to Read per Search 读取）、`fresh` | `Engines:` 行写明每个引擎实际走的方式（如 `Google (HTTP), Bing (Firefox)`）；合并去重后的结果（标题、URL、来源引擎、摘要、发布日期）；以及前几个结果网页里与问题最相关的片段。`details.routes` 里有每个引擎 × 问题的方式和改用 Firefox 的原因 |
+| `web_fetch` | `urls`（1–60 个，实际最多读取 Max URLs per Fetch 个；只写一个纯文本 URL 时按一个 URL 的列表处理）、`fresh` | 每个 URL 的 Markdown 正文或独立的失败原因 |
 
 搜索规划由 Agent 负责：它决定搜什么、搜几次、读哪些网页、证据够不够。
 

@@ -9,7 +9,9 @@
  * screenshot, accessibility tree, downloads, popup windows, permission denial), checks native visibility and bounds and
  * stores a cookie plus localStorage. Phase 2 opens the same origin again and verifies the cookie/localStorage survived the
  * restart. Both phases use a fixed port so the origin is the same. The harness fails with exit code 1 at the first
- * broken invariant; it prints a JSON report instead of claiming success without evidence.
+ * broken invariant; it prints a JSON report instead of claiming success without evidence. `--hidden` keeps the window
+ * off screen and every page muted (nothing takes the focus or plays sound while someone uses the computer); the
+ * native-visibility checks then cover the tab views only.
  */
 const { app, BrowserWindow, session } = require('electron');
 const http = require('node:http');
@@ -26,8 +28,9 @@ const args = Object.fromEntries(
   }),
 );
 const phase = args.phase || '1';
-const profile = args.profile;
-const downloads = args.downloads;
+// Resolved: Chromium interrupts every download when the downloads folder is set as a path mixing back and forward slashes.
+const profile = args.profile && resolve(args.profile);
+const downloads = args.downloads && resolve(args.downloads);
 const PORT = Number(args.port || 47831);
 if (!profile || !downloads) {
   console.error('usage: electron electron-browser.e2e.cjs --phase=1|2 --profile=<dir> --downloads=<dir> [--port=47831]');
@@ -40,6 +43,7 @@ app.setPath('downloads', downloads);
 app.commandLine.appendSwitch('disable-features', 'MediaRouter,CalculateNativeWinOcclusion');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
+if (args.hidden !== undefined) app.on('web-contents-created', (_event, contents) => contents.setAudioMuted(true));
 
 const report = { phase, checks: [], events: [], failures: [] };
 const check = (ok, name, detail) => {
@@ -62,6 +66,7 @@ const PAGE = `<!doctype html><html lang="en"><meta charset="utf-8"><title>E2E Pa
 <h1 id="heading">Hello E2E</h1>
 <input id="name" placeholder="name">
 <input id="file" type="file">
+<input id="clearing" type="file">
 <button id="go" onclick="document.getElementById('out').textContent='clicked:'+document.getElementById('name').value">Go</button>
 <div id="out">idle</div>
 <p>find me one</p><p>find me two</p>
@@ -70,6 +75,12 @@ const PAGE = `<!doctype html><html lang="en"><meta charset="utf-8"><title>E2E Pa
 <script>
 document.getElementById('name').addEventListener('input', function (event) {
   document.getElementById('out').textContent = 'typed:' + event.target.value;
+});
+// Like many upload pages: take the file in the change handler, then empty the input so the same file can be chosen again.
+window.__uploads = [];
+document.getElementById('clearing').addEventListener('change', function (event) {
+  window.__uploads.push(event.target.files[0] ? event.target.files[0].name : 'none');
+  event.target.value = '';
 });
 window.__e2e = { ready: true, href: location.href };
 </script>`;
@@ -112,7 +123,7 @@ const server = http.createServer((request, response) => {
 async function main() {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(PORT, '127.0.0.1', resolve); });
   const origin = `http://127.0.0.1:${PORT}`;
-  const window = new BrowserWindow({ width: 1280, height: 900, show: true, webPreferences: { sandbox: true }, backgroundColor: '#202020' });
+  const window = new BrowserWindow({ width: 1280, height: 900, show: args.hidden === undefined, webPreferences: { sandbox: true }, backgroundColor: '#202020' });
   const status = [];
   const realSend = window.webContents.send.bind(window.webContents);
   window.webContents.send = (channel, payload) => {
@@ -134,7 +145,14 @@ async function main() {
   check(!!id, 'opens a tab');
   const view = browser.tabs[0].view;
   check(view.getVisible() === true, 'a tab opened with bounds is visible');
-  const bounds = view.getBounds();
+  // Tab views live in one container view that has the shown box; a view's own bounds are relative to that container.
+  const inWindow = (tabView) => {
+    const own = tabView.getBounds();
+    const container = window.contentView.children.find((child) => child.children.includes(tabView));
+    const origin = container ? container.getBounds() : { x: 0, y: 0 };
+    return { x: origin.x + own.x, y: origin.y + own.y, width: own.width, height: own.height };
+  };
+  const bounds = inWindow(view);
   check(bounds.x === 100 && bounds.y === 80 && bounds.width === 700 && bounds.height === 600, 'bounds are exactly the requested rectangle', bounds);
   const state = await until(async () => {
     const value = await browser.command({ action: 'state', tabId: id });
@@ -158,6 +176,10 @@ async function main() {
   check(uploaded.ok === true && uploaded.name === 'upload-source.txt', 'a workspace file is uploaded into the page input', uploaded);
   const fileState = await browser.command({ action: 'exec', tabId: id, code: '(() => { const f = document.querySelector("#file").files[0]; return f ? { name: f.name, size: f.size } : null; })()' });
   check(fileState.result && fileState.result.name === 'upload-source.txt' && fileState.result.size === 10, 'the page sees the uploaded file', fileState.result);
+  const intoClearing = await browser.command({ action: 'upload', tabId: id, selector: '#clearing', path: 'upload-source.txt' });
+  check(intoClearing.ok === true && intoClearing.count === 1, 'an upload counts although the page empties its input on change', intoClearing);
+  const handled = await browser.command({ action: 'exec', tabId: id, code: 'window.__uploads' });
+  check(JSON.stringify(handled.result) === '["upload-source.txt"]', 'the page handled the chosen file once, not twice', handled.result);
   await assertRejects(() => browser.command({ action: 'upload', tabId: id, selector: '#file', path: outsideFile }), /只能上传当前工作区内的文件/, 'a file outside the workspace is refused');
   await assertRejects(() => browser.command({ action: 'upload', tabId: id, selector: '#file', path: 'folder' }), /普通文件/, 'a directory is refused');
   await assertRejects(() => browser.command({ action: 'upload', tabId: id, selector: '#file', path: 'missing.txt' }), /不存在/, 'a missing file is refused');
@@ -239,13 +261,14 @@ async function main() {
   }
 
   // --- popup windows become workspace tabs ------------------------------------------------------
-  const beforePopup = (await browser.command({ action: 'list' })).length;
+  // The tab that appears now (earlier steps may have left other tabs open besides this one).
+  const beforePopup = new Set((await browser.command({ action: 'list' })).map((entry) => entry.tabId));
   await browser.command({ action: 'exec', tabId: id, code: `void window.open('${origin}/popup', '_blank')` });
   const popupTab = await until(async () => {
     const list = await browser.command({ action: 'list' });
-    return list.length > beforePopup ? list.find((entry) => entry.tabId !== id) : undefined;
+    return list.find((entry) => !beforePopup.has(entry.tabId));
   }, 10000);
-  check(!!popupTab, 'a page-requested window becomes a separate browser tab', { before: beforePopup });
+  check(!!popupTab, 'a page-requested window becomes a separate browser tab', { before: [...beforePopup] });
   if (popupTab) {
     const popupState = await until(async () => {
       const value = await browser.command({ action: 'state', tabId: popupTab.tabId });
@@ -295,7 +318,7 @@ async function main() {
   await browser.command({ action: 'bounds', tabId: id, rect: { x: 40, y: 50, width: 640, height: 520 } });
   window.setContentSize(900, 700);
   browser.refresh();
-  const resized = browser.tabs.find((entry) => entry.id === id).view.getBounds();
+  const resized = inWindow(browser.tabs.find((entry) => entry.id === id).view);
   const [contentWidth, contentHeight] = window.getContentSize();
   check(resized.x + resized.width <= contentWidth && resized.y + resized.height <= contentHeight, 'a resize re-clamps the native view into the content area', { resized, contentWidth, contentHeight });
   // The page's rectangle is re-measured by the page itself; the native host must not draw a stale box after the resize.
@@ -361,7 +384,8 @@ async function runWorkspaceTool(browser, origin, tabId, workspaceRoot) {
   const pageState = {
     tabs: [
       { id: 'changes', type: 'changes' },
-      { id: tabId, type: 'browser', url: origin },
+      // The address as the page stores it (normalized, with the trailing slash): opening it again finds this tab.
+      { id: tabId, type: 'browser', url: new URL(origin).href },
     ],
     activeId: tabId,
     panelOpen: true,

@@ -2,10 +2,20 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
+import { writeFileAtomicallySync } from "../utils/atomic-write.ts";
 import type { StoredGoogleCredentials, SyncConfig, SyncConflict, SyncState } from "./types.ts";
 import { ensureDir, nowIso, readJsonFile, sha256, shortHash, writeJsonFile, writePrivateJsonFile } from "./util.ts";
 
 const STATE_VERSION = 1;
+const HASH_CACHE_VERSION = 1;
+const HASH_PATTERN = /^[0-9a-f]{64}$/u;
+
+/** A local file's content hash, valid while the file keeps this size and modification time. */
+export interface HashCacheEntry {
+	mtimeMs: number;
+	size: number;
+	hash: string;
+}
 const CONFIG_VERSION = 1;
 const MAX_COPIES_PER_KEY = 20;
 const MAX_CONFLICTS = 200;
@@ -121,6 +131,10 @@ export class SyncLocalStore {
 		return join(this.dir, `state-${accountFileKey(accountKey)}.json`);
 	}
 
+	private hashCachePath(accountKey: string): string {
+		return join(this.dir, `hashes-${accountFileKey(accountKey)}.json`);
+	}
+
 	private get credentialsPath(): string {
 		return join(this.dir, "credentials.json");
 	}
@@ -155,6 +169,38 @@ export class SyncLocalStore {
 			state.lastCheckAt = check.lastCheckAt;
 		this.stateFingerprints.set(accountKey, this.protocolFingerprint(state));
 		return state;
+	}
+
+	/**
+	 * The content hashes the engine took of local files, keyed like the state's entities. Only a shortcut: an entry is
+	 * used while the file keeps the recorded size and modification time, and anything unreadable is simply hashed again.
+	 */
+	hashCache(accountKey: string): Map<string, HashCacheEntry> {
+		const cache = new Map<string, HashCacheEntry>();
+		const value = readJsonFile<{ version?: unknown; entries?: unknown }>(this.hashCachePath(accountKey));
+		if (value?.version !== HASH_CACHE_VERSION || !value.entries || typeof value.entries !== "object") return cache;
+		for (const [key, entry] of Object.entries(value.entries as Record<string, unknown>)) {
+			if (!Array.isArray(entry)) continue;
+			const [mtimeMs, size, hash] = entry as unknown[];
+			if (
+				typeof mtimeMs === "number" &&
+				typeof size === "number" &&
+				typeof hash === "string" &&
+				HASH_PATTERN.test(hash)
+			)
+				cache.set(key, { mtimeMs, size, hash });
+		}
+		return cache;
+	}
+
+	saveHashCache(accountKey: string, cache: ReadonlyMap<string, HashCacheEntry>): void {
+		const entries: Record<string, [number, number, string]> = {};
+		for (const [key, entry] of cache) entries[key] = [entry.mtimeMs, entry.size, entry.hash];
+		ensureDir(this.dir);
+		writeFileAtomicallySync(
+			this.hashCachePath(accountKey),
+			`${JSON.stringify({ version: HASH_CACHE_VERSION, entries })}\n`,
+		);
 	}
 
 	saveState(state: SyncState): void {

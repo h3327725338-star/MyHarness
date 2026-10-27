@@ -21,8 +21,12 @@ import type { EngineQuery, EngineResult, SearchEngine, SearchTimeRange } from ".
  *   those are taken as they are (no degraded check).
  */
 
-// Bing's own time filters (past 24 hours / past month). There is no "past year" filter.
-const TIME_FILTER: Partial<Record<SearchTimeRange, string>> = { day: 'ex1:"ez1"', month: 'ex1:"ez3"' };
+// Bing's own time filters (past 24 hours / past week / past month). There is no "past year" filter.
+const TIME_FILTER: Partial<Record<SearchTimeRange, string>> = {
+	day: 'ex1:"ez1"',
+	week: 'ex1:"ez2"',
+	month: 'ex1:"ez3"',
+};
 
 function searchUrl(query: EngineQuery): string {
 	const url = new URL("https://www.bing.com/search");

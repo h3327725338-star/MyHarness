@@ -178,7 +178,9 @@ const recipes = {
 		const version = moduleVersion("csharp");
 		const sdk = await dotnetSdk();
 		const stage = await freshDir("csharp-stage");
-		const env = { ...process.env, DOTNET_ROOT: sdk, DOTNET_MULTILEVEL_LOOKUP: "0", DOTNET_CLI_HOME: path.join(workDir, "dotnet-home"), DOTNET_CLI_TELEMETRY_OPTOUT: "1", DOTNET_NOLOGO: "1" };
+		// DOTNET_ADD_GLOBAL_TOOLS_TO_PATH: the first run of the CLI would otherwise add <DOTNET_CLI_HOME>\.dotnet\tools to the
+		// user's own PATH in the registry, for a folder this build deletes right after.
+		const env = { ...process.env, DOTNET_ROOT: sdk, DOTNET_MULTILEVEL_LOOKUP: "0", DOTNET_CLI_HOME: path.join(workDir, "dotnet-home"), DOTNET_CLI_TELEMETRY_OPTOUT: "1", DOTNET_NOLOGO: "1", DOTNET_ADD_GLOBAL_TOOLS_TO_PATH: "false" };
 		run(path.join(sdk, "dotnet.exe"), ["tool", "install", "csharp-ls", "--version", version, "--tool-path", path.join(stage, "servers", "csharp-ls")], { env });
 		rmSync(path.join(workDir, "dotnet-home"), { recursive: true, force: true });
 		return stage;

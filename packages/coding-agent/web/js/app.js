@@ -1,6 +1,6 @@
 // Application shell: sidebar + conversation + optional inspector panel, plus global overlays and shortcuts.
 import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, autofocusOnMount, Collapse, FoldIn, Icon, Modal, Overlay, Resizer, Spinner, usePresence, useRetainedRows } from "./ui.js";
-import { api, attempt, dismissToast, post, setView, state, useStore } from "./store.js";
+import { api, applyColumnWidths, attempt, dismissToast, post, setView, state, useStore } from "./store.js";
 import { actions, confirmDialog, resolveConfirm } from "./actions.js";
 import { Sidebar } from "./sidebar.js";
 import { peekButtonEnter, peekButtonLeave } from "./sidebar-peek.js";
@@ -394,14 +394,14 @@ function onPanelWidth(value) {
 	const room = Math.max(340, window.innerWidth - (state.view.sidebarOpen ? state.view.sidebarW : 0) - 520);
 	const w = Math.round(Math.min(value, room));
 	state.view = { ...state.view, panelW: w };
-	document.documentElement.style.setProperty("--panel-w", `${w}px`);
+	applyColumnWidths();
 }
 
 /** In collaboration mode the chat column is as wide as the user dragged it, within the room the workspace leaves. */
 function onChatWidth(value) {
 	const w = Math.round(Math.max(chatColumnMin(), Math.min(value, Math.max(320, window.innerWidth - 480))));
 	state.view = { ...state.view, chatW: w };
-	document.documentElement.style.setProperty("--chat-w", `${w}px`);
+	applyColumnWidths();
 }
 
 /**
@@ -475,10 +475,18 @@ export function App() {
 	// swap (the conversation would sweep through the middle), so the layout switches at once and the motion is the View
 	// Transition of layout-morph.js, which moves each column's picture from its old box to its new one.
 	const appRef = useRef(null);
+	// The column widths live on `.app` (store.js applyColumnWidths): one that was just mounted takes them before its first
+	// paint. Writes happen only when a value differs, so this costs three reads otherwise.
+	useLayoutEffect(() => {
+		if (appRef.current) applyColumnWidths(appRef.current);
+	});
 	const wasMax = useRef(wsMax);
 	useLayoutEffect(() => {
 		if (wasMax.current === wsMax || !appRef.current) return undefined;
 		wasMax.current = wsMax;
+		// A morph keeps the transitions off by itself for as long as it runs (layout.css): the class going on and off here
+		// restyled the whole page twice, the second time in the middle of the morph.
+		if (document.documentElement.classList.contains("ws-morph")) return undefined;
 		const app = appRef.current;
 		app.classList.add("ws-switching");
 		const timer = setTimeout(() => app.classList.remove("ws-switching"), 60);

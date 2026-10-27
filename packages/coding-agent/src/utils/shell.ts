@@ -3,6 +3,7 @@ import { delimiter } from "node:path";
 import { spawnSync } from "child_process";
 import { getBinDir } from "../config.ts";
 import { runWindowsTaskkill } from "./child-process.ts";
+import { appendMissingPathEntries, registryPathEntries } from "./registry-path.ts";
 
 export interface ShellConfig {
 	shell: string;
@@ -190,7 +191,8 @@ export function getPwshShellConfig(customShellPath?: string): ShellConfig {
 export function getShellEnv(): NodeJS.ProcessEnv {
 	const binDir = getBinDir();
 	const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
-	const currentPath = process.env[pathKey] ?? "";
+	// Windows: also the PATH entries a terminal opened now would have (tools installed since, the user's own entries).
+	const currentPath = appendMissingPathEntries(process.env[pathKey] ?? "", registryPathEntries());
 	const pathEntries = currentPath.split(delimiter).filter(Boolean);
 	const hasBinDir = pathEntries.includes(binDir);
 	const updatedPath = hasBinDir ? currentPath : [binDir, currentPath].filter(Boolean).join(delimiter);

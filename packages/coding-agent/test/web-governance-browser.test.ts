@@ -79,6 +79,7 @@ import {actions,resolveConfirm} from '/js/actions.js';
 import {CacheValue,SpeedValue,sessionCache,ContextDetails} from '/js/context-usage.js';
 import {ContextPanel} from '/js/panel-context.js';
 import {loadWorkspaces,set,setView,state} from '/js/store.js';
+import {SHORTCUTS} from '/js/shortcuts.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const app=document.getElementById('app');
 try {
@@ -111,20 +112,17 @@ try {
  if(!folded) throw Error('archive exit hard cut');
  await wait(400);
  if(document.querySelector('.chat-row')) throw Error('archived row still listed after archive');
- const archiveGroup=[...document.querySelectorAll('.ws-row')].find(r=>r.textContent.includes('已归档对话'));
- if(!archiveGroup) throw Error('archive entry missing');
- archiveGroup.click(); await wait(400);
- const rows=[...document.querySelectorAll('.chat-row')];
- if(rows.length!==1 || !rows[0].closest('.ws').textContent.includes('已归档对话')) throw Error('archive membership wrong');
+ // Archived chats have no group in the sidebar; restoring one lists it again where it was.
+ if([...document.querySelectorAll('.ws-row')].some(r=>r.textContent.includes('已归档对话'))) throw Error('archived chats are listed in the sidebar');
  await actions.archiveSession('C:/fixture/chat.jsonl',false); await wait(400);
- if([...document.querySelectorAll('.ws-row')].some(r=>r.textContent.includes('已归档对话'))) throw Error('archive entry not removed after last restore');
+ if(![...document.querySelectorAll('.chat-row')].some(r=>r.textContent.includes('Saved chat'))) throw Error('restored chat not listed again');
  const deletion=actions.deleteSession('C:/fixture/chat.jsonl','Saved chat'); await wait(30);
- if(state.view.dialog?.confirmLabel!=='删除') throw Error('confirmation missing');
+ if(state.view.dialog?.type!=='delete-chat' || state.view.dialog?.path!=='C:/fixture/chat.jsonl') throw Error('confirmation missing');
  resolveConfirm(true); await deletion; await wait(400);
  if(document.querySelector('.chat-row')) throw Error('deleted row remains');
  setView({settingsOpen:true,settingsSection:'shortcuts'}); render(h(SettingsModal),app); await wait(200);
  const inputs=[...document.querySelectorAll('[data-shortcut-editor]')];
- if(inputs.length!==6) throw Error('shortcut settings missing');
+ if(inputs.length!==SHORTCUTS.length) throw Error('shortcut settings missing');
  inputs[1].dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,altKey:true,bubbles:true,cancelable:true})); await wait(100);
  if(inputs[1].getAttribute('aria-invalid')!=='true' || state.view.shortcuts.newChat) throw Error('conflict saved');
  if(!document.querySelector('[role=alert]')?.textContent.includes('冲突')) throw Error('conflict warning missing');
@@ -156,7 +154,7 @@ try {
  render(h(ContextPanel),app); await wait(180);
  const token=app.querySelector('.session-tokens'); const cumulative=app.querySelector('.session-cumulative');
  if(!token?.textContent.includes('输入 304.3K · 缓存写入 — · 缓存命中 13.3M · 输出 34.4K')) throw Error('token format wrong: '+token?.textContent);
- if(!cumulative?.textContent.includes('累计速度 ≈ 25.0 t/s · 累计命中率 ≈ 97.76%')) throw Error('cumulative metrics wrong: '+cumulative?.textContent);
+ if(!cumulative?.textContent.includes('平均速度 ≈ 25.0 t/s · 平均缓存命中率 ≈ 97.76%')) throw Error('cumulative metrics wrong: '+cumulative?.textContent);
  if(Math.abs(token.getBoundingClientRect().left-cumulative.getBoundingClientRect().left)>.1 || cumulative.getBoundingClientRect().top<=token.getBoundingClientRect().top) throw Error('cumulative row not aligned below tokens');
  const context=app.querySelector('.cu');
  if(context.querySelectorAll('.cu-stat').length!==1 || context.querySelector('.kv') || context.textContent.includes('t/s') || context.textContent.includes('缓存')) throw Error('context duplication remains');
@@ -175,7 +173,7 @@ try {
  if(/304,?325|13,?284,?352/.test(app.innerHTML)) throw Error('raw long integers remain');
  measuredStats.speed=measurement(null); measuredStats.cache.hitRate=measurement(null); measuredStats.cache.input=measurement(null); measuredStats.tokens.output=undefined;
  set({stats:{...measuredStats}}); await wait(60);
- if(!cumulative.textContent.includes('累计速度 — · 累计命中率 —') || !token.textContent.includes('输入 304.3K') || !token.textContent.includes('输出 —')) throw Error('missing metrics not dashed');
+ if(!cumulative.textContent.includes('平均速度 — · 平均缓存命中率 —') || !token.textContent.includes('输入 304.3K') || !token.textContent.includes('输出 —')) throw Error('missing metrics not dashed');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) { document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+'</p>'); }
 `,

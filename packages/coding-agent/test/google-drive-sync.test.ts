@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -338,6 +348,41 @@ describe("Google Drive sync engine", () => {
 
 		expect(drive.batchNames().length).toBe(before + 1);
 		expect(restarted.loadState().forceUploads).toHaveLength(0);
+	});
+
+	it("keeps file hashes across a restart and hashes a file again only when its size or time changed", async () => {
+		const drive = new FakeDrive();
+		const a = device(drive, "desktop", "device-a");
+		const chat = writeSession(a.dataRoot);
+		// A whole-millisecond time, so setting it back below gives exactly the time the hash was taken at.
+		const stamp = new Date("2026-01-01T00:00:05.000Z");
+		utimesSync(chat, stamp, stamp);
+		await a.engine.runOnce();
+		await a.engine.stop();
+		expect(a.store.hashCache("account-1").get("session:ws1/s1")?.size).toBe(statSync(chat).size);
+		const before = drive.batchNames().length;
+		const restart = () => {
+			const engine = new SyncEngine({
+				agentDir: a.agentDir,
+				dataRoot: a.dataRoot,
+				deviceId: "device-a",
+				deviceName: "desktop",
+				store: a.store,
+				accountKey: "account-1",
+			});
+			engine.setDrive(drive);
+			return engine;
+		};
+
+		// Same size and time as when it was hashed: the saved hash stands for it, the file is not read again.
+		writeFileSync(chat, readFileSync(chat, "utf8").replace("hello", "HELLO"));
+		utimesSync(chat, stamp, stamp);
+		await restart().runOnce();
+		expect(drive.batchNames()).toHaveLength(before);
+
+		appendEntry(chat, { type: "message", id: "e2", parentId: "e1", timestamp: "2026-01-01T00:00:02.000Z" });
+		await restart().runOnce();
+		expect(drive.batchNames()).toHaveLength(before + 1);
 	});
 
 	it("uploads nothing when nothing changed, and waits for a missing object instead of applying half a batch", async () => {

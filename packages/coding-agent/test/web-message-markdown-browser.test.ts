@@ -107,7 +107,7 @@ try {
  if(document.querySelector('.local-file-menu')) throw Error('outside click did not dismiss');
  if(renderMarkdown('[unsafe](javascript:alert(1))').includes('javascript:')) throw Error('unsafe URL');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
-} catch(error) {const p=document.createElement('p');p.id='ready';p.textContent=error.stack;document.body.append(p);}
+} catch(error) {const p=document.createElement('p');p.id='ready';p.textContent=error.message+' | '+error.stack;document.body.append(p);}
 `,
 			);
 			server.route("GET", "/hold", async () => {
@@ -204,7 +204,7 @@ try {
  render(h(Markdown,{text:hr}),app); await wait(100);
  if(!app.querySelector('hr')) throw Error('thematic break broken');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
-} catch(error) {const p=document.createElement('p');p.id='ready';p.textContent=error.stack;document.body.append(p);}
+} catch(error) {const p=document.createElement('p');p.id='ready';p.textContent=error.message+' | '+error.stack;document.body.append(p);}
 `,
 			);
 			server.route("GET", "/hold", async () => {
@@ -284,7 +284,7 @@ try {
  const allowedCode=codes.find(x=>x.textContent==='C:/Docs/My report.pptx');
  if(!allowedCode || !allowedCode.querySelector('a[data-local-path]')) throw Error('allowed code not linked');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
-} catch(error) {const p=document.createElement('p');p.id='ready';p.textContent=error.stack;document.body.append(p);}
+} catch(error) {const p=document.createElement('p');p.id='ready';p.textContent=error.message+' | '+error.stack;document.body.append(p);}
 `,
 			);
 			server.route("GET", "/hold", async () => {
@@ -305,7 +305,9 @@ try {
 				isSolved: (p) => p.text.includes('id="ready">'),
 			});
 			expect(page.text).toContain('id="ready">passed');
-			expect(probed.sort()).toEqual(["C:/Docs/My report.pptx", "report.pptx"]);
+			// Inline code is probed whole first and then by the paths inside it (`C:/Docs/My`), the fallback used when the
+			// whole text does not exist.
+			expect(probed.sort()).toEqual(["C:/Docs/My", "C:/Docs/My report.pptx", "report.pptx"]);
 		} finally {
 			await browser.shutdown();
 			await server.close();
@@ -355,7 +357,7 @@ try {
  for(let i=0;i<payloads.length;i++){ if(codes[i].textContent!==payloads[i]) throw Error('code text mismatch #'+i+': '+JSON.stringify(codes[i].textContent)); }
  if(window.__xss!==undefined) throw Error('payload executed: '+window.__xss);
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
-} catch(error) {const p=document.createElement('p');p.id='ready';p.textContent=error.stack;document.body.append(p);}
+} catch(error) {const p=document.createElement('p');p.id='ready';p.textContent=error.message+' | '+error.stack;document.body.append(p);}
 `,
 			);
 			server.route("GET", "/hold", async () => {
@@ -487,12 +489,12 @@ try {
  const pTop=app.querySelector('.md > p');
  s=cs(pTop);
  near(px(s.marginBottom),0.85*px(s.fontSize),0.1,'top p marginBottom');
- // .md p code：字号 = 0.92 × 正文字号（±0.1px），padding 仍是 0.12em / 0.38em 的比例（与改前同一 em 值）
+ // .final .md p code：字号 = --fs-code（±0.1px），padding 仍是 0.12em / 0.38em 的比例（与改前同一 em 值）
  const code=app.querySelector('.md p code');
  if(!code) throw Error('no inline code');
  s=cs(code);
- const pfs=px(cs(code.closest('p')).fontSize);
- near(px(s.fontSize),0.92*pfs,0.1,'inline code fontSize');
+ // Inside a final answer code keeps the code size (--fs-code), so text turning into code while it streams does not jump.
+ near(px(s.fontSize),px(cs(document.documentElement).getPropertyValue('--fs-code')),0.1,'inline code fontSize');
  near(px(s.paddingTop),0.12*px(s.fontSize),0.1,'inline code paddingTop');
  near(px(s.paddingBottom),0.12*px(s.fontSize),0.1,'inline code paddingBottom');
  near(px(s.paddingLeft),0.38*px(s.fontSize),0.1,'inline code paddingLeft');
@@ -516,7 +518,7 @@ try {
  near(px(s.marginTop),1.3*h4fs,0.1,'h4 marginTop');
  near(px(s.marginBottom),0.5*h4fs,0.1,'h4 marginBottom');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
-} catch(error) {const p=document.createElement('p');p.id='ready';p.textContent=error.stack;document.body.append(p);}
+} catch(error) {const p=document.createElement('p');p.id='ready';p.textContent=error.message+' | '+error.stack;document.body.append(p);}
 `,
 			);
 			server.route("GET", "/hold", async () => {

@@ -3,6 +3,7 @@
 import { html, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, Collapse, Counts, Fold, Icon, Spinner, CopyButton, usePresence, useHeightGlide, useSwapGlide } from "./ui.js";
 import { createReadCache } from "./scheduling.js";
 import { retrySwitch, activeSlotId, api, fetchMoreTranscript, toast, getTurnsCache, notePaintedTurns, setTurnsCache, setView, settleLanding, slotUrl, useStore } from "./store.js";
+import { shortcutFor } from "./shortcuts.js";
 import { GitRecord } from "./git-record.js";
 import { Markdown } from "./markdown.js";
 import { DiffView, languageFor, parsePatch } from "./diff.js";
@@ -16,7 +17,7 @@ import { openImageLightbox } from "./lightbox.js";
 import { MessageRail } from "./message-rail.js";
 import { jumpToQuote, offsetInScroller, registerScroller, REVEAL_ENTRY_EVENT, revealEntryIn, scrollToNode, turnKeyForEntry } from "./message-nav.js";
 import { exportReadOnly } from "./export-mode.js";
-import { afterModeReveal, beforeModeCapture, modeRevealActive } from "./mode-transition.js";
+import { afterModeReveal, beforePageCapture, modeRevealActive } from "./mode-transition.js";
 
 import { OUTCOME_ICON, processSummaryState } from "./process-summary.js";
 import { AttachmentList, splitAttachments } from "./attachments.js";
@@ -43,13 +44,31 @@ function Ansi({ text }) {
 // Blocks are separate child nodes of the <pre> and never rewritten: setting `textContent` again with
 // the longer string made the browser lay out the whole block again each time (~70 ms for the last
 // 100 KB of a 1 MB pre, measured in isolation 2026-10-12), which would put every append back over
-// the long-task budget. Appending one node at the end keeps the cost at the new block only.
+// the long-task budget. Each block is also its own block box (`.raw-chunk`): as plain text nodes they
+// shared one run of lines, so every append still laid out all the text shown so far (50 ms growing to
+// 165 ms per frame on a 1 MB output, 2026-10-27). A block ends at a line end, so no line is split.
 const SHOW_ALL_CHUNK = 100 * 1024;
 
-/** The first `pos` characters of `text` as stable 100 KB blocks — one `Ansi` child per block. */
+/**
+ * Where the block that starts at `start` ends: SHOW_ALL_CHUNK characters on, pulled back to the end of the last line in
+ * it. Only a line longer than a block is cut, and never between the two halves of a surrogate pair.
+ */
+function chunkEnd(text, start) {
+	const end = Math.min(start + SHOW_ALL_CHUNK, text.length);
+	if (end === text.length) return end;
+	const newline = text.lastIndexOf("\n", end - 1);
+	if (newline >= start) return newline + 1;
+	const code = text.charCodeAt(end - 1);
+	return code >= 0xd800 && code <= 0xdbff ? end - 1 : end;
+}
+
+/** The first `pos` characters of `text` as stable blocks (see chunkEnd) — one `Ansi` block per chunk. */
 function ChunkedAnsi({ text, pos }) {
 	const blocks = [];
-	for (let start = 0; start < pos; start += SHOW_ALL_CHUNK) blocks.push(html`<${Ansi} key=${start} text=${text.slice(start, Math.min(start + SHOW_ALL_CHUNK, pos))} />`);
+	for (let start = 0, end; start < pos; start = end) {
+		end = Math.min(chunkEnd(text, start), pos);
+		blocks.push(html`<span class="raw-chunk" key=${start}><${Ansi} text=${text.slice(start, end)} /></span>`);
+	}
 	return blocks;
 }
 
@@ -81,14 +100,14 @@ function useChunkedShowAll(text) {
 	const appendBlock = () => {
 		clearPending();
 		const full = textRef.current.length;
-		posRef.current = Math.min(posRef.current + SHOW_ALL_CHUNK, full);
+		posRef.current = chunkEnd(textRef.current, posRef.current);
 		setPos(posRef.current);
 		if (posRef.current < full) scheduleNext();
 	};
 	const expand = () => {
 		clearPending();
 		const full = textRef.current.length;
-		posRef.current = Math.min(SHOW_ALL_CHUNK, full);
+		posRef.current = chunkEnd(textRef.current, 0);
 		setPos(posRef.current);
 		if (posRef.current < full) scheduleNext();
 	};
@@ -587,6 +606,8 @@ function OutcomeBanner({ turn, outcome, run, changeCount, isLast }) {
 /** A message of the user's own longer than this many rendered lines folds to FOLDED_LINES with a fade. */
 const FOLD_AFTER_LINES = 8;
 const FOLDED_LINES = 6;
+/** The line height of user messages (the same for all of them), read from the first one. */
+let userLineHeight = 0;
 
 /**
  * The text of one user message. Whether it folds is decided on the rendered Markdown's real height (re-measured
@@ -601,16 +622,25 @@ function UserText({ text }) {
 		const el = box.current;
 		const inner = el?.firstElementChild;
 		if (!el || !inner) return undefined;
-		const measure = () => {
-			const line = Number.parseFloat(getComputedStyle(el).lineHeight) || 24;
-			const full = inner.offsetHeight;
+		const measure = (full) => {
+			if (!userLineHeight) userLineHeight = Number.parseFloat(getComputedStyle(el).lineHeight) || 24;
+			const line = userLineHeight;
 			const foldable = full > line * FOLD_AFTER_LINES + 1;
 			setFold((prev) => (prev.foldable === foldable && prev.line === line && prev.full === full ? prev : { foldable, line, full }));
 		};
-		measure();
-		const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-		observer?.observe(inner);
-		return () => observer?.disconnect();
+		if (typeof ResizeObserver === "undefined") {
+			measure(inner.offsetHeight);
+			return undefined;
+		}
+		// The height comes from the observer, which reports after layout and before paint (so a long message is folded
+		// on its first frame). Reading it here at mount forced a style and layout pass for every message while a long chat
+		// mounted, 11-36 ms each (2026-10-27).
+		const observer = new ResizeObserver((entries) => {
+			const size = entries[entries.length - 1]?.borderBoxSize?.[0];
+			measure(size ? size.blockSize : inner.offsetHeight);
+		});
+		observer.observe(inner);
+		return () => observer.disconnect();
 	}, []);
 	const folded = fold.foldable && !open;
 	// A quote in a sent message leads back to the passage it was taken from.
@@ -938,6 +968,8 @@ function Standalone({ item, task, snap, runs, processDefault }) {
 function Welcome({ snap, models, opening = false }) {
 	const ws = snap?.workspace?.name;
 	const model = snap?.model;
+	// The palette's own shortcut, which the user can change in Settings.
+	const paletteKey = useStore((s) => shortcutFor("palette", s.view.shortcuts));
 	return html`<div class="welcome">
 		<h1>${ws ? tNodes("What should we work on in {workspace}?", { workspace: html`<span class="ws">${ws}</span>` }) : t("What should we work on?")}</h1>
 		<div class="welcome-meta dim mono truncate" title=${snap?.cwd || ""}>${snap?.cwd || ""}</div>
@@ -945,7 +977,7 @@ function Welcome({ snap, models, opening = false }) {
 			<span><span class="kbd">/</span> ${t("commands & skills")}</span>
 			<span><span class="kbd">@</span> ${t("mention a file")}</span>
 			<span><span class="kbd">!</span> ${t("run a shell command")}</span>
-			<span><span class="kbd">${t("Ctrl")}</span>+<span class="kbd">K</span> ${t("command palette")}</span>
+			<span><span class="kbd">${paletteKey}</span> ${t("command palette")}</span>
 		</div>
 		${!model && !opening ? html`<div class="welcome-warn"><${Icon} name="alertTriangle" size=${15} /> ${tNodes("No model is available yet. {add} to start.", { add: html`<button class="link-btn" onClick=${() => setView({ settingsOpen: true, settingsSection: "providers" })}>${t("Add a provider")}</button>` })}</div>` : null}
 	</div>`;
@@ -1067,20 +1099,22 @@ function readingAnchor(el, inner) {
 	return node ? { node, top: node.getBoundingClientRect().top - top } : null;
 }
 /**
- * Right before a mode reveal captures the page (beforeModeCapture): the turns of `el` out of view skip their contents
- * (content-visibility: hidden at their own height, so nothing moves). The capture restyles the whole document, and a
- * long chat is most of it. Returns how to undo it for the turns still on the page after the switch.
+ * Right before a mode reveal or a layout morph captures the page (beforePageCapture): the turns of `el` out of view skip
+ * their contents (content-visibility: hidden at their own height, so nothing moves). The capture restyles the whole
+ * document, and a long chat is most of it. 200px around the view stay drawn, or `reach` heights of the view when the
+ * conversation is about to get wider (more of it comes into view). Returns how to undo it for the turns still on the page.
  */
-function skipTurnsOutOfView(el) {
+function skipTurnsOutOfView(el, reach = 0) {
 	const inner = el?.querySelector(":scope > .transcript-inner");
 	if (!inner) return null;
 	const view = el.getBoundingClientRect();
+	const margin = Math.max(200, view.height * reach);
 	const skipped = [];
 	// All reads first, then all writes: one layout, which is up to date at a click anyway.
 	for (const node of inner.children) {
 		if (node.tagName !== "SECTION") continue;
 		const box = node.getBoundingClientRect();
-		if (box.bottom > view.top - 200 && box.top < view.bottom + 200) continue;
+		if (box.bottom > view.top - margin && box.top < view.bottom + margin) continue;
 		const style = getComputedStyle(node);
 		const edges = ["paddingTop", "paddingBottom", "borderTopWidth", "borderBottomWidth"].reduce((sum, key) => sum + (Number.parseFloat(style[key]) || 0), 0);
 		skipped.push([node, `${Math.max(0, box.height - edges)}px`]);
@@ -1716,7 +1750,7 @@ export function Transcript() {
 		chunkCost.current = null;
 		if (cost) noteChunkCost(performance.now() - cost.at, rendered.length - cost.from, cost.wanted);
 	}, [rendered.length]);
-	useEffect(() => beforeModeCapture(() => skipTurnsOutOfView(scroller.current)), []);
+	useEffect(() => beforePageCapture(({ reach }) => skipTurnsOutOfView(scroller.current, reach)), []);
 	// Older history that is still server-side fills in by itself: the reader never asks for it. One page per idle
 	// beat, so first paint, typing and streaming keep priority; a page lands above the reader and the build that
 	// publishes it already compensates that growth (the full→full prepend anchor in startBuild). Two failures in a

@@ -326,10 +326,17 @@ exports.createBrowser = (window, log, options = {}) => {
       if (!tabs.has(tab.id)) return;
       record.received = item.getReceivedBytes();
       record.total = item.getTotalBytes();
-      if (state === 'progressing') emit(tab.id, { type: 'download', state: 'progressing', ...record });
+      // Chromium reports a download it cannot fetch or write as "interrupted" and fires `done` only once it gives up
+      // for good, so the notice said "Downloading…" and the Agent's `download` waited out its whole timeout. It may
+      // still resume by itself; the next progress clears the mark.
+      if (state === 'interrupted') record.interrupted = true;
+      else delete record.interrupted;
+      if (state === 'progressing') emit(tab.id, { type: 'download', ...record, state: 'progressing' });
+      else if (record.interrupted) emit(tab.id, { type: 'download', ...record, state: 'failed', reason: 'interrupted' });
     });
     item.once('done', (_event, state) => {
       tab.downloads.delete(record.id);
+      delete record.interrupted;
       record.state = state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'failed';
       record.reason = state;
       record.received = item.getReceivedBytes();
@@ -1343,8 +1350,9 @@ exports.createBrowser = (window, log, options = {}) => {
     const startBy = Date.now() + startMs;
     while (!mine().length && Date.now() < startBy && !tab.destroyed) await sleep(100);
     const doneBy = Date.now() + doneMs;
-    while (mine().some((record) => tab.downloads.has(record.id)) && Date.now() < doneBy && !tab.destroyed) await sleep(150);
-    return mine().map((record) => ({ ...record, state: tab.downloads.has(record.id) ? 'progressing' : record.state }));
+    while (mine().some((record) => tab.downloads.has(record.id) && !record.interrupted) && Date.now() < doneBy && !tab.destroyed) await sleep(150);
+    const running = (record) => (record.interrupted ? 'interrupted' : 'progressing');
+    return mine().map((record) => ({ ...record, state: tab.downloads.has(record.id) ? running(record) : record.state }));
   };
 
   const focusedElement = (tab) => runInPage(tab, page.inPage(page.pageFocused)).catch(() => null);
@@ -1515,11 +1523,19 @@ exports.createBrowser = (window, log, options = {}) => {
         if (element.tag !== 'INPUT' || element.type !== 'file') throw new Error('目标元素不是 <input type="file">');
         if (element.disabled) throw new Error('目标文件输入框已禁用');
         try { await debuggerApi.sendCommand('DOM.enable'); } catch { /* older Electron may not need it */ }
+        // DOM.setFileInputFiles fires input and change itself, as a person's choice does. What the input holds is noted
+        // when its change event starts (capture on its root, before the page's handlers): pages often empty the input in
+        // their handler so the same file can be chosen again, which read as "no file", and the change sent here on top
+        // made them take the file twice. Only when no change came are the events sent here.
+        await debuggerApi.sendCommand('Runtime.callFunctionOn', {
+          objectId,
+          functionDeclaration: 'function(){ const input = this; const root = input.getRootNode(); const note = (event) => { if (event.target !== input) return; input.__myharnessUpload = { count: input.files ? input.files.length : 0, name: input.files && input.files[0] ? input.files[0].name : "" }; }; input.__myharnessUpload = null; input.__myharnessUploadStop = () => root.removeEventListener("change", note, true); root.addEventListener("change", note, true); }',
+        });
         await debuggerApi.sendCommand('DOM.setFileInputFiles', { files: [info.absolute], objectId });
         const after = await debuggerApi.sendCommand('Runtime.callFunctionOn', {
           objectId,
           returnByValue: true,
-          functionDeclaration: 'function(){ this.dispatchEvent(new Event("input", { bubbles: true })); this.dispatchEvent(new Event("change", { bubbles: true })); return { count: this.files ? this.files.length : 0, name: this.files && this.files[0] ? this.files[0].name : "" }; }',
+          functionDeclaration: 'function(){ if (!this.__myharnessUpload) { this.dispatchEvent(new Event("input", { bubbles: true })); this.dispatchEvent(new Event("change", { bubbles: true })); } const seen = this.__myharnessUpload || { count: this.files ? this.files.length : 0, name: this.files && this.files[0] ? this.files[0].name : "" }; if (this.__myharnessUploadStop) this.__myharnessUploadStop(); delete this.__myharnessUpload; delete this.__myharnessUploadStop; return seen; }',
         });
         const files = after?.result?.value || {};
         if (!files.count) throw new Error('文件输入框没有接收到文件');

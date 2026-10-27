@@ -126,7 +126,7 @@ try {
  const first=[{type:'thinking',text:'**Plan** look around'},{type:'text',text:'I will list the folder.'},{type:'toolCall',id:'c1',name:'ls',args:{path:'.'}}];
  set({items:[{kind:'user',id:'u1',ts:1,text:'go',images:[]},live(first,true),{kind:'toolResult',ts:3,toolCallId:'c1',toolName:'ls',text:'x',images:[],isError:false},live([{type:'toolCall',id:'c2',name:'ls',args:{path:'..'}}],false)],snap:{active:true,cwd:'C:/t',flags:{},session:{id:'b',file:'C:/fixture/b.jsonl'},run:{startedAt:Date.now()}},toolRuns:{c2:{status:'running'}},dialogs:[],runs:{},userBash:{},userBashOrder:[]});
  render(h(Transcript,{}),document.getElementById('app')); await wait(400);
- const parts=()=>[...document.querySelector('.turn').children].slice(1).map(c=>c.classList.contains('summary')?(c.querySelector('.summary-head').getAttribute('aria-expanded')==='true'?'open':'closed'):'text').join(',');
+ const parts=()=>[...document.querySelector('.turn .turn-process').children,...document.querySelectorAll('.turn > .final')].map(c=>c.classList.contains('summary')?(c.querySelector('.summary-head').getAttribute('aria-expanded')==='true'?'open':'closed'):'text').join(',');
  if(parts()!=='closed,text,open') throw Error('segments while running: '+parts());
  // The user opens the earlier block; the model then writes text: the running block folds, the opened one stays open.
  document.querySelector('.turn .summary-head').click(); await wait(300);

@@ -40,7 +40,7 @@ import {h,render} from '/vendor/preact.js';
 import {Composer} from '/js/composer.js';
 import {Sidebar} from '/js/sidebar.js';
 import {actions} from '/js/actions.js';
-import {set,setView,state,GENERAL_KEY} from '/js/store.js';
+import {activateSlot,canSendToActive,set,setView,state,GENERAL_KEY} from '/js/store.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const sent=[];
 try {
@@ -113,7 +113,22 @@ try {
  if(!row.querySelector('.when')) throw Error('time missing after the run ended');
  // 3) The outcome banner's Retry: it must not re-send the original task (which restarts the work), but a continue
  //    instruction that picks the task up from its current state.
- window.fetch=async(url,init)=>{if(init?.method==='POST')sent.push({path:String(url),body:init.body??''});return new Response('{}',{status:200,headers:{'content-type':'application/json'}});};
+ //    Retry sends to the chat on screen, so a loaded chat is opened first (sends stay locked until its reads land).
+ window.fetch=async(url,init)=>{
+  const u=String(url);
+  if(init?.method==='POST')sent.push({path:u,body:init.body??''});
+  const body=u==='/api/state'?{...snap,slot:'one',mode:'coding',cwd:'C:/test',session:{id:'chat',file:path,name:'测试对话',persisted:true},dialogs:[],surface:{widgets:{},statuses:{}},run:{},app:{}}
+   :u.startsWith('/api/transcript')?{items:[]}
+   :u==='/api/slots'?{slots:[]}
+   :u.startsWith('/api/workspaces')?{workspaces:[],sessions:[]}
+   :u.includes('unbound')||u.includes('archived')?{sessions:[]}
+   :u==='/api/resources'?{commands:[],tools:[],skills:[],templates:[],extensions:[]}
+   :{};
+  return new Response(JSON.stringify(body),{status:200,headers:{'content-type':'application/json'}});
+ };
+ await activateSlot('one');
+ if(!canSendToActive()) throw Error('the chat did not finish opening');
+ sent.length=0;
  state.snap={...snap,active:true};
  await actions.retry();
  if(sent.length) throw Error('retry sent a prompt while a run is active');

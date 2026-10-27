@@ -59,4 +59,26 @@ describe("StallWatch", () => {
 		watch.stop();
 		expect(lines).toEqual([]);
 	});
+
+	it("names the function a stall was spent in", async () => {
+		const lines: string[] = [];
+		const watch = new StallWatch((line) => lines.push(line), 300, undefined, { profile: true });
+		watch.start();
+		// Let the sampling worker attach to this thread before the loop is blocked.
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		spinForStallTest(1500);
+		const deadline = Date.now() + 10_000;
+		while (!lines.some((line) => line.startsWith("Event loop was busy in:")) && Date.now() < deadline)
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		watch.stop();
+		expect(lines.some((line) => line.startsWith("Event loop blocked for"))).toBe(true);
+		expect(lines.find((line) => line.startsWith("Event loop was busy in:"))).toContain("spinForStallTest");
+	}, 30_000);
 });
+
+function spinForStallTest(ms: number): number {
+	const end = performance.now() + ms;
+	let value = 0;
+	while (performance.now() < end) value += Math.sqrt(value + 1);
+	return value;
+}

@@ -1,6 +1,6 @@
 // Sidebar: workspaces and their chats. Rows use a fixed status slot at the head and a fixed time slot at the end, so titles never shift.
 import { html, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Modal, Overlay, Resizer, Spinner, COLLAPSE_MS, FoldIn, ListSlot, autofocusOnMount, motionEnabled, useHeightGlide, usePresence, useRetainedRows } from "./ui.js";
-import { GENERAL_KEY, api, freshRowKey, loadArchived, loadSessions, loadUnbound, loadWorkspaces, playingChatsKey, post, setView, state, useStore } from "./store.js";
+import { GENERAL_KEY, api, applyColumnWidths, freshRowKey, loadArchived, loadSessions, loadUnbound, loadWorkspaces, playingChatsKey, post, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
 import { t, serverText } from "./i18n.js";
@@ -15,7 +15,19 @@ import { WorkspaceSettings } from "./workspace-settings.js";
 import { openSourcesPage } from "./sources-page.js";
 import { peekSidebarEnter, peekSidebarLeave } from "./sidebar-peek.js";
 
-const pathKey = (path) => normPath(path).toLowerCase();
+// The chat lists look a key up for every chat several times on every render (a mode switch renders a group of 500
+// chats a few times over), so each path is lowered once and kept: a few thousand short strings, and the cache starts
+// over if it ever grows past that.
+const pathKeys = new Map();
+const pathKey = (path) => {
+	let key = pathKeys.get(path);
+	if (key === undefined) {
+		if (pathKeys.size >= 5000) pathKeys.clear();
+		key = normPath(path).toLowerCase();
+		pathKeys.set(path, key);
+	}
+	return key;
+};
 // A new chat is listed from the click on, under a stand-in key (see Sidebar); its real row, and later its saved row,
 // keep that key, so the row grows in once and is never folded away and grown in again when the service answers.
 const rowAliases = new Map();
@@ -144,7 +156,8 @@ function selectWorkspaceChats(sessions, { filter, slotsByFile, archived, current
 	// The chat on screen: a new empty chat keeps the first place while it is this one (see chat-order.js).
 	const onScreen = (info) => isShown(info, currentFile);
 	const ordered = orderChats(sessions || [], (info) => slotsByFile.get(pathKey(info.path)), { pins: !archived, onScreen });
-	const all = archived ? ordered : ordered.filter((info) => !isLeftBlank(info, { current: onScreen(info), draft: draftHasContent(drafts?.[info.id]), slot: slotsByFile.get(pathKey(info.path)) }));
+	// Only a blank chat can be one that was left behind: the others skip the lookups that would decide it.
+	const all = archived ? ordered : ordered.filter((info) => !info.blank || !isLeftBlank(info, { current: onScreen(info), draft: draftHasContent(drafts?.[info.id]), slot: slotsByFile.get(pathKey(info.path)) }));
 	if (!filter) return all;
 	const q = filter.toLowerCase();
 	return all.filter((s) => chatTitle(s).toLowerCase().includes(q) || (s.firstMessage || "").toLowerCase().includes(q));
@@ -304,12 +317,13 @@ function WorkspaceList({ list, renderGroup, sessionsOf, errors, expanded, curren
 	const everRendered = useRef(new Set());
 	const [{ start, end }, setRange] = useState({ start: 0, end: 60 });
 	const heights = useMemo(() => list.map((w) => {
+		const stored = expanded[w.rootPath];
+		const showing = (stored === undefined ? w.id === currentWorkspaceId : !!stored) || !!filter;
+		// A folded group (never one under a filter) is its head row alone, whatever chats it has.
+		if (!showing) return metrics.row;
 		const sessions = sessionsOf(w.rootPath);
 		const chats = selectWorkspaceChats(sessions, { filter, slotsByFile, archived: false, currentFile, drafts });
 		if (filter && !chats.length) return 0;
-		const stored = expanded[w.rootPath];
-		const showing = (stored === undefined ? w.id === currentWorkspaceId : !!stored) || !!filter;
-		if (!showing) return metrics.row;
 		const shown = showAllMap[w.id] || filter ? chats.length : Math.min(CHAT_ROWS_SHOWN, chats.length);
 		const note = errors[w.rootPath] || sessions === undefined || !chats.length ? metrics.note : 0;
 		const more = !filter && chats.length > shown ? metrics.more : 0;
@@ -342,11 +356,12 @@ function WorkspaceList({ list, renderGroup, sessionsOf, errors, expanded, curren
 		const next = { start: Math.max(0, first - WINDOW_OVERSCAN), end: Math.min(list.length, last + WINDOW_OVERSCAN) };
 		setRange((prev) => (prev.start === next.start && prev.end === next.end ? prev : next));
 	}, [heights, list.length]);
+	// The row, note and "show more" heights come from the stylesheet, so they are measured once when the list appears.
+	// Measuring them again on every update (every slot or list change) forced a style pass each time: about 9 ms, some
+	// 25 times while the other mode's sidebar came in (2026-10-27).
 	useLayoutEffect(() => {
 		const el = box.current;
-		if (!el) return undefined;
-		const scroller = el.closest(".sidebar-scroll");
-		if (!scroller) return undefined;
+		if (!el) return;
 		const cssRow = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--h-row"));
 		const probe = document.createElement("div");
 		probe.setAttribute("aria-hidden", "true");
@@ -356,22 +371,23 @@ function WorkspaceList({ list, renderGroup, sessionsOf, errors, expanded, curren
 		const note = probe.children[0]?.offsetHeight || FALLBACK_NOTE_H;
 		const more = probe.children[1]?.offsetHeight || FALLBACK_MORE_H;
 		probe.remove();
-		// Keep the old object when nothing changed: `metrics` feeds `heights` -> `updateRange` -> this effect, so a fresh
-		// object on every run would re-render forever.
 		const row = Number.isFinite(cssRow) && cssRow > 0 ? cssRow : FALLBACK_ROW_H;
 		setMetrics((prev) => (prev.row === row && prev.note === note && prev.more === more ? prev : { row, note, more }));
-		let top = 0;
-		for (let node = el; node && node !== scroller; node = node.offsetParent) top += node.offsetTop;
-		listTop.current = top;
+	}, []);
+	// Scrolling and a resized sidebar run the newest range update; the listeners stay for the life of the list.
+	const rangeUpdate = useRef(updateRange);
+	rangeUpdate.current = updateRange;
+	useLayoutEffect(() => {
+		const scroller = box.current?.closest(".sidebar-scroll");
+		if (!scroller) return undefined;
 		let frame = 0;
 		const onScroll = () => {
 			if (frame) return;
 			frame = requestAnimationFrame(() => {
 				frame = 0;
-				updateRange();
+				rangeUpdate.current();
 			});
 		};
-		updateRange();
 		scroller.addEventListener("scroll", onScroll, { passive: true });
 		const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(onScroll);
 		resize?.observe(scroller);
@@ -380,8 +396,15 @@ function WorkspaceList({ list, renderGroup, sessionsOf, errors, expanded, curren
 			resize?.disconnect();
 			if (frame) cancelAnimationFrame(frame);
 		};
-	}, [updateRange]);
+	}, []);
 	useLayoutEffect(() => {
+		const el = box.current;
+		const scroller = el?.closest(".sidebar-scroll");
+		if (el && scroller) {
+			let top = 0;
+			for (let node = el; node && node !== scroller; node = node.offsetParent) top += node.offsetTop;
+			listTop.current = top;
+		}
 		updateRange();
 	}, [updateRange]);
 	if (!virtualize) {
@@ -652,7 +675,7 @@ export function Sidebar() {
 	}} />`;
 	const onWidth = (w) => {
 		state.view = { ...state.view, sidebarW: w };
-		document.documentElement.style.setProperty("--sidebar-w", `${w}px`);
+		applyColumnWidths();
 	};
 	// While hidden the sidebar is only seen as a peek (sidebar-peek.js), where its own button keeps it open.
 	return html`<aside class=${`sidebar${sidebarOpen ? "" : " is-collapsed"}`} aria-label=${t("Workspaces and chats")} onPointerEnter=${peekSidebarEnter} onPointerLeave=${peekSidebarLeave}>

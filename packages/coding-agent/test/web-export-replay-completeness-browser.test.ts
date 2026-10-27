@@ -186,7 +186,7 @@ describe.runIf(shouldRun)("web-export-replay-completeness-browser", () => {
 		});
 		sm.appendSessionInfo("完整性信息对账会话 W25b");
 
-		// 1. 添加 62 轮普通问答以触发「显示更早的消息」按钮 (transcript.js limit=60)
+		// 1. 添加 62 轮普通问答：超过旧的 60 轮分页窗口，确认全部轮次都进页面
 		for (let i = 1; i <= 62; i++) {
 			sm.appendMessage({
 				role: "user",
@@ -472,8 +472,10 @@ describe.runIf(shouldRun)("web-export-replay-completeness-browser", () => {
 				userImg: document.querySelectorAll('.user-row img').length,
 				finalMsg: document.querySelectorAll('.final').length,
 				msgMeta: document.querySelectorAll('.msg-meta').length,
-				table: document.querySelectorAll('.final table').length,
-				codeBlock: document.querySelectorAll('.final pre code').length,
+				// The table and code block sit in a text that a tool call follows in the same turn: it is drawn as a note
+				// among the turn's steps, not as its final answer.
+				table: document.querySelectorAll('.md table').length,
+				codeBlock: document.querySelectorAll('.md pre code').length,
 				thinking: document.querySelectorAll('.thinking').length,
 				actionRow: document.querySelectorAll('.action-row').length,
 				steps: document.querySelectorAll('.steps').length,
@@ -495,8 +497,14 @@ describe.runIf(shouldRun)("web-export-replay-completeness-browser", () => {
 		expect(initialCounts.changeCard).toBeGreaterThan(0);
 		expect(initialCounts.customCard).toBeGreaterThan(0);
 		expect(initialCounts.bashEntry).toBeGreaterThan(0);
-		// 超过 60 轮，因此首屏应有「显示更早的消息」按钮
-		expect(initialCounts.earlierBtn).toBeGreaterThan(0);
+		// 没有分页窗口：超过 60 轮也全部进页面（首批之后按帧分块挂载），不再有「显示更早的消息」按钮
+		expect(initialCounts.earlierBtn).toBe(0);
+		let userRows = initialCounts.userRow;
+		for (let i = 0; i < 50 && userRows < 63; i++) {
+			await new Promise((r) => setTimeout(r, 100));
+			userRows = await browser.evaluate(`document.querySelectorAll('.user-row').length`);
+		}
+		expect(userRows).toBe(63);
 
 		// 2. 交互展开：点击「显示更早的消息」、展开工具原始结果、展开压缩/分支摘要、展开文件变更 diff
 		await browser.evaluate(`(function() {

@@ -209,8 +209,10 @@ it.skipIf(gated)(
  await until(()=>codingArchived().length===1);
  const a=codingArchived()[0];
  must(a.start>=wsEnd&&a.start>=trEnd&&a.start>=u.end,'the archived list raced the first-screen requests: '+JSON.stringify({wsEnd,trEnd,uEnd:u.end,aStart:a.start}));
- await until(()=>!!row('Archived chats'));
- // 4. When the archived group shows up nothing else moves or resets: same places, same open and current marks.
+ await until(()=>codingArchived()[0].end!==null);
+ await wait(150);
+ // 4. When the archived list arrives nothing in the sidebar moves or resets: same places, same open and current marks.
+ //    Archived chats have no group in the sidebar.
  const after=geom();
  const byName=new Map(after.map(r=>[r.name,r]));
  for (const r of before) {
@@ -220,9 +222,8 @@ it.skipIf(gated)(
    must(now.expanded===r.expanded,'open state reset when the archived list arrived: '+r.name+' '+r.expanded+'->'+now.expanded);
    must(now.current===r.current,'current mark reset when the archived list arrived: '+r.name);
  }
- must(byName.get('Archived chats')?.expanded==='false','the new archived group is not collapsed by default');
- row('Archived chats').click();
- await until(()=>[...document.querySelectorAll('.chat-row')].some(r=>r.textContent.includes('Old archived chat')));
+ must(after.length===before.length&&!row('Archived chats'),'the sidebar grew a group when the archived list arrived: '+JSON.stringify(after));
+ must(![...document.querySelectorAll('.chat-row')].some(r=>r.textContent.includes('Old archived chat')),'an archived chat is listed in the sidebar');
  must([...document.querySelectorAll('.chat-row')].filter(r=>r.textContent.includes('Unbound chat')).length===1,'the unbound chat listed twice');
  // 5. The idle queue is consumed once: the loaded lists are not asked for a second time.
  idle();
@@ -356,11 +357,13 @@ it.skipIf(gated)(
  await until(()=>codingArchived().length===1);
  const a=codingArchived()[0];
  must(a.start>=wsEnd&&a.start>=trEnd&&a.start>=u.end,'the archived list raced the first-screen requests: '+JSON.stringify({wsEnd,trEnd,uEnd:u.end,aStart:a.start}));
- await until(()=>!!row('Archived chats'));
+ await until(()=>codingArchived()[0].end!==null);
+ await wait(150);
  const after=geom();
+ must(after.length===before.length&&!row('Archived chats'),'the sidebar grew a group when the archived list arrived: '+JSON.stringify(after));
  for (const r of before) {
    const now=after.find(x=>x.name===r.name);
-   must(now&&Math.abs(now.top-r.top)<=2&&now.expanded===r.expanded&&now.current===r.current,'sidebar shifted or reset when the archived group appeared: '+r.name);
+   must(now&&Math.abs(now.top-r.top)<=2&&now.expanded===r.expanded&&now.current===r.current,'sidebar shifted or reset when the archived list arrived: '+r.name);
  }
  must(!!document.querySelector('.chat-row.current'),'the current chat highlight was lost');
 ${EPILOGUE}`,

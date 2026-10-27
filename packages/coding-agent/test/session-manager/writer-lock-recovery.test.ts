@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../src/session/manager/index.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -71,4 +71,32 @@ describe("SessionManager writer-lock recovery", () => {
 			}
 		},
 	);
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	it("reports a lock whose folder disappeared while the chat was open instead of throwing from a timer", async () => {
+		const root = mkdtempSync(join(tmpdir(), "myharness-writer-lock-lost-"));
+		const logged: string[] = [];
+		vi.spyOn(console, "error").mockImplementation((line: unknown) => {
+			logged.push(String(line));
+		});
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+		try {
+			const session = SessionManager.create(root, root);
+			session.acquireWriterLock();
+			// The chat folder was moved or deleted while the chat was open: the lock's own folder is gone.
+			rmSync(`${session.getSessionFile()}.lock`, { recursive: true, force: true });
+			// proper-lockfile's heartbeat (every 30 s) then finds it missing; its default handler threw from the timer
+			// and ended the server (seen in a real log as an uncaught ECOMPROMISED).
+			await vi.advanceTimersByTimeAsync(31_000);
+			expect(logged.some((line) => line.includes("Session writer lock lost"))).toBe(true);
+			expect(() => session.releaseWriterLock()).not.toThrow();
+		} finally {
+			vi.useRealTimers();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });

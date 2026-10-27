@@ -167,8 +167,15 @@ export function renderMarkdown(text, { breaks = false } = {}) {
 const LARGE_TEXT = 16000;
 
 /** Plain-text HTML for the part of a large text that has no parsed HTML yet: same font, size and wrapping as the
- *  parsed blocks, only the Markdown markers are still literal. Never a monospace, non-wrapping placeholder. */
-const pendingHtml = (rest) => (rest ? `<div class="md-pending">${esc(rest)}</div>` : "");
+ *  parsed blocks, only the Markdown markers are still literal. Never a monospace, non-wrapping placeholder. Each
+ *  blank-line-separated block is its own paragraph with the parsed paragraphs' spacing: one wrapped block drew every
+ *  blank line as a full empty line, so a long reasoning text shrank by a few lines the moment its parse landed. */
+const pendingHtml = (rest) =>
+	rest
+		.split(/\n[ \t]*\n\s*/)
+		.filter((block) => block.trim())
+		.map((block) => `<p class="md-pending">${esc(block)}</p>`)
+		.join("");
 
 const isDefinition = (token) => token.type === "def";
 

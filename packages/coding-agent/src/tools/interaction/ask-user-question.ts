@@ -70,6 +70,40 @@ export interface AskUserQuestionToolDetails {
 	answers: AskUserQuestionAnswer[];
 }
 
+/**
+ * Models used to other agents' question tools send each option as `{ label, description }`; the dialog lists plain
+ * text, so such an option becomes "label — description" instead of failing validation and costing the model a round
+ * trip (6 of 22 calls in a week of real use failed that way). Anything else is left for validation to report.
+ */
+function prepareAskUserQuestionArguments(args: unknown): AskUserQuestionToolInput {
+	const input = args as { questions?: unknown } | undefined;
+	if (!input || typeof input !== "object" || !Array.isArray(input.questions)) return args as AskUserQuestionToolInput;
+	let changed = false;
+	const questions = input.questions.map((question: unknown) => {
+		const options = (question as { options?: unknown } | undefined)?.options;
+		if (!Array.isArray(options)) return question;
+		return {
+			...(question as object),
+			options: options.map((option: unknown) => {
+				const text = optionText(option);
+				if (text === undefined) return option;
+				changed = true;
+				return text;
+			}),
+		};
+	});
+	return (changed ? { ...input, questions } : args) as AskUserQuestionToolInput;
+}
+
+function optionText(option: unknown): string | undefined {
+	if (!option || typeof option !== "object" || Array.isArray(option)) return undefined;
+	const { label, description } = option as { label?: unknown; description?: unknown };
+	if (typeof label !== "string" || !label.trim()) return undefined;
+	return typeof description === "string" && description.trim()
+		? `${label.trim()} — ${description.trim()}`
+		: label.trim();
+}
+
 /** A question after validation: options are trimmed and unique, and absent for free-text questions. */
 interface PlannedQuestion {
 	question: string;
@@ -200,6 +234,7 @@ export function createAskUserQuestionToolDefinition(): BusinessToolDefinition<
 			"Ask the user one to four questions in an interactive dialog and wait for the answers. A question may offer 2 to 6 mutually exclusive options; unless allowOther is false, an extra choice lets the user type their own answer. A question without options takes free text. Answers come back in the order asked. If the user closes a dialog, the tool stops asking and reports that no answer was given. Fails with NO_INTERACTIVE_UI when the session has no interactive UI.",
 		promptSnippet: loadSystemPrompt("tools/ask-user-question/snippet.md"),
 		parameters: askUserQuestionSchema,
+		prepareArguments: prepareAskUserQuestionArguments,
 		executionMode: "sequential",
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const ui = requireInteractiveUi(ctx);

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, type FSWatcher, readdirSync, readFileSync, watch } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
@@ -28,10 +28,11 @@ import {
 	writeMergedMemory,
 } from "./apply.ts";
 import { browserFileOf, browserIdOf, browserProfileDir, mergeBrowserText, readBrowserText } from "./browser-data.ts";
+import { hashFileStream } from "./files/scan.ts";
 import { MemoryBaseStore, memoryBaseDir } from "./memory-bases.ts";
 import { mergeMemoryText } from "./memory-merge.ts";
 import { type HeaderCacheEntry, isLocalOnlyPath, scanLocalEntitiesAsync } from "./scope.ts";
-import type { SyncLocalStore } from "./store.ts";
+import type { HashCacheEntry, SyncLocalStore } from "./store.ts";
 import type {
 	DrivePort,
 	ScannedEntity,
@@ -65,6 +66,8 @@ import {
 } from "./util.ts";
 
 const MAX_OBJECT_BYTES = 200 * 1024 * 1024;
+/** Synchronous work between two yields of a long loop over every synced entity (as in scanLocalEntitiesAsync). */
+const SLICE_MS = 12;
 /**
  * Handled batch names kept beside the watermark. The watermark folds them away, so the list only holds the batches
  * after one that still waits; a catch-up of thousands of batches must not lose names to the cap before that fold, or
@@ -278,7 +281,9 @@ export class SyncEngine {
 	private lastPassEndedAt = 0;
 	private memoryMetadataCache = new Map<string, { signature: string; id: string; name: string }>();
 	private currentScan = new Map<string, ScannedEntity>();
-	private fileCache = new Map<string, { mtimeMs: number; size: number; hash: string }>();
+	/** Content hash per entity for the size and modification time it was taken at; kept across restarts (hashes-*.json). */
+	private fileCache = new Map<string, HashCacheEntry>();
+	private fileCacheDirty = false;
 	private uploadedObjects = new Set<string>();
 	private objectCache = new Map<string, Uint8Array>();
 	private objectCacheBytes = 0;
@@ -343,6 +348,7 @@ export class SyncEngine {
 		this.bases = new MemoryBaseStore(memoryBaseDir(this.store.dir, options.accountKey));
 		this.config = this.store.config();
 		this.state = this.store.state(options.accountKey);
+		this.fileCache = this.store.hashCache(options.accountKey);
 		this.restoreForceUploads();
 		if (!this.state.syncId && this.config.syncId) this.state.syncId = this.config.syncId;
 		if (!this.state.folderId && this.config.folderId) this.state.folderId = this.config.folderId;
@@ -456,6 +462,14 @@ export class SyncEngine {
 				stale: 60_000,
 				update: 20_000,
 				retries: 0,
+				// The lock folder vanished or another process took the lock over after a pause longer than a minute (the
+				// computer slept, the event loop was blocked). proper-lockfile's default handler throws from a timer,
+				// which ended the whole server: stop instead and take the lock again, as on a start.
+				onCompromised: (error) => {
+					console.error(`Sync lock lost: ${error.message}`);
+					this.lockRelease = undefined;
+					void this.stop().then(() => this.start());
+				},
 			});
 		} catch {
 			this.phase = "locked";
@@ -495,6 +509,7 @@ export class SyncEngine {
 			clearTimeout(this.lockRetry);
 			this.lockRetry = undefined;
 		}
+		this.saveHashCache();
 		if (this.lockRelease) {
 			try {
 				await this.lockRelease();
@@ -617,6 +632,7 @@ export class SyncEngine {
 		} finally {
 			this.running = false;
 			this.lastPassEndedAt = Date.now();
+			this.saveHashCache();
 			this.progress = null;
 			this.emitStatus();
 			if (!this.stopped)
@@ -878,7 +894,7 @@ export class SyncEngine {
 		if (!entity.path) return { hash: sha256(entity.id) };
 		const data = new Uint8Array(readFileSync(entity.path));
 		const hash = sha256(data);
-		this.fileCache.set(entity.key, {
+		this.cacheHash(entity.key, {
 			mtimeMs: entity.mtimeMs ?? 0,
 			size: entity.size ?? data.byteLength,
 			hash,
@@ -886,10 +902,57 @@ export class SyncEngine {
 		return { hash, data };
 	}
 
+	/**
+	 * hashEntity for the upload queue: a file is streamed through the hash instead of being read as one buffer, so
+	 * hashing a library of large chats (the first pass after a start once hashed about 1.2 GB in one go and held the
+	 * server for 10–20 s) never holds the event loop. The hash is remembered only when the file still has the size and
+	 * time the scan saw; a chat that was written to meanwhile is hashed again on the next pass.
+	 */
+	private async hashEntityAsync(entity: ScannedEntity): Promise<{ hash: string; size?: number }> {
+		if (entity.inline !== undefined) return { hash: sha256(entity.inline) };
+		const cached = this.fileCache.get(entity.key);
+		if (cached && cached.mtimeMs === entity.mtimeMs && cached.size === entity.size) return { hash: cached.hash };
+		if (!entity.path) return { hash: sha256(entity.id) };
+		const { hash, size } = await hashFileStream(entity.path);
+		if (entity.mtimeMs !== undefined && size === entity.size) {
+			const after = await stat(entity.path).catch(() => undefined);
+			if (after?.mtimeMs === entity.mtimeMs && after.size === size)
+				this.cacheHash(entity.key, { mtimeMs: entity.mtimeMs, size, hash });
+		}
+		return { hash, size };
+	}
+
+	private cacheHash(key: string, entry: HashCacheEntry): void {
+		this.fileCache.set(key, entry);
+		this.fileCacheDirty = true;
+	}
+
+	private forgetHash(key: string): void {
+		if (this.fileCache.delete(key)) this.fileCacheDirty = true;
+	}
+
+	/** Without the saved hashes, the first pass after every start read and hashed every synced file again. */
+	private saveHashCache(): void {
+		if (!this.fileCacheDirty) return;
+		this.fileCacheDirty = false;
+		try {
+			this.store.saveHashCache(this.state.accountKey, this.fileCache);
+		} catch {
+			// Only a shortcut: a missing or stale file means the next start hashes those files again.
+		}
+	}
+
 	private readEntity(entity: ScannedEntity): Uint8Array {
 		if (entity.inline !== undefined) return utf8(entity.inline);
 		if (!entity.path) throw new Error(`No content for ${entity.key}`);
 		return new Uint8Array(readFileSync(entity.path));
+	}
+
+	private async readEntityAsync(entity: ScannedEntity): Promise<Uint8Array> {
+		if (entity.inline !== undefined) return utf8(entity.inline);
+		if (!entity.path) throw new Error(`No content for ${entity.key}`);
+		const data = await readFile(entity.path);
+		return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
 	}
 
 	private async push(): Promise<void> {
@@ -934,14 +997,22 @@ export class SyncEngine {
 		});
 		this.currentScan = scan;
 		const operations: SyncOperation[] = [];
+		let sliceStart = performance.now();
+		const yieldNow = async () => {
+			if (performance.now() - sliceStart < SLICE_MS) return;
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			sliceStart = performance.now();
+		};
 		for (const entity of scan.values()) {
+			await yieldNow();
 			const previous = this.state.entities[entity.key];
-			const { hash, data } = this.hashEntity(entity);
+			const { hash, size: hashedSize } = await this.hashEntityAsync(entity);
+			sliceStart = performance.now();
 			if (previous && previous.hash === hash && !this.forceUpload.has(entity.key)) {
 				this.clearIssue(`file:${entity.key}`);
 				continue;
 			}
-			const size = data?.byteLength ?? entity.size ?? this.readEntity(entity).byteLength;
+			const size = hashedSize ?? entity.size ?? this.readEntity(entity).byteLength;
 			if (size > MAX_OBJECT_BYTES) {
 				// A file this size is not silently dropped: it stays local and is reported until it fits.
 				this.noteIssue(
@@ -971,6 +1042,7 @@ export class SyncEngine {
 		}
 		for (const [key, previous] of Object.entries(this.state.entities)) {
 			if (scan.has(key)) continue;
+			await yieldNow();
 			// A chat whose header became unreadable (or was switched to Coding) is not a deletion: keep its synced copy.
 			if (this.keepUnscannedEntity(previous)) continue;
 			// A writer lock or bridge an older version published is never scanned again; it is not deleted anywhere either.
@@ -1053,12 +1125,12 @@ export class SyncEngine {
 		const entity = this.currentScan.get(operation.key);
 		let data: Uint8Array | undefined;
 		try {
-			data = entity ? this.readEntity(entity) : undefined;
+			data = entity ? await this.readEntityAsync(entity) : undefined;
 		} catch {
 			data = undefined;
 		}
 		if (!data || sha256(data) !== operation.hash) {
-			this.fileCache.delete(operation.key);
+			this.forgetHash(operation.key);
 			return undefined;
 		}
 		const content = data;
@@ -1087,7 +1159,7 @@ export class SyncEngine {
 					deletedAt: operation.deletedAt ?? nowIso(),
 					kind: operation.kind,
 				};
-				this.fileCache.delete(operation.key);
+				this.forgetHash(operation.key);
 				this.clearForceUpload(operation.key);
 				if (operation.kind === "memory") this.bases.remove(operation.key);
 				continue;
@@ -2195,7 +2267,7 @@ export class SyncEngine {
 			deletedAt: operation.deletedAt ?? nowIso(),
 			kind: operation.kind,
 		};
-		this.fileCache.delete(operation.key);
+		this.forgetHash(operation.key);
 		this.currentScan.delete(operation.key);
 		this.clearForceUpload(operation.key);
 		if (operation.kind === "memory") this.bases.remove(operation.key);
@@ -2240,7 +2312,7 @@ export class SyncEngine {
 		if (merged.text !== localText) {
 			const written = await writeMergedMemory(context, operation.id, merged.text);
 			if (!written) return false;
-			this.fileCache.delete(operation.key);
+			this.forgetHash(operation.key);
 			this.currentScan.delete(operation.key);
 		}
 		// The local text (merged, or already the superset) has not been published yet. Force one upload so the other
@@ -2285,7 +2357,7 @@ export class SyncEngine {
 		if (merged !== localText) {
 			const outcome = await applyBrowser(this.context(), operation, utf8(merged));
 			if (!outcome.applied) return false;
-			this.fileCache.delete(operation.key);
+			this.forgetHash(operation.key);
 			this.currentScan.delete(operation.key);
 		}
 		this.markForceUpload(operation.key);
@@ -2342,7 +2414,7 @@ export class SyncEngine {
 					const written = await writeMergedMemory(context, id, merged.text);
 					if (written) {
 						this.markForceUpload(conflict.key);
-						this.fileCache.delete(conflict.key);
+						this.forgetHash(conflict.key);
 						this.currentScan.delete(conflict.key);
 						changed = true;
 					} else {

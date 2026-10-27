@@ -66,6 +66,7 @@ import {Transcript} from '/js/transcript.js';
 import {GitRecord} from '/js/git-record.js';
 import {CacheValue} from '/js/context-usage.js';
 import {set,setView} from '/js/store.js';
+import {Menu,MenuItem} from '/js/ui.js';
 const wait = ms => new Promise(r=>setTimeout(r,ms));
 try {
  set({snap:{active:false,checkpoint:null}});
@@ -97,16 +98,24 @@ try {
  const cacheValue=tokenLabel.nextElementSibling.lastElementChild;
  if(getComputedStyle(cacheValue).marginLeft==='auto') throw Error('cache pushed to edge');
  const user={kind:'user',id:'u',ts:1,text:'task',images:[]};
- const reply={kind:'assistant',id:'a',ts:2,blocks:[{type:'text',text:'Core answer'},{type:'toolCall',id:'tool',name:'read',args:{path:'a.ts'}}],final:true,stopReason:'toolUse'};
+ // A step, then the answer: folding the steps (a note between steps folds with them) never folds the answer.
+ const step={kind:'assistant',id:'a',ts:2,blocks:[{type:'toolCall',id:'tool',name:'read',args:{path:'a.ts'}}],stopReason:'toolUse'};
+ const read={kind:'toolResult',id:'r',ts:3,toolCallId:'tool',toolName:'read',text:'x',images:[],isError:false};
+ const reply={kind:'assistant',id:'a2',ts:4,blocks:[{type:'text',text:'Core answer'}],final:true,stopReason:'stop'};
  for(const processDefault of ['collapsed','expanded']) {
-  setView({processDefault}); set({snap,items:[user,reply],toolRuns:{},runs:{}});
+  setView({processDefault}); set({snap,items:[user,step,read,reply],toolRuns:{},runs:{}});
   render(h(Transcript),document.getElementById('record')); await wait(200);
   const answer=[...document.querySelectorAll('.final')].find(n=>n.textContent.includes('Core answer'));
   if(!answer || answer.closest('.collapse') || answer.getBoundingClientRect().height<=0) throw Error('core answer folded: '+processDefault);
  }
- render(h(ChangesPanel),document.getElementById('menu')); await wait(200);
+ // Changes no longer has a task menu (it shows the whole chat); the shared menu it used still keeps an item in place on hover.
+ const items=(close)=>[h(MenuItem,{label:'Task 1 · 2 files',onClick:close}),h(MenuItem,{label:'Task 2 · 1 file',active:true,onClick:close})];
+ render(h(Menu,{class:'task-menu',width:280,trigger:({open,toggle})=>h('button',{class:'btn sm','aria-expanded':open,onClick:toggle},'Task')},items),document.getElementById('menu')); await wait(200);
  const task=document.querySelector('.task-menu button'); if(!task) throw Error('task menu missing'); task.click(); await wait(150);
- const option=document.querySelector('.task-menu .menu-item'); const before=option.getBoundingClientRect();
+ const option=document.querySelector('.popover .menu-item'); if(!option) throw Error('menu did not open');
+ // Measure once the menu has finished opening (its pop-in still moves it), so only the hover can change it.
+ await Promise.all(option.closest('.popover').getAnimations().map(a=>a.finished.catch(()=>{})));
+ const before=option.getBoundingClientRect();
  option.dispatchEvent(new MouseEvent('mouseover',{bubbles:true})); await wait(150);
  const after=option.getBoundingClientRect();
  if(before.width!==after.width||before.height!==after.height||before.top!==after.top||!option.isConnected) throw Error('task hover geometry changed');

@@ -1,4 +1,4 @@
-// Command palette (Ctrl+K): app actions, chats and workspace files in one keyboard-driven list.
+// Command palette (Ctrl+Alt+K by default): app actions, chats and workspace files in one keyboard-driven list.
 import { html, useEffect, useRef, useState, useDebouncedValue, Icon } from "./ui.js";
 import { api, loadResources, setView, state, useStore } from "./store.js";
 import { actions, openCommand } from "./actions.js";

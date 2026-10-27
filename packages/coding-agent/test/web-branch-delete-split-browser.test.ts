@@ -261,9 +261,8 @@ try {
  cpRow('task-copy').click();await until(()=>cpRow('删除副本'));cpRow('删除副本').click();await wait(50);
  cpRow('删除副本').click();await until(()=>cpRow('强制删除副本'));
  check(document.querySelector('.cp-screen').textContent.includes('未提交的改动'),'alternate dirty error not explained');
- count=(await requests()).length;cpRow('强制删除副本').click();await until(()=>document.querySelector('.cp-screen').textContent.includes('确认强制删除这个副本'));
- check((await requests()).length===count,'alternate force writes before confirmation');
- check(document.querySelector('.cp-row.sel .cp-label')?.textContent==='取消','alternate force confirmation not safe by default');
+ // Force is one explicit click (no second question), and after the refusal the highlight is back on Cancel.
+ check(document.querySelector('.cp-row.sel .cp-label')?.textContent==='取消','alternate force offer not safe by default');
  cpRow('强制删除副本').click();await until(()=>cpRow('unknown-copy')&&!cpRow('task-copy'));
  history=await requests();check(history.at(-1).kind==='copy'&&history.at(-1).force===true&&history.at(-1).slot==='slot','alternate force does not target just the selected copy');
  // The main copy and the copy this chat runs in never offer deletion.
