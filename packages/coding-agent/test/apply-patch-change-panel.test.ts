@@ -10,6 +10,7 @@ import {
 	createAgentSessionRuntime,
 	createAgentSessionServices,
 } from "../src/agent/runtime/session-runtime.ts";
+import type { SettingsManager } from "../src/config/settings/index.ts";
 import { WebDialogBridge } from "../src/modes/web/dialogs.ts";
 import { WebHttpServer } from "../src/modes/web/http-server.ts";
 import { WebHostHub } from "../src/modes/web/hub.ts";
@@ -100,9 +101,13 @@ describe("apply_patch in the Web change panel", () => {
 			model: faux.getModel(),
 			resourceLoaderOptions: { noSkills: true, noPromptTemplates: true, noThemes: true },
 		};
+		// Settings are written a moment after they change. Every runtime's writes finish in the cleanup, before the
+		// directories are removed; a later write put the agent directory back, or held its lock while it was removed.
+		const settingsManagers: SettingsManager[] = [];
 		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
 			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
 			services.settingsManager.setConversationNamingSettings({ enabled: false });
+			settingsManagers.push(services.settingsManager);
 			return {
 				...(await createAgentSessionFromServices({
 					services,
@@ -122,6 +127,7 @@ describe("apply_patch in the Web change panel", () => {
 		});
 		cleanups.push(async () => {
 			await runtimeHost.dispose();
+			await Promise.all(settingsManagers.map((manager) => manager.flush()));
 			faux.unregister();
 		});
 

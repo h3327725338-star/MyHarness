@@ -19,6 +19,8 @@ describe("SettingsManager", () => {
 		mkdirSync(join(projectDir, ".myharness"), { recursive: true });
 	});
 
+	// Settings reach the disk about 175 ms after a change, and every test uses the same testDir: a test that changes
+	// settings awaits manager.flush(), or the pending write lands in the next test's fresh directory.
 	afterEach(() => {
 		if (existsSync(testDir)) {
 			rmSync(testDir, { recursive: true });
@@ -70,7 +72,7 @@ describe("SettingsManager", () => {
 			});
 		});
 
-		it("keeps the selected model when automatic memory is turned off", () => {
+		it("keeps the selected model when automatic memory is turned off", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			manager.setAutoMemorySettings({
 				enabled: false,
@@ -85,6 +87,7 @@ describe("SettingsManager", () => {
 				model: "gpt-test",
 				thinkingLevel: "medium",
 			});
+			await manager.flush();
 		});
 	});
 
@@ -311,9 +314,10 @@ describe("SettingsManager", () => {
 			// Anything that is not exactly "read-write" normalizes back to the safe default.
 			manager.setSubAgentSettings({ enabled: true, mode: "nonsense" as never });
 			expect(manager.getSubAgentSettings().mode).toBe("read-only");
+			await manager.flush();
 		});
 
-		it("keeps the selected model when sub-agent execution is turned off", () => {
+		it("keeps the selected model when sub-agent execution is turned off", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			manager.setSubAgentSettings({
 				enabled: false,
@@ -336,9 +340,10 @@ describe("SettingsManager", () => {
 				noProgressDetection: true,
 				repeatedOperationDetection: true,
 			});
+			await manager.flush();
 		});
 
-		it("clamps the configured sub-agent task cap to the 1–18 range", () => {
+		it("clamps the configured sub-agent task cap to the 1–18 range", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			expect(manager.getSubAgentSettings().maxTasks).toBe(3);
 			manager.setSubAgentSettings({ enabled: true, maxTasks: 5 });
@@ -349,6 +354,7 @@ describe("SettingsManager", () => {
 			expect(manager.getSubAgentSettings().maxTasks).toBe(1);
 			manager.setSubAgentSettings({ enabled: true, maxTasks: Number.NaN });
 			expect(manager.getSubAgentSettings().maxTasks).toBe(3);
+			await manager.flush();
 		});
 
 		it("normalizes convergence settings and keeps unlimited values explicit", async () => {
@@ -425,7 +431,7 @@ describe("SettingsManager", () => {
 			});
 		});
 
-		it("keeps the selected model when the vision assistant is turned off", () => {
+		it("keeps the selected model when the vision assistant is turned off", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			manager.setVisionAssistantSettings({
 				enabled: false,
@@ -440,6 +446,7 @@ describe("SettingsManager", () => {
 				model: "vision-test",
 				thinkingLevel: "low",
 			});
+			await manager.flush();
 		});
 
 		it("persists manual vision capability test results globally", async () => {
@@ -894,7 +901,7 @@ describe("SettingsManager", () => {
 			expect(manager.getNetworkMaxAttempts()).toBe(2);
 		});
 
-		it("rejects invalid values when saving", () => {
+		it("rejects invalid values when saving", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			expect(() => manager.setNetworkTimeout("connectTimeoutMs", 0)).toThrow("Invalid network.connectTimeoutMs");
 			expect(() => manager.setNetworkMaxAttempts(0)).toThrow("Invalid retry.networkMaxAttempts");
@@ -902,6 +909,7 @@ describe("SettingsManager", () => {
 			manager.setNetworkMaxAttempts(4);
 			expect(manager.getNetworkTimeouts().streamIdleTimeoutMs).toBe(30_000);
 			expect(manager.getNetworkMaxAttempts()).toBe(4);
+			await manager.flush();
 		});
 
 		it("ignores the removed httpIdleTimeoutMs and retry.provider.timeoutMs, reports each once, and never maps them", () => {
