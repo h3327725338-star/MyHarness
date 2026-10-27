@@ -340,7 +340,10 @@ end-to-end encrypted: Google stores the data under the account's normal Drive pr
   is written. Version vectors decide every write, so the order between records does not matter; records are taken small
   and sidebar items first (workspaces, prompts, memories, drafts), then chats and files from small to large and newest
   first. Contents download 16 at a time within a 192 MB memory budget (a larger object runs alone); the changes
-  themselves are still written one after the other. A batch is recorded as handled once every change in it is settled.
+  themselves are still written one after the other, but once the writes have run for 12 ms the next one waits for a
+  turn of the event loop, and a file is written and flushed off the main thread, so a download of thousands of files
+  no longer keeps the server from answering until the last one is written. A batch is recorded as handled once every
+  change in it is settled.
   The page is told what arrived (and the memory catalog refreshed) at most every 2 seconds instead of after every batch.
 - Drive answers a call after about a second whatever the number in flight, so a catch-up spends its time waiting; doing
   that waiting 16 at a time is what makes it fast. Drive allows 325,000 quota units per user per minute and a download

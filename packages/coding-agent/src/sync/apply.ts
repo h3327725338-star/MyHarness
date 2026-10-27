@@ -5,7 +5,7 @@ import type { WorkspaceStore } from "../data/workspace-store.ts";
 import { refreshMemoryIndexes, withMemoryLock, writeMemoryFile } from "../session/memory/store.ts";
 import type { ModeStateStore } from "../session/mode-state.ts";
 import { readSessionHeader } from "../session/storage/jsonl/index.ts";
-import { writeFileAtomicallySync } from "../utils/atomic-write.ts";
+import { writeFileAtomically, writeFileAtomicallySync } from "../utils/atomic-write.ts";
 import { browserFileOf, browserProfileDir } from "./browser-data.ts";
 import { savedPromptsOf, writeSavedPrompts } from "./saved-prompts.ts";
 import type { SyncLocalStore } from "./store.ts";
@@ -270,7 +270,8 @@ export async function applyFile(ctx: ApplyContext, record: SyncRecord, data: Uin
 	assertDirectTarget(target, ctx.dataRoot);
 	backupIfExists(ctx, "file", record.key, record.id.split("/").pop() ?? "file", target);
 	ensureDir(dirname(target));
-	writeFileAtomicallySync(target, data);
+	// Written and flushed off the main thread: a first download writes thousands of these, some up to 200 MB.
+	await writeFileAtomically(target, data);
 	outcome.applied = true;
 	return outcome;
 }

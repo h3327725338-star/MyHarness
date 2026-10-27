@@ -310,6 +310,45 @@ describe("Google Drive sync catch-up", () => {
 		expect(b.store.state("account-1").appliedBatches).toHaveLength(0);
 	}, 60_000);
 
+	it("lets the server answer requests while a download writes many files", async () => {
+		const drive = new SharedDrive();
+		const count = 50;
+		drive.addBatch(
+			"device-x",
+			BASE_TIME + 1000,
+			Array.from({ length: count }, (_, index) =>
+				drive.fileOp(`workspaces/ws1/uploads/note-${index}.txt`, `note ${index}`, "device-x", 1),
+			),
+		);
+		const b = device(drive, "laptop", "device-b");
+		writeWorkspace(b.dataRoot);
+		const uploads = join(b.dataRoot, "workspaces", "ws1", "uploads");
+		const written = () => (existsSync(uploads) ? readdirSync(uploads).length : 0);
+		// A request that arrives as the first content comes in: how many files were written by the time it is answered.
+		let asked = false;
+		let writtenWhenAnswered = -1;
+		const view = drive.view("device-b");
+		b.engine.setDrive({
+			...view,
+			downloadObject: (hash) => {
+				if (!asked) {
+					asked = true;
+					setImmediate(() => {
+						writtenWhenAnswered = written();
+					});
+				}
+				return view.downloadObject(hash);
+			},
+		});
+
+		await b.engine.runOnce();
+
+		expect(written()).toBe(count);
+		// Content already here used to be written file after file without a turn for anything else.
+		expect(writtenWhenAnswered).toBeGreaterThanOrEqual(0);
+		expect(writtenWhenAnswered).toBeLessThan(count);
+	});
+
 	it("catches a new computer up from the other one's snapshot without reading its batches", async () => {
 		vi.useFakeTimers({ toFake: ["Date"] });
 		vi.setSystemTime(new Date("2026-10-20T08:00:00.000Z"));

@@ -326,6 +326,8 @@ export class SyncEngine {
 	/** While set, saveState writes at most every SAVE_EVERY_MS; flushState writes at once. */
 	private groupSaves = false;
 	private lastSaveAt = 0;
+	/** When the write chain last let other work run (see yieldWrites). */
+	private writeSliceAt = 0;
 	/** What written changes touched since the page was last told (see announceApplied). */
 	private appliedNotice = { workspaces: false, sessions: false, memories: false, at: 0 };
 	/** The batch names Drive listed, kept between passes so a pass can list only what is new (see listBatches). */
@@ -1532,6 +1534,7 @@ export class SyncEngine {
 			}
 			const content = data;
 			await this.serially(async () => {
+				await this.yieldWrites();
 				// Stopped while this change waited for its turn: it stays waiting, nothing half done.
 				if (round.halt?.local || this.interrupted()) return;
 				if (content) this.readyObjects.set(operation.hash, content);
@@ -1726,6 +1729,17 @@ export class SyncEngine {
 		const next = this.writeChain.then(run, run);
 		this.writeChain = next.catch(() => undefined);
 		return next;
+	}
+
+	/**
+	 * Give the event loop a turn once the writes have run for SLICE_MS. Changes whose content is already here are written
+	 * one after another as microtasks, so a large download used to leave the server unable to answer anything until the
+	 * last one was written.
+	 */
+	private async yieldWrites(): Promise<void> {
+		if (performance.now() - this.writeSliceAt < SLICE_MS) return;
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		this.writeSliceAt = performance.now();
 	}
 
 	/**
