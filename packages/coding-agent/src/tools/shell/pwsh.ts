@@ -5,7 +5,7 @@ import type { AgentTool } from "@myharness/agent-core";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
-import { trackChildProcessForSignal, waitForChildProcess } from "../../utils/child-process.ts";
+import { containProcessTree, trackChildProcessForSignal, waitForChildProcess } from "../../utils/child-process.ts";
 import {
 	getPwshShellConfig,
 	getShellEnv,
@@ -186,6 +186,7 @@ export function createLocalPwshOperations(options?: { shellPath?: string }): Pws
 				}
 				throw error;
 			}
+			containProcessTree(child);
 			if (child.pid) trackDetachedChildPid(child.pid);
 			if (child.pid) onSpawn?.(child.pid);
 			// Register under this call's signal so abandon handling can kill only

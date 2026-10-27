@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -195,6 +195,52 @@ describe.skipIf(process.platform !== "win32")("Windows child-process close handl
 			if (Number.isFinite(pid)) {
 				expect(await waitForProcessExit(pid)).toBe(true);
 			}
+		} finally {
+			controller.abort();
+			await cleanupDetachedChild(pidFile);
+		}
+	});
+
+	// taskkill's tree walk goes from parent to child and cannot reach a descendant whose parent already exited; the
+	// command's job object still holds it.
+	it("ends a descendant whose parent already exited when the command is cancelled", async () => {
+		const pidFile = join(testDir, "orphan.pid");
+		const orphan = join(testDir, "orphan.cjs");
+		const middle = join(testDir, "middle.cjs");
+		// Records its pid once its parent is gone (its stdin, a pipe from the parent, ends); left alone, it exits after 30
+		// seconds.
+		writeFileSync(
+			orphan,
+			"process.stdin.on('end', () => require('node:fs').writeFileSync(process.argv[2], String(process.pid))).resume(); setTimeout(() => process.exit(), 30000);",
+		);
+		writeFileSync(
+			middle,
+			`require("node:child_process").spawn(process.execPath, [${JSON.stringify(orphan)}, ${JSON.stringify(pidFile)}], { stdio: ["pipe", "ignore", "ignore"], detached: true }); process.exit();`,
+		);
+		const controller = new AbortController();
+		const bashTool = createBashTool(testDir);
+
+		try {
+			const running = bashTool
+				.execute(
+					"test-call-orphan",
+					{ command: `node ${toBashSingleQuotedArg(middle)} && sleep 30` },
+					controller.signal,
+				)
+				.catch(() => undefined);
+			const readPid = () =>
+				existsSync(pidFile) ? Number.parseInt(readFileSync(pidFile, "utf-8").trim(), 10) : Number.NaN;
+			const deadline = Date.now() + 10_000;
+			while (Number.isNaN(readPid()) && Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+			const pid = readPid();
+			expect(Number.isNaN(pid), "the descendant never started").toBe(false);
+
+			controller.abort();
+			await running;
+
+			expect(await waitForProcessExit(pid), "the descendant outlived the cancellation").toBe(true);
 		} finally {
 			controller.abort();
 			await cleanupDetachedChild(pidFile);

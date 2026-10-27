@@ -34,6 +34,12 @@ material they cover:
   `@lydell/node-pty` (MIT; Christopher Jeffrey, Daniel Imms and Microsoft
   Corporation), a repackaging of node-pty with prebuilt binaries. It is
   installed from the npm registry and not copied into this source tree.
+- On Windows, the job objects that hold a command's process tree are created
+  through the optional npm dependency `koffi` 3.3.3 (MIT, Niels Martignène), a
+  foreign function interface whose prebuilt binaries come from its
+  `@koromix/koffi-*` packages. The desktop host uses the same package for its
+  own job object. It is installed from the npm registry and not copied into
+  this source tree.
 - The desktop host's dark mode for websites runs the npm package
   `darkreader` 4.9.133 (MIT, Dark Reader Ltd.) unmodified in each
   website tab. It is installed from the npm registry, not copied into this

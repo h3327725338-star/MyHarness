@@ -42,6 +42,7 @@ import {
 	type RuntimeTraceScope,
 } from "../observability/runtime-trace.ts";
 import { loadSystemPrompt, loadSystemPromptLines } from "../system-prompts/loader/index.ts";
+import { containProcessTree } from "../utils/child-process.ts";
 import { getMyHarnessInvocation } from "../utils/myharness-invocation.ts";
 import { killProcessTreeAndWait } from "../utils/shell.ts";
 import type { BusinessToolDefinition } from "./contracts/index.ts";
@@ -1125,6 +1126,7 @@ async function runExploreTask(options: {
 					...(options.traceContext ? getRuntimeTraceEnvironment(options.traceContext) : {}),
 				},
 			});
+			containProcessTree(child);
 			if (options.sandboxHandle && child.pid) {
 				try {
 					registerDelegatedSandboxWorker(options.sandboxHandle, child.pid);

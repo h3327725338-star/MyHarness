@@ -13,6 +13,7 @@ const internalPackagePrefix = "@myharness/";
 const allowedInstallScriptPackages = new Map([
 	["@google/genai@1.52.0", "preinstall is a no-op in the published package"],
 	["ffmpeg-static@5.3.0", "install downloads the matching published FFmpeg binary used for video keyframes"],
+	["koffi@3.3.3", "install only checks that the prebuilt @koromix/koffi-<platform> binary loads; it compiles from source only when none matches"],
 	["protobufjs@7.6.5", "postinstall only warns about protobufjs version scheme mismatches"],
 	["tesseract.js@7.0.0", "postinstall only runs the optional OpenCollective notice"],
 ]);

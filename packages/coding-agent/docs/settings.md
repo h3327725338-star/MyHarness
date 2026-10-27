@@ -699,7 +699,7 @@ Agent-level retry 覆盖的临时故障包括：过载和限流（429、529）�
   - `bash` / `pwsh` 传入 `run_in_background: true` 时，命令在后台异步执行并立即返回分配的 `taskId`（形如 `job-xxxxxxxx`）。
   - `job_list`：列出当前会话的所有后台作业及其运行状态（`running`、`completed`、`failed`、`killed`、`timed_out`）、退出码与命令。
   - `job_output`：只接收 `taskId`，返回指定后台作业自上次调用以来的增量输出，每次调用最多返回 50KB（未读完时会提示再次调用以继续获取后续内容）。无 `tail` 或 `follow` 参数。
-  - `job_kill`：接收 `taskId`，终止后台作业及其完整子进程树（Windows 上利用 `taskkill /F /T /PID`，POSIX 上利用进程组 `SIGKILL`），并确认进程已终结。
+  - `job_kill`：接收 `taskId`，终止后台作业及其完整子进程树（Windows 上结束该命令的作业对象，没有作业对象时用 `taskkill /F /T /PID`；POSIX 上利用进程组 `SIGKILL`），并确认进程已终结。
   - **保护策略与生命周期**：
     - 单会话并发上限：每会话最多同时运行 8 个后台作业，超出时拒绝启动；历史完成作业保留最多 100 条记录，超限时自动淘汰并物理删除最早终结作业的日志。
     - 运行时间上限：后台任务不受前台单次调用的超时限制，但受全局 24 小时硬上限约束，超时后状态变为 `timed_out`。

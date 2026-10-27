@@ -3,7 +3,12 @@
  */
 
 import { spawn } from "node:child_process";
-import { terminateProcessTree, trackChildProcessForSignal, waitForChildProcess } from "../../utils/child-process.ts";
+import {
+	containProcessTree,
+	terminateProcessTree,
+	trackChildProcessForSignal,
+	waitForChildProcess,
+} from "../../utils/child-process.ts";
 import { killProcessTreeAndWait } from "../../utils/shell.ts";
 
 /**
@@ -75,6 +80,7 @@ export async function execCommand(
 			detached: process.platform !== "win32",
 			stdio: ["ignore", "pipe", "pipe"],
 		});
+		containProcessTree(proc);
 
 		let stdout = "";
 		let stderr = "";

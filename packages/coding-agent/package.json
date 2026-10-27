@@ -78,7 +78,8 @@
 		}
 	},
 	"optionalDependencies": {
-		"@lydell/node-pty": "1.1.0"
+		"@lydell/node-pty": "1.1.0",
+		"koffi": "3.3.3"
 	},
 	"devDependencies": {
 		"@types/cross-spawn": "6.0.6",

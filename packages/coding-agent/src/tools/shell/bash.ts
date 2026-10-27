@@ -5,7 +5,7 @@ import type { AgentTool } from "@myharness/agent-core";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
-import { trackChildProcessForSignal, waitForChildProcess } from "../../utils/child-process.ts";
+import { containProcessTree, trackChildProcessForSignal, waitForChildProcess } from "../../utils/child-process.ts";
 import {
 	getShellConfig,
 	getShellEnv,
@@ -163,6 +163,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 				}
 				throw error;
 			}
+			containProcessTree(child);
 			if (commandFromStdin) {
 				child.stdin?.on("error", () => {});
 				child.stdin?.end(command);

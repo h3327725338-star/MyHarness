@@ -12,6 +12,7 @@ import {
 } from "node:child_process";
 import type { Readable } from "node:stream";
 import crossSpawn from "cross-spawn";
+import { createProcessJob, type WindowsProcessJob } from "./windows-job.ts";
 
 const EXIT_STDIO_GRACE_MS = 100;
 
@@ -129,8 +130,34 @@ export function killChildProcessesForSignal(signal: AbortSignal | undefined): nu
 	return attempted;
 }
 
+/** Job objects of running commands, by pid (see containProcessTree). */
+const processJobs = new Map<number, WindowsProcessJob>();
+
+/**
+ * Windows: put a command's process in a job object of its own right after it is spawned, so ending its tree also ends
+ * processes that taskkill's tree walk misses (created during the walk, or orphaned by an exited parent). The job is
+ * released when the child closes. Elsewhere, or where no job can be created, nothing changes.
+ */
+export function containProcessTree(child: ChildProcess): void {
+	const pid = child.pid;
+	if (process.platform !== "win32" || !pid) return;
+	const job = createProcessJob(pid);
+	if (!job) return;
+	processJobs.set(pid, job);
+	child.once("close", () => {
+		if (processJobs.get(pid) === job) processJobs.delete(pid);
+		job.close();
+	});
+}
+
+/**
+ * End the process tree of `pid` on Windows. A command in a job object (containProcessTree) ends with its job; anything
+ * else goes to `taskkill /F /T`, batched with near-simultaneous requests.
+ */
 export function runWindowsTaskkill(pid: number): Promise<void> {
 	if (process.platform !== "win32") return Promise.resolve();
+	// Nothing in the tree is left for taskkill to find, and by the time it ran the pid could belong to another process.
+	if (processJobs.get(pid)?.terminate()) return Promise.resolve();
 	return new Promise((resolve, reject) => {
 		pendingWindowsTaskkills.push({ pid, resolve, reject });
 		if (windowsTaskkillBatchTimer !== undefined) return;
@@ -158,8 +185,9 @@ export function spawnProcess(command: string, args: string[], options: SpawnOpti
 
 /**
  * Terminate a child and descendants that belong to the child process group.
- * POSIX callers must spawn with detached=true; Windows uses taskkill's tree
- * switch because ChildProcess.kill() only targets the immediate process.
+ * POSIX callers must spawn with detached=true; Windows ends the child's job
+ * object (containProcessTree) or uses taskkill's tree switch, because
+ * ChildProcess.kill() only targets the immediate process.
  */
 export function terminateProcessTree(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): Promise<void> {
 	const pid = child.pid;
