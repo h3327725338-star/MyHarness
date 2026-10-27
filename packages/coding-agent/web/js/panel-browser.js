@@ -40,7 +40,7 @@ function navIcon(Icon, name, label, disabled, onClick) {
 	return html`<button class="icon-btn sm" title=${label} aria-label=${label} disabled=${disabled} onClick=${onClick}><${Icon} name=${name} size=${15} /></button>`;
 }
 
-export function BrowserPanel({ tabId, url }) {
+export function BrowserPanel({ tabId, url, muted = false }) {
 	const host = window.myHarnessDesktop;
 	const activeId = useStore((s) => s.view.wsActive);
 	const open = useStore((s) => s.view.panelOpen);
@@ -505,7 +505,8 @@ export function BrowserPanel({ tabId, url }) {
 			element: () => target.current,
 			onError: (error) => setStatus((current) => ({ ...current, error })),
 		});
-		host.browser({ action: "ensure", tabId, url: mountedUrl.current })
+		// `muted`: a tab the Agent opened gets its page muted when the panel is the first to create it.
+		host.browser({ action: "ensure", tabId, url: mountedUrl.current, ...(muted ? { muted: true } : {}) })
 			.then(() => host.browser({ action: "activate", tabId }))
 			.then(() => send({ action: "state" }))
 			.then((state) => {

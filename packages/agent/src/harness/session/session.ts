@@ -152,7 +152,7 @@ export function sessionEntryToContextMessages(
  *
  * Boundary: runtime state (thinking level, model, active tools) is reduced from
  * the full branch, while messages come from the compaction-aware entry sequence;
- * `custom` entries are omitted unless an `entryProjector` handles their type,
+ * `custom` entries are omitted unless `entryProjectors` has a projector for their type,
  * and `entryTransforms` run stacked after the default compaction transform.
  */
 export function buildSessionContext(

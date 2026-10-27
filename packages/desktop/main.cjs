@@ -10,6 +10,7 @@ const { pointShortcutIcons, removeForeignShortcuts } = require('./notification-r
 const { attachPreviewLinks } = require('./preview-links.cjs');
 const { createAppPrefs, loginItem } = require('./app-prefs.cjs');
 const { attachZoom, cleanZoom, stepZoom } = require('./zoom.cjs');
+const { applyEngineLanguage } = require('./browser-language.cjs');
 const root = resolve(__dirname, '../..');
 // Windows finds the app behind a toast click through this id and starts the executable that the matching Start Menu
 // shortcut names. A development run of electron.exe gets an id of its own: Electron writes that shortcut without the app
@@ -57,6 +58,8 @@ const workspaceRequest = (command, timeoutMs = 15000) => new Promise((resolve, r
 // Host browser storage only; Agent configuration and persisted data are not redirected.
 app.setPath('userData', join(process.env.MYHARNESS_CODING_AGENT_DIR || join(homedir(), '.myharness', 'agent'), 'desktop-profile'));
 app.setName('MyHarness');
+// The website language of the built-in browser is the engine's own language from the start (browser-language.cjs).
+applyEngineLanguage(app, join(app.getPath('userData'), 'browser-language.json'));
 const prefs = createAppPrefs(app.getPath('userData'));
 // The app's icon for the window, the tray and notifications. The packaged app carries a multi-size icon.ico (build.mjs):
 // with only the 256 px PNG, Windows scaled it down itself for the taskbar, the tray and toasts, and those small icons
@@ -96,7 +99,7 @@ function hideToTray() {
   window.hide();
 }
 const quitApp = () => { window?.hide(); void stop(); };
-// The close button (the page's own or Alt+F4/taskbar) follows Settings → Interface → "Close button". Until the user
+// The close button (the page's own or Alt+F4/taskbar) follows Settings → Appearance → Desktop app → "Close button". Until the user
 // chose, it asks once; "remember" saves the answer there. While the host's own start/error page is shown there is no
 // service to keep, and a Windows sign-out always quits.
 async function onCloseRequest() {
@@ -292,7 +295,7 @@ else {
     };
     browser = createBrowser(window, log, { workspaceRoot: cwd, profileDir: app.getPath('userData'), translate, translationLanguage, translationVoice });
     // Zoom of the app's own window: Ctrl + "+" / "-" / 0 and Ctrl + wheel while the keyboard is in the app (a website tab
-    // zooms itself, see browser-view.cjs), or Settings → Interface. It is kept across restarts and every page load.
+    // zooms itself, see browser-view.cjs), or Settings → Appearance → Desktop app. It is kept across restarts and every page load.
     const setAppZoom = (factor) => {
       const value = cleanZoom(factor);
       if (window.isDestroyed()) return value;
@@ -315,7 +318,7 @@ else {
       if (!windowCaller(event)) throw new Error('拒绝非应用页面调用');
       if (action === 'minimize') window.minimize();
       else if (action === 'toggleMaximize') { if (window.isMaximized()) window.unmaximize(); else window.maximize(); }
-      // Same path as the system close: the 'close' handler asks, hides to the tray or quits (Settings → Interface).
+      // Same path as the system close: the 'close' handler asks, hides to the tray or quits (Settings → Appearance → Desktop app).
       else if (action === 'close') window.close();
       else if (action !== 'state') throw new Error('未知的窗口操作');
       return windowState();
@@ -364,7 +367,7 @@ else {
       }
       return prefs.get().appZoom;
     });
-    // Settings → Interface → Desktop app: the close button's action and start at sign-in.
+    // Settings → Appearance → Desktop app: the close button's action and start at sign-in.
     ipcMain.handle('desktop:app-prefs', (event, patch) => {
       if (!trusted(event)) throw new Error('拒绝非应用页面调用');
       if (patch && typeof patch === 'object') {
@@ -391,7 +394,7 @@ else {
     });
     ipcMain.on('desktop:bounds', (event, rect) => { if (trusted(event)) browser.bounds(rect); });
     ipcMain.on('desktop:destroy', (event) => { if (trusted(event)) browser.destroy(); });
-    // A new-window link (`target="_blank"`, in an HTML preview or a chat) opens where Settings → Interface says; the page
+    // A new-window link (`target="_blank"`, in an HTML preview or a chat) opens where Settings → Appearance → Interface says; the page
     // opens sign-in links in the system browser itself. Without an answer from the page it still reaches the system browser.
     window.webContents.setWindowOpenHandler(({ url }) => {
       let target;
@@ -401,7 +404,7 @@ else {
     });
     window.webContents.on('will-navigate', (event, url) => { if (serviceUrl && new URL(url).origin !== new URL(serviceUrl).origin) event.preventDefault(); });
     // A link in an HTML file shown in a file tab never blanks the preview frame: the page opens it as a website tab, or in
-    // the system browser when Settings → Interface says so (`link: true` lets the page apply that choice).
+    // the system browser when Settings → Appearance → Interface says so (`link: true` lets the page apply that choice).
     attachPreviewLinks(window.webContents, { serviceUrl: () => serviceUrl, open: (url) => workspaceRequest({ action: 'open', tab: { type: 'browser', url }, link: true }), log });
     window.webContents.on('did-start-navigation', (_event, _url, _inPlace, mainFrame) => { if (mainFrame) { failPendingUi('页面已重新加载，工作区请求已取消'); browser.destroy(); } });
     // Moving, resizing or maximizing the window changes the content area that the page measured. Re-clamp the last

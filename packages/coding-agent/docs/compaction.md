@@ -187,7 +187,7 @@ interface CompactionDetails {
 
 Extensions can store any JSON-serializable data in `details`. The default compaction tracks file operations, but custom extension implementations can use their own structure. Generated and extension-provided summaries store their LLM `usage` when available so session totals include summarization work.
 
-See [`prepareCompaction()`](https://github.com/h3327725338-star/MyHarness/blob/main/packages/coding-agent/src/context/compact/compaction.ts) and [`compact()`](https://github.com/h3327725338-star/MyHarness/blob/main/packages/coding-agent/src/context/compact/compaction.ts) for the implementation. For direct programmatic summarization, `generateSummary()` returns the summary text and `generateSummaryWithUsage()` returns `{ text, usage }`.
+See [`prepareCompaction()`](https://github.com/h3327725338-star/MyHarness/blob/main/packages/coding-agent/src/context/compact/compaction.ts) and [`compact()`](https://github.com/h3327725338-star/MyHarness/blob/main/packages/coding-agent/src/context/compact/compaction.ts) for the implementation. For direct programmatic summarization, call `prepareCompaction()` and then `compact()`: the returned `CompactionResult` carries the `summary` text and the LLM `usage` when available.
 
 ## Branch Summarization
 

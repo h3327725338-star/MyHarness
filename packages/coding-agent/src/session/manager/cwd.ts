@@ -38,7 +38,7 @@ export function getMissingSessionCwdIssue(
 	};
 }
 
-/** One-line user-facing message for a missing session cwd. Pure string formatting, no side effects. */
+/** User-facing message (up to three lines) for a missing session cwd. Pure string formatting, no side effects. */
 export function formatMissingSessionCwdError(issue: SessionCwdIssue): string {
 	const sessionFile = issue.sessionFile ? `\nSession file: ${issue.sessionFile}` : "";
 	return `Stored session working directory does not exist: ${issue.sessionCwd}${sessionFile}\nCurrent working directory: ${issue.fallbackCwd}`;

@@ -10,7 +10,7 @@ Repo 负责 create/list/open/delete/fork；storage 负责 session tree entry、a
 
 - 新 schema 不要直接覆盖已发布 SQL；新增 migration 并在 migration loader 中按顺序加载。
 - 每个 migration 必须在 transaction 中执行并写入 migrations 表；失败时不留下半个 schema。
-- session entry payload 仍需通过类型校验；message、thinking/model/tool、compaction、branch summary、custom、label、session info 和 leaf 类型不能任意扩张。
+- session entry payload 仍需通过类型校验；message、thinking/model/tool、compaction、branch summary、custom、custom message、label、session info 和 leaf 类型不能任意扩张。
 - 修改 materialized state 时同时检查 branch、leaf、sequence、reopen、pagination 和 fork。
 
 ## 验证

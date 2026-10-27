@@ -8,7 +8,7 @@ import { REVEAL_ENTRY_EVENT } from "./message-nav.js";
 import { serverText, t } from "./i18n.js";
 import { getFetch } from "./export-mode.js";
 import { COMPOSER_QUEUE_DEBOUNCE_MS } from "./run-modes.js";
-import { browserTabId, normalizeWorkspaceTab, PANEL_TAB_TYPES } from "./workspace-model.js";
+import { browserTabId, normalizeWorkspaceTab, PANEL_TAB_TYPES, workspaceTabSection } from "./workspace-model.js";
 import { morphLayout } from "./layout-morph.js";
 
 let dialogResolver = null;
@@ -256,7 +256,13 @@ export const actions = {
 			if (desktop?.browser) desktop.browser({ action: "close", tabId: closed.id }).catch(() => undefined);
 		}
 		if (state.view.wsActive === id) {
-			const next = rest[Math.min(index, rest.length - 1)];
+			// The next tab comes from the same section of the panel (the one that took the closed tab's place, else the one
+			// before it); only when that section is empty does the section shown before it come back.
+			const section = workspaceTabSection(closed);
+			const sameSection = rest.filter((tab) => workspaceTabSection(tab) === section);
+			const before = tabs.slice(0, index).filter((tab) => workspaceTabSection(tab) === section).length;
+			const previous = (state.view.wsRecent ?? []).map((recent) => rest.find((tab) => tab.id === recent)).find(Boolean);
+			const next = sameSection[Math.min(before, sameSection.length - 1)] ?? previous ?? rest[Math.min(index, rest.length - 1)];
 			patch.wsActive = next ? next.id : null;
 			if (next && PANEL_TAB_TYPES.includes(next.type)) patch.panelTab = next.type;
 		}
@@ -268,15 +274,21 @@ export const actions = {
 		setView(patch);
 	},
 
-	closeOtherWorkspaceTabs(id) {
+	/**
+	 * Close every tab but `id`. With `{ sameSection: true }` (the tab strip's menu) only the tabs of its own section go:
+	 * closing the other website tabs leaves the files and panels open, and the other way round.
+	 */
+	closeOtherWorkspaceTabs(id, options) {
 		const keep = state.view.wsTabs.find((item) => item.id === id);
 		if (!keep) return;
-		const closed = state.view.wsTabs.filter((item) => item.id !== id);
+		const section = workspaceTabSection(keep);
+		const closes = (item) => item.id !== id && (options?.sameSection !== true || workspaceTabSection(item) === section);
+		const closed = state.view.wsTabs.filter(closes);
 		if (state.view.wsActive !== keep.id) hideBrowserViews();
 		const desktop = window.myHarnessDesktop;
 		for (const item of closed) if (item.type === "browser" && item.url && desktop?.browser) desktop.browser({ action: "close", tabId: item.id }).catch(() => undefined);
 		setView({
-			wsTabs: [keep],
+			wsTabs: state.view.wsTabs.filter((item) => !closes(item)),
 			wsActive: keep.id,
 			wsClosed: [...state.view.wsClosed, ...closed].slice(-20),
 			...(PANEL_TAB_TYPES.includes(keep.type) ? { panelTab: keep.type } : {}),
@@ -339,6 +351,40 @@ export const actions = {
 		setView({ browserIcons: { ...state.view.browserIcons, [origin]: icon } });
 	},
 
+	/**
+	 * Sound of a website tab as the desktop host reports it: playing and/or muted. A change of `muted` is also kept in the
+	 * tab itself, so a muted tab comes back muted after a reload.
+	 */
+	setBrowserAudio(id, audio) {
+		const audible = audio?.audible === true;
+		const muted = audio?.muted === true;
+		const known = state.view.browserAudio[id];
+		const patch = {};
+		if (!known || known.audible !== audible || known.muted !== muted) patch.browserAudio = { ...state.view.browserAudio, [id]: { audible, muted } };
+		const tabs = state.view.wsTabs;
+		const index = tabs.findIndex((item) => item.id === id && item.type === "browser");
+		if (index >= 0 && (tabs[index].muted === true) !== muted)
+			patch.wsTabs = tabs.map((tab, position) => {
+				if (position !== index) return tab;
+				const { muted: _old, ...rest } = tab;
+				return muted ? { ...rest, muted: true } : rest;
+			});
+		if (Object.keys(patch).length) setView(patch);
+	},
+
+	/** The speaker on a website tab: sound on or off for that tab. The host's answer is the state shown. */
+	async toggleBrowserMute(id) {
+		const desktop = window.myHarnessDesktop;
+		if (!desktop?.browser) return;
+		const muted = !(state.view.browserAudio[id]?.muted ?? state.view.wsTabs.find((item) => item.id === id)?.muted === true);
+		try {
+			const reached = await desktop.browser({ action: "mute", tabId: id, muted });
+			actions.setBrowserAudio(id, reached);
+		} catch {
+			// The tab's page is gone (closed meanwhile); nothing to switch.
+		}
+	},
+
 	/** Website tabs with or without their names. */
 	toggleTabIconsOnly(force) {
 		setView({ wsTabIconsOnly: typeof force === "boolean" ? force : !state.view.wsTabIconsOnly });
@@ -357,8 +403,26 @@ export const actions = {
 	openBrowser() {
 		const tabs = state.view.wsTabs;
 		const current = tabs.find((tab) => tab.id === state.view.wsActive);
-		const recent = current?.type === "browser" ? current : [...tabs].reverse().find((tab) => tab.type === "browser");
+		const recent =
+			current?.type === "browser"
+				? current
+				: (tabs.find((tab) => tab.type === "browser" && (state.view.wsRecent ?? []).includes(tab.id)) ??
+					[...tabs].reverse().find((tab) => tab.type === "browser"));
 		return recent ? actions.openWorkspace(recent) : actions.openBrowserTab();
+	},
+
+	/**
+	 * The panel's navigation row: Changes, Files, Terminal, Session and the browser. Files and the browser come back on
+	 * the tab they showed last (a file or the file list; a website tab); the other sections are one panel each.
+	 */
+	showWorkspaceSection(section) {
+		if (section === "browser") return actions.openBrowser();
+		if (section === "files") {
+			const tabs = state.view.wsTabs;
+			const recent = tabs.find((tab) => workspaceTabSection(tab) === "files" && (state.view.wsRecent ?? []).includes(tab.id));
+			return actions.openWorkspace(recent ?? { type: "files" });
+		}
+		return PANEL_TAB_TYPES.includes(section) ? actions.openWorkspace({ type: section }) : null;
 	},
 
 	insertIntoComposer(text, { replace = false } = {}) {

@@ -135,7 +135,7 @@ globalThis.__myharnessDarkFetch = (url) => ipcRenderer.invoke('mh-browser:dark-f
 
 // ---- Selection translation ---------------------------------------------------------------------------------------
 // Select text on a page and a small "译" button appears beside it (or right-click → 翻译所选文字); the translation comes
-// from the app's own service (Settings → Agents → Translation), asked for through the host. The button and the card live
+// from the app's own service (Settings → Agent → Assistants → Translation), asked for through the host. The button and the card live
 // in a closed shadow root: the site's scripts and styles (Dark Reader's too) cannot read or restyle them, and the
 // answer is only ever written as text.
 const MAX_TRANSLATION_CHARS = 6000;
@@ -149,7 +149,7 @@ const translator = (() => {
   let state = null;
   // The language translations go into ({ preference, target }), kept between cards and read again when one opens.
   let language = null;
-  // The languages of Settings → Agents → Translation; "auto" is the interface language.
+  // The languages of Settings → Agent → Assistants → Translation; "auto" is the interface language.
   const TARGETS = [['auto', '跟随界面语言'], ['zh-CN', '简体中文'], ['zh-TW', '繁体中文'], ['en', '英语'], ['ja', '日语'], ['ko', '韩语'], ['fr', '法语'], ['de', '德语'], ['es', '西班牙语'], ['ru', '俄语']];
   const SOURCES = { zh: '中文', en: '英语', ja: '日语', ko: '韩语', fr: '法语', de: '德语', es: '西班牙语', ru: '俄语' };
   const languageName = (tag) => {

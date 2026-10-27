@@ -124,7 +124,7 @@
 .sidebar .resizer { right: -4px; }
 
 /* Main panel: lifted surface */
-.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-lg); margin: 6px 6px 6px 0; overflow: hidden; position: relative; transition: margin var(--t-slow) var(--ease), border-radius var(--t-slow) var(--ease); }
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-lg); margin: 6px 6px 6px 0; overflow: hidden; position: relative; transition: margin var(--t-slow) var(--ease), border-radius var(--t-slow) var(--ease), border-color var(--t-fast); }
 .sidebar.is-collapsed + .main { margin-left: 6px; }
 .app.panel-open .main { margin-right: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 
@@ -179,7 +179,7 @@
    the slot because the slot's clip would cut a shadow drawn by the panel, and the slot's own shadow is not clipped by it. */
 .panel-slot { display: flex; justify-content: flex-end; min-width: 0; min-height: 0; overflow: hidden; box-shadow: var(--shadow-panel); opacity: 0; transition: opacity var(--t-slow) var(--ease); }
 .app.panel-open .panel-slot { opacity: 1; }
-.panel { display: flex; flex: none; flex-direction: column; min-width: 0; width: var(--panel-width); background: var(--bg-panel); border: 1px solid var(--border); border-left: 0; border-radius: 0 var(--r-lg) var(--r-lg) 0; margin: 6px 6px 6px 0; overflow: hidden; position: relative; }
+.panel { display: flex; flex: none; flex-direction: column; min-width: 0; width: var(--panel-width); background: var(--bg-panel); border: 1px solid var(--border); border-left: 0; border-radius: 0 var(--r-lg) var(--r-lg) 0; margin: 6px 6px 6px 0; overflow: hidden; position: relative; transition: border-color var(--t-fast); }
 /* While the sidebar is collapsed the panel takes the room it leaves: the width override lives on the panel itself,
    so opening or closing the sidebar never touches a custom property on .app (that would restyle the whole tree). */
 .sidebar.is-collapsed ~ .panel-slot .panel { --panel-width: min(var(--panel-w), max(340px, calc(100vw - 520px))); }
@@ -268,7 +268,11 @@
 /* Workspace tabs: the right panel keeps several things open (panels, files, website tabs). The strip scrolls when it
    does not fit, a tab can be dragged to reorder, and middle-click or its × closes it without touching the others. */
 .panel-head { display: flex; align-items: center; gap: 4px; min-width: 0; height: 44px; padding: 0 calc(var(--pad-panel) + 26px) 0 6px; border-bottom: 1px solid var(--border); flex: none; }
-.ws-tabs { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 2px 0; mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent); }
+.ws-tabs { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 2px 0; }
+/* An edge fades only while tabs are hidden past it (workspace-tabs.js sets data-more-left / data-more-right). */
+.ws-tabs[data-more-right] { mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent); }
+.ws-tabs[data-more-left] { mask-image: linear-gradient(90deg, transparent, #000 18px); }
+.ws-tabs[data-more-left][data-more-right] { mask-image: linear-gradient(90deg, transparent, #000 18px, #000 calc(100% - 18px), transparent); }
 .ws-tab { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; max-width: 200px; height: 28px; padding: 0 4px 0 9px; border-radius: var(--r-md); color: var(--text-2); }
 .ws-tab:hover { background: var(--surface-hover); color: var(--text); }
 .ws-tab.active { background: var(--surface-active); color: var(--text); }
@@ -285,12 +289,51 @@
 .ws-tab.icon-only:is(:hover, .active, :focus-within) .ws-tab-close { width: 18px; margin-left: 3px; }
 .ws-tab-close { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: var(--r-sm); opacity: 0.55; }
 .ws-tab-close:hover { background: var(--surface-hover); opacity: 1; }
+/* The speaker of a website tab: shown while the page plays sound or the tab is muted (an Agent's tab starts muted); a
+   click switches the sound of that tab. A playing tab's speaker is in the text colour, a muted one dimmed. */
+.ws-tab-audio { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: var(--r-sm); color: var(--text); animation: fade-in var(--t-fast) var(--ease); }
+.ws-tab-audio.muted { color: var(--text-3); }
+.ws-tab-audio:hover { background: var(--surface-hover); color: var(--text); }
+.ws-tab.icon-only .ws-tab-audio { margin-left: 3px; }
 /* A tab unfolds from its left edge when it is opened and folds back into it when it is closed: the shared collapse run
    (COLLAPSE_MS) on the slot's width, driven from the tab's measured width (workspace-tabs.js `growIn` / `foldAway`); a
    max-width transition alone would sit still until the cap fell below the content. The slot clips its tab, so the tab is
    revealed left to right, and the tab keeps its place in the strip for the whole fold. */
 .ws-tab-slot { display: flex; flex: 0 0 auto; max-width: 208px; overflow: hidden; }
 .ws-tab-slot.leaving { max-width: 0; opacity: 0; pointer-events: none; }
+/* The panel's navigation row (Changes, Files, Terminal, Session | browser). The tabs of the section on screen sit in
+   the same row after the divider; the section names then fold to icons (and do in a narrow panel). */
+.ws-nav { display: flex; flex: 0 1 auto; align-items: center; min-width: 0; }
+.ws-nav.compact { flex: 1 1 auto; }
+.ws-nav-btn { display: inline-flex; flex: none; align-items: center; height: 30px; padding: 0 9px; border-radius: var(--r-md); color: var(--text-2); white-space: nowrap; transition: background-color 0.12s ease, color 0.12s ease, padding var(--t-base) var(--ease); }
+.ws-nav-btn + .ws-nav-btn { margin-left: 2px; }
+.ws-nav-btn:hover { background: var(--surface-hover); color: var(--text); }
+.ws-nav-btn.active { background: var(--surface-active); color: var(--text); }
+.ws-nav-label { display: inline-block; max-width: 7em; margin-left: 6px; overflow: hidden; opacity: 1; transition: max-width var(--t-base) var(--ease), margin-left var(--t-base) var(--ease), opacity var(--t-fast) var(--ease); }
+.ws-nav:is(.compact, .icons) .ws-nav-btn, .panel[data-w="xs"] .ws-nav-btn { padding: 0 8px; }
+.ws-nav:is(.compact, .icons) .ws-nav-label, .panel[data-w="xs"] .ws-nav-label { max-width: 0; margin-left: 0; opacity: 0; }
+.ws-nav-sep { width: 1px; height: 18px; margin: 0 6px; background: var(--border-strong); flex: none; }
+/* A tight row (useRowFold): the section on screen is one button that lists every section, its caret says so. */
+.ws-nav-menu, .ws-nav-menu:hover { padding: 0 5px 0 8px; gap: 3px; background: var(--surface-active); color: var(--text); }
+.ws-nav-menu .ws-nav-caret { color: var(--text-3); transition: transform var(--t-fast) var(--ease); }
+.ws-nav-menu.open .ws-nav-caret { transform: rotate(180deg); }
+.ws-nav.tight .ws-nav-sep { margin: 0 4px; }
+.ws-nav-strip { display: flex; flex: 1 1 auto; align-items: center; gap: 2px; min-width: 0; animation: ws-strip-in var(--t-base) var(--ease) both; }
+.ws-nav-strip .ws-tabs { flex: 0 1 auto; }
+.ws-nav-strip .ws-new-tab { flex: none; }
+@keyframes ws-strip-in { from { opacity: 0; } }
+:root[data-motion="off"] :is(.ws-nav-btn, .ws-nav-label) { transition: none; }
+:root[data-motion="off"] .ws-nav-strip { animation: none; }
+@media (prefers-reduced-motion: reduce) { :is(.ws-nav-btn, .ws-nav-label) { transition: none; } .ws-nav-strip { animation: none; } }
+/* Tabs share the row the way browser tabs do: they get narrower together as more are opened (website tabs all the same
+   width, 180px at most; file tabs as wide as their name), and the strip scrolls only once they reach their smallest
+   width. The smallest width holds for tabs at rest only: a tab that opens grows from nothing and one that closes folds
+   away. */
+.ws-nav-strip .ws-tab-slot { flex: 0 1 auto; }
+.ws-nav-strip .ws-tab-slot:has(> .ws-tab.site) { width: 180px; }
+.ws-nav-strip .ws-tab-slot:not(.entering, .leaving) { min-width: 72px; }
+.ws-nav-strip .ws-tab { flex: 1 1 auto; min-width: 0; }
+.ws-nav-strip .ws-tab.site { width: 100%; }
 .ws-menu { z-index: 80; display: flex; flex-direction: column; min-width: 140px; padding: 4px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); }
 .ws-menu button { padding: 6px 10px; border-radius: var(--r-sm); text-align: left; }
 .ws-menu button:hover { background: var(--surface-hover); }
@@ -377,7 +420,10 @@
 .app.ws-max .main { order: 2; margin: 6px 6px 6px 6px; border-radius: var(--r-lg); }
 .app.ws-max .panel { --panel-width: 100%; width: 100%; margin: 6px 0 6px 0; border-left: 1px solid var(--border); border-radius: var(--r-lg); }
 .app.ws-max:has(> .sidebar.is-collapsed) .panel { margin-left: 6px; }
-.app.ws-max .main > .resizer { left: 0; }
+/* The conversation's left edge is its border line: the handle straddles it like the panel's does, and the line it lights
+   up is that border (plus the column's first pixel), not a second line beside it. */
+.app.ws-max .main > .resizer { left: -4px; }
+.app.ws-max .main:has(> .resizer:is(:hover, .dragging)), .panel:has(> .resizer:is(:hover, .dragging)) { border-left-color: var(--accent-line); }
 /* The close-panel button sits at the end of the conversation header here, and the sidebar button opens the tab row. */
 .app.ws-max .panel-head { padding-right: var(--pad-panel); }
 .panel-head .panel-sidebar { flex: none; margin-right: 2px; }
@@ -465,7 +511,7 @@ html.ws-morph::view-transition-new(ws-sidebar) { animation: ws-morph-in var(--t-
 .desktop-frameless .app.panel-open:not(.ws-max) .panel-head { padding-right: calc(var(--wc-room) + 28px); }
 .desktop-frameless .app.panel-open:not(.ws-max) .panel-close { right: var(--wc-room); }
 .desktop-frameless :is(.main-header, .panel-head, .ws-tabs, .sidebar-top .brand) { -webkit-app-region: drag; }
-.desktop-frameless :is(.main-header, .panel-head, .sidebar-top .brand) > :not(.grow, .ws-tabs),
+.desktop-frameless :is(.main-header, .panel-head, .sidebar-top .brand) > :not(.grow, .ws-tabs, .ws-nav),
 .desktop-frameless :is(.main-header, .panel-head, .ws-tabs, .sidebar-top .brand) :is(button, input, textarea, select, a, [role="button"], [role="tab"], [contenteditable]),
 .desktop-frameless :is(.resizer, .desktop-browser-target, .ws-menu, .scrim, .composer-scrim, .composer.expanded, .quote-edit-scrim, .quote-edit-pop, .lightbox-scrim, .personal-fullscreen-scrim, .popover, .local-file-menu, .floating-quote-bar, .quote-note-card, .tooltip) { -webkit-app-region: no-drag; }
 /* A column resizer comes before the top bar it overlaps, and a later drag area wins over an earlier no-drag one; these

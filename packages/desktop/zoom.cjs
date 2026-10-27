@@ -54,17 +54,24 @@ function attachZoom(contents, { current, apply }) {
 
 /** Zoom factors of websites by host name, kept in `file`; 100 % is the absence of an entry. */
 function createSiteZoomStore(file, log) {
-  let sites = {};
-  try {
-    const saved = JSON.parse(readFileSync(file, 'utf8'));
-    if (saved && typeof saved.sites === 'object') {
-      for (const [host, factor] of Object.entries(saved.sites)) if (typeof host === 'string' && host) sites[host] = cleanZoom(factor);
-    }
-  } catch { /* missing or unreadable: every site at 100 % */ }
+  const read = () => {
+    const next = {};
+    try {
+      const saved = JSON.parse(readFileSync(file, 'utf8'));
+      if (saved && typeof saved.sites === 'object') {
+        for (const [host, factor] of Object.entries(saved.sites)) if (typeof host === 'string' && host) next[host] = cleanZoom(factor);
+      }
+    } catch { /* missing or unreadable: every site at 100 % */ }
+    return next;
+  };
+  let sites = read();
   let timer;
+  let pending = false;
   const save = () => {
     clearTimeout(timer);
+    pending = true;
     timer = setTimeout(() => {
+      pending = false;
       try {
         const temp = `${file}.tmp`;
         writeFileSync(temp, JSON.stringify({ version: 1, sites }, null, 2));
@@ -76,6 +83,8 @@ function createSiteZoomStore(file, log) {
   const hostOf = (url) => { try { return new URL(url).host; } catch { return ''; } };
   return {
     get: (url) => sites[hostOf(url)] ?? 1,
+    /** Read the file again (browser sync wrote it); a change of this computer still waiting to be saved wins. */
+    reload() { if (!pending) sites = read(); },
     set(url, factor) {
       const host = hostOf(url);
       if (!host) return;

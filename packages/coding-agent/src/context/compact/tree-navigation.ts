@@ -78,8 +78,8 @@ export interface TreeNavigationHost {
 
 /**
  * Resolve the branch-summary helper model. Empty provider/model (or half-filled)
- * follows the main chat model and effort, exactly like before; an explicit
- * provider+model runs on its own thinking level.
+ * uses the main chat model, with the main effort unless a thinking level is set;
+ * an explicit provider+model runs on its own thinking level ("off" when unset).
  */
 export function resolveBranchSummaryModel(host: TreeNavigationHost): {
 	model: Model<any>;

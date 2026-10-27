@@ -13,13 +13,15 @@ const writeAtomic = (file, text) => {
 
 /**
  * Site permission decisions of the built-in browser, keyed `origin\0permission` (see browser-view.cjs). A site is asked
- * once per permission: the answer is kept in one JSON file of the desktop host's user-data folder (never the Data root,
- * so it is not synced) and lasts until the user revokes it in the site-permission bubble. Without a file the decisions
+ * once per permission: the answer is kept in one JSON file of the desktop host's user-data folder (outside the Data root;
+ * browser sync carries it, browser-sync.cjs) and lasts until the user revokes it in the site-permission bubble. Without a file the decisions
  * last for this app run only. It has the read/write surface of a Map, and every change is written at once.
  */
 exports.createPermissionStore = (file, log = () => {}) => {
   const decisions = new Map();
-  if (file) {
+  const read = () => {
+    decisions.clear();
+    if (!file) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
       for (const entry of Array.isArray(parsed?.permissions) ? parsed.permissions.slice(0, MAX_DECISIONS) : []) {
@@ -29,7 +31,8 @@ exports.createPermissionStore = (file, log = () => {}) => {
     } catch (error) {
       if (error?.code !== 'ENOENT') log(`网站权限记录无法读取，本次从空记录开始：${error.message}`);
     }
-  }
+  };
+  read();
   const save = () => {
     if (!file) return;
     const permissions = [...decisions].slice(-MAX_DECISIONS).map(([key, allowed]) => {
@@ -40,6 +43,8 @@ exports.createPermissionStore = (file, log = () => {}) => {
   };
   return {
     get: (key) => decisions.get(key),
+    /** Read the file again (browser sync wrote it, browser-sync.cjs). */
+    reload: read,
     set(key, allowed) {
       if (decisions.get(key) === allowed) return this;
       decisions.delete(key);

@@ -8,6 +8,33 @@ function panelTitle(type) {
 	return { changes: t("Changes"), files: t("Files"), terminal: t("Terminal"), context: t("Session") }[type] || type;
 }
 
+/**
+ * The section of the panel a tab belongs to, as named by the panel's own navigation row: the four panels are their own
+ * sections, a file tab belongs to Files (next to the file list) and a website tab to the browser.
+ */
+export function workspaceTabSection(tab) {
+	if (tab?.type === "browser") return "browser";
+	if (tab?.type === "file") return "files";
+	return PANEL_TAB_TYPES.includes(tab?.type) ? tab.type : "files";
+}
+
+/**
+ * The last active tab of each section, newest first: `activeId` leads and ids that are no longer open are dropped.
+ * Going back to a section shows its entry here, and closing the last tab of a section returns to the next entry.
+ */
+export function recentSectionTabs(list, tabs, activeId) {
+	const byId = new Map((Array.isArray(tabs) ? tabs : []).map((tab) => [tab.id, tab]));
+	const seen = new Set();
+	const out = [];
+	for (const id of [activeId, ...(Array.isArray(list) ? list : [])]) {
+		const tab = byId.get(id);
+		if (!tab || seen.has(workspaceTabSection(tab))) continue;
+		seen.add(workspaceTabSection(tab));
+		out.push(id);
+	}
+	return out;
+}
+
 /** Stable identity of a tab: one file path or one URL keeps one tab. */
 export function workspaceTabId(tab) {
 	if (tab.type === "file") return `file:${String(tab.path || "")}`;
@@ -30,7 +57,9 @@ export function normalizeWorkspaceTab(value) {
 		const id = value.id || (value.url ? `browser:${value.url}` : "");
 		if (!id) return null;
 		const title = typeof value.title === "string" ? value.title.trim() : "";
-		return { id: String(id), type, url: value.url, ...(title ? { title } : {}) };
+		// A tab the Agent opened is its own to drive (`agent`), and starts (and comes back) muted until the user turns its
+		// sound on.
+		return { id: String(id), type, url: value.url, ...(title ? { title } : {}), ...(value.muted === true ? { muted: true } : {}), ...(value.agent === true ? { agent: true } : {}) };
 	}
 	if (!PANEL_TAB_TYPES.includes(type)) return null;
 	return { id: type, type };

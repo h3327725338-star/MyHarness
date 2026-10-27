@@ -53,7 +53,7 @@ export interface SessionBackgroundWorkHost {
 	emitState(state: SubAgentStateSnapshot): void;
 	/** A dispatch left the registry; the session may have become idle. */
 	onBatchSettled(): void;
-	/** The sequence number of the agent run that is active now (0 when none ran yet). */
+	/** The sequence number of the agent run that is active now (-1 when no run is active). */
 	currentRun(): number;
 	/**
 	 * Hand a finished background dispatch back to the model. `sameRun`: the run that started it is still active, so

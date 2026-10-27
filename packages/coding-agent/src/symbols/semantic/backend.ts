@@ -132,7 +132,7 @@ interface ClientSession {
 	readonly diagnostics: Map<string, DiagnosticSnapshot>;
 	readonly diagnosticWarnings: Map<string, readonly string[]>;
 	offDiagnostics: (() => void) | undefined;
-	/** Readiness signals for cross-file queries (see `prepareCrossFileQuery`). */
+	/** Readiness signals for cross-file queries (see `runCrossFile`). */
 	readonly readiness: SessionReadiness;
 }
 

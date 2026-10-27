@@ -33,7 +33,7 @@
 | Release / 隐私 / 公开树审计 | `docs/RELEASE_GATE.md` |
 | System Prompt 资源、加载和维护 | `system-prompts/README.md`、`system-prompts/maintenance.md` |
 | Coding Agent 产品层 | `packages/coding-agent/docs/index.md` 及其 `development.md`、`maintenance.md`、`settings.md` |
-| Web UI（`--web`、`modes/web/`、`packages/coding-agent/web/`） | `packages/coding-agent/docs/web-ui.md` |
+| Web UI（`modes/web/`、`packages/coding-agent/web/`） | `packages/coding-agent/docs/web-ui.md` |
 | Agent Core | `packages/agent/docs/index.md`、`packages/agent/docs/maintenance.md` |
 | Provider / AI API | `packages/ai/docs/index.md`、`packages/ai/docs/maintenance.md` |
 | 项目配置和 Project Trust | `.myharness/README.md`、`.myharness/maintenance.md`、Coding Agent `settings.md` |

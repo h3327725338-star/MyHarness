@@ -748,3 +748,208 @@ describe("workspace tool: the Agent's own mouse, keyboard and trusted sites", ()
 		}
 	});
 });
+
+describe("workspace tool: working beside the user", () => {
+	it("opens a website tab in the background, muted and marked as the Agent's, unless the user asked to see it", async () => {
+		const pageCommands: Array<Record<string, unknown>> = [];
+		const browserCommands: Array<Record<string, unknown>> = [];
+		const { tool } = fakeHost((channel, command) => {
+			if (channel === "workspace") {
+				pageCommands.push(command);
+				const tab = command.tab as { url: string; muted?: boolean; agent?: boolean };
+				return pageState(
+					[{ id: "browser:new", type: "browser", url: tab.url, muted: tab.muted, agent: tab.agent } as never],
+					"changes",
+				);
+			}
+			browserCommands.push(command);
+			return { tabId: "browser:new", loading: false, url: "https://example.com/" };
+		});
+		const quiet = await call(tool, { operation: "open", type: "browser", url: "https://example.com/" });
+		expect(pageCommands.at(-1)).toMatchObject({
+			action: "open",
+			background: true,
+			tab: { muted: true, agent: true },
+		});
+		expect(browserCommands.find((command) => command.action === "ensure")).toMatchObject({ muted: true });
+		expect(quiet.content[0]!.text).toContain("(background)");
+		await call(tool, { operation: "open", type: "browser", url: "https://example.com/", background: false });
+		expect(pageCommands.at(-1)?.background).toBeUndefined();
+	});
+
+	it("runs an action meant for the tab the user is looking at in a background copy, and reuses that copy", async () => {
+		const userTab = "browser:user";
+		const tabs: Array<{ id: string; type: string; url: string; agent?: boolean }> = [
+			{ id: userTab, type: "browser", url: "https://news.example/" },
+		];
+		const clicks: string[] = [];
+		const { tool, sent } = fakeHost((channel, command) => {
+			if (channel === "workspace") {
+				if (command.action === "open") {
+					const tab = command.tab as { id: string; url: string; agent?: boolean };
+					tabs.push({ id: tab.id, type: "browser", url: tab.url, agent: tab.agent });
+				}
+				return pageState(tabs, userTab);
+			}
+			if (command.action === "list") return tabs.map((tab) => ({ tabId: tab.id }));
+			if (command.action === "state")
+				return {
+					tabId: command.tabId,
+					url: "https://news.example/",
+					loading: false,
+					visible: command.tabId === userTab,
+					active: command.tabId === userTab,
+				};
+			if (command.action === "click") {
+				clicks.push(String(command.tabId));
+				return { ok: true, tag: "a", text: "More", x: 1, y: 1, how: "mouse" };
+			}
+			return { ok: true };
+		});
+		const first = await call(tool, { operation: "click", label: "More" });
+		const copy = clicks[0]!;
+		expect(copy).toMatch(/^browser:agent-/);
+		expect(first.content[0]!.text).toContain(`background copy ${copy}`);
+		const opened = sent.find((entry) => entry.action === "workspace" && entry.command.action === "open")!.command;
+		expect(opened).toMatchObject({
+			background: true,
+			tab: { id: copy, url: "https://news.example/", muted: true, agent: true },
+		});
+		await call(tool, { operation: "click", tabId: userTab, label: "More" });
+		expect(clicks[1]).toBe(copy);
+		await call(tool, { operation: "click", tabId: userTab, label: "More", onUserTab: true });
+		expect(clicks[2]).toBe(userTab);
+		// Reading never needs a copy.
+		await call(tool, { operation: "text", tabId: userTab });
+		expect(sent.filter((entry) => entry.action === "workspace" && entry.command.action === "open")).toHaveLength(1);
+	});
+
+	it("drives its own tab even while the user looks at it", async () => {
+		const clicks: string[] = [];
+		const { tool } = fakeHost((channel, command) => {
+			if (channel === "workspace")
+				return pageState(
+					[{ id: "browser:mine", type: "browser", url: "https://a.example/", agent: true } as never],
+					"browser:mine",
+				);
+			if (command.action === "list") return [{ tabId: "browser:mine" }];
+			if (command.action === "state")
+				return { url: "https://a.example/", loading: false, visible: true, active: true };
+			if (command.action === "click") {
+				clicks.push(String(command.tabId));
+				return { ok: true, tag: "button", text: "Go", x: 1, y: 1, how: "mouse" };
+			}
+			return { ok: true };
+		});
+		await call(tool, { operation: "click", tabId: "browser:mine", label: "Go" });
+		expect(clicks).toEqual(["browser:mine"]);
+	});
+
+	it("reads a whole page with its links in one call", async () => {
+		const { tool, sent } = fakeHost((channel, command) => {
+			if (channel === "workspace")
+				return pageState([{ id: "browser:b", type: "browser", url: "https://b.example/" }], "changes");
+			if (command.action === "list") return [{ tabId: "browser:b" }];
+			if (command.action === "read")
+				return {
+					ok: true,
+					url: "https://b.example/",
+					title: "B",
+					text: "one\ntwo",
+					lines: 2,
+					scrolls: 3,
+					atEnd: true,
+					links: [{ text: "Next", href: "https://b.example/2" }],
+				};
+			return { ok: true };
+		});
+		const result = await call(tool, { operation: "read", tabId: "browser:b", scroll: true, links: true });
+		const text = result.content[0]!.text;
+		expect(text).toContain("scrolls=3 end=yes");
+		expect(text).toContain("one\ntwo");
+		expect(text).toContain("Next → https://b.example/2");
+		expect(sent.find((entry) => entry.command.action === "read")!.command).toMatchObject({
+			scroll: true,
+			links: true,
+		});
+	});
+
+	it("collects a paged list by its next-page control and stops at the last page", async () => {
+		let pageNumber = 1;
+		const { tool } = fakeHost((channel, command) => {
+			if (channel === "workspace")
+				return pageState([{ id: "browser:list", type: "browser", url: "https://list.example/" }], "changes");
+			if (command.action === "list") return [{ tabId: "browser:list" }];
+			if (command.action === "state") return { url: `https://list.example/?p=${pageNumber}`, loading: false };
+			if (command.action === "text") return { result: `items of page ${pageNumber}` };
+			if (command.action === "click") {
+				if (pageNumber === 3) throw new Error('nothing visible on the page reads "Next"');
+				pageNumber++;
+				return { ok: true, tag: "a", text: "Next", x: 1, y: 1, how: "mouse" };
+			}
+			if (command.action === "read")
+				return {
+					ok: true,
+					url: `https://list.example/?p=${pageNumber}`,
+					title: "L",
+					text: `items of page ${pageNumber}`,
+					lines: 1,
+				};
+			if (command.action === "wait") return { ok: true, waitedMs: 1 };
+			return { ok: true };
+		});
+		const result = await call(tool, { operation: "collect", tabId: "browser:list", pages: 5, nextLabel: "Next" });
+		const text = result.content[0]!.text;
+		expect(text).toContain("3 page(s)");
+		expect(text).toContain("--- page 1: https://list.example/?p=1\nitems of page 1");
+		expect(text).toContain("--- page 3: https://list.example/?p=3\nitems of page 3");
+		expect(text).toContain("no next-page control");
+	}, 20_000);
+
+	it("reads several addresses side by side in reader pages, never in the panel", async () => {
+		const asked: string[] = [];
+		let running = 0;
+		let most = 0;
+		const { tool } = fakeHost(async (channel, command) => {
+			if (channel !== "browser" || command.action !== "readUrl")
+				throw new Error(`unexpected ${channel} ${String(command.action)}`);
+			asked.push(String(command.url));
+			running++;
+			most = Math.max(most, running);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			running--;
+			if (String(command.url).includes("broken")) throw new Error("ERR_NAME_NOT_RESOLVED");
+			return { ok: true, url: String(command.url), title: "T", text: "body", lines: 1 };
+		});
+		const urls = [
+			"https://one.example/",
+			"https://broken.example/",
+			...[3, 4, 5, 6].map((n) => `https://p${n}.example/`),
+		];
+		const result = await call(tool, { operation: "read_many", urls, links: true });
+		const text = result.content[0]!.text;
+		expect(text).toContain("read_many 6 page(s), 1 failed");
+		expect(text).toContain("=== 2. https://broken.example/\n  FAILED:");
+		expect(text).toContain("=== 6. https://p6.example/");
+		expect(asked.sort()).toEqual([...urls].sort());
+		expect(most).toBe(4);
+	});
+
+	it("reads a background tab's address again in a reader page when asked for a fresh reading", async () => {
+		const { tool, sent } = fakeHost((channel, command) => {
+			if (channel === "workspace")
+				return pageState([{ id: "browser:b", type: "browser", url: "https://b.example/" }], "changes");
+			if (command.action === "list") return [{ tabId: "browser:b" }];
+			if (command.action === "state") return { url: "https://b.example/feed", loading: false, visible: false };
+			if (command.action === "readUrl")
+				return { ok: true, url: command.url, title: "B", text: "all rows", lines: 1, scrolls: 9, atEnd: true };
+			throw new Error(`unexpected ${channel} ${String(command.action)}`);
+		});
+		const result = await call(tool, { operation: "read", tabId: "browser:b", scroll: true, fresh: true });
+		expect(result.content[0]!.text).toContain("all rows");
+		expect(sent.find((entry) => entry.command.action === "readUrl")!.command).toMatchObject({
+			url: "https://b.example/feed",
+			scroll: true,
+		});
+	});
+});

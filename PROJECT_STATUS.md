@@ -74,7 +74,7 @@ below.
 
 ## Deliberately deferred
 
-- Publishing and signing Code Intelligence release assets.
+- Signing Code Intelligence release assets (the manifest already marks the release as published).
 - Choosing and operating a public npm release process.
 - Rewriting or deleting the existing private Git history.
 - Broad product expansion, automatic Provider catalogs, and a migration of the

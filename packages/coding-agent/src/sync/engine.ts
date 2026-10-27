@@ -13,6 +13,7 @@ import { ModeStateStore } from "../session/mode-state.ts";
 import {
 	type ApplyContext,
 	type ApplyOutcome,
+	applyBrowser,
 	applyDelete,
 	applyDraft,
 	applyFile,
@@ -26,6 +27,7 @@ import {
 	refreshMemoryCatalog,
 	writeMergedMemory,
 } from "./apply.ts";
+import { browserFileOf, browserIdOf, browserProfileDir, mergeBrowserText, readBrowserText } from "./browser-data.ts";
 import { MemoryBaseStore, memoryBaseDir } from "./memory-bases.ts";
 import { mergeMemoryText } from "./memory-merge.ts";
 import { type HeaderCacheEntry, isLocalOnlyPath, scanLocalEntitiesAsync } from "./scope.ts";
@@ -270,6 +272,7 @@ export class SyncEngine {
 	private lockRetry: NodeJS.Timeout | undefined;
 	private watcher: FSWatcher | undefined;
 	private stateWatcher: FSWatcher | undefined;
+	private browserWatcher: FSWatcher | undefined;
 	private lockRelease: (() => Promise<void>) | undefined;
 	private headerCache = new Map<string, HeaderCacheEntry>();
 	private lastPassEndedAt = 0;
@@ -486,6 +489,8 @@ export class SyncEngine {
 		this.watcher = undefined;
 		this.stateWatcher?.close();
 		this.stateWatcher = undefined;
+		this.browserWatcher?.close();
+		this.browserWatcher = undefined;
 		if (this.lockRetry) {
 			clearTimeout(this.lockRetry);
 			this.lockRetry = undefined;
@@ -809,6 +814,17 @@ export class SyncEngine {
 			this.stateWatcher.on("error", () => {});
 		} catch {
 			// Polling covers the agent state when watching is unavailable.
+		}
+		const profile = browserProfileDir(this.options.agentDir);
+		if (!existsSync(profile)) return;
+		try {
+			// The desktop profile also holds the engine's own caches and databases; only the browser's files wake a pass.
+			this.browserWatcher = watch(profile, (_event, filename) => {
+				if (filename && browserIdOf(filename)) this.scheduleSoon();
+			});
+			this.browserWatcher.on("error", () => {});
+		} catch {
+			// Polling covers the browser files when watching is unavailable.
 		}
 	}
 
@@ -1922,6 +1938,8 @@ export class SyncEngine {
 				this.recordConflict(operation, batch, "both-modified", data);
 				return undefined;
 			}
+			if (operation.kind === "browser" && data && (await this.mergeRemoteBrowser(operation, data, local)))
+				return undefined;
 			if (operation.kind !== "session") {
 				this.recordConflict(operation, batch, "both-modified", data);
 				return undefined;
@@ -1932,6 +1950,9 @@ export class SyncEngine {
 			if (operation.kind === "memory" && data) {
 				if (await this.mergeRemoteMemory(operation, data, undefined)) return undefined;
 			}
+			// Bookmarks and settings both computers had before they first synced are combined, not kept apart.
+			if (operation.kind === "browser" && data && (await this.mergeRemoteBrowser(operation, data, undefined)))
+				return undefined;
 			this.recordConflict(operation, batch, "both-modified", data);
 			return undefined;
 		}
@@ -2051,6 +2072,9 @@ export class SyncEngine {
 			case "saved-prompts":
 				if (!data) throw new DeferredBatchError(`Waiting for ${operation.key}`);
 				return applySavedPrompts(context, data);
+			case "browser":
+				if (!data) throw new DeferredBatchError(`Waiting for ${operation.key}`);
+				return applyBrowser(context, operation, data);
 			default:
 				return { applied: false, workspacesChanged: false, sessionsChanged: false, memoriesChanged: false };
 		}
@@ -2123,6 +2147,16 @@ export class SyncEngine {
 				deletedAt: operation.deletedAt ?? nowIso(),
 				kind: operation.kind,
 			};
+			return undefined;
+		}
+		if (operation.kind === "browser") {
+			// A browser file is never removed by another computer: bookmarks or settings missing there (a reset profile,
+			// a desktop host that never ran) are no reason to empty them here. This file is published again past the
+			// deletion and the other computer gets it back.
+			this.markForceUpload(operation.key);
+			this.state.entities[operation.key] = { ...local, vector: mergeVectors(local.vector, operation.vector) };
+			this.hadChanges = true;
+			this.saveState();
 			return undefined;
 		}
 		if (operation.kind === "memory") {
@@ -2221,6 +2255,48 @@ export class SyncEngine {
 		return true;
 	}
 
+	/**
+	 * Merge a remote browser file into the local one (browser-data.ts) and publish the result back. The merge gives the
+	 * same text on both computers, so they meet on equal content as with memories. False: not mergeable, keep both.
+	 */
+	private async mergeRemoteBrowser(
+		operation: SyncOperation,
+		data: Uint8Array,
+		local: SyncRecord | undefined,
+	): Promise<boolean> {
+		const remoteText = fromUtf8(data);
+		const localText = readBrowserText(this.options.agentDir, operation.id);
+		if (localText === undefined) return false;
+		const merged = mergeBrowserText(operation.id, localText, remoteText);
+		if (merged === undefined) return false;
+		if (merged === remoteText) {
+			const outcome = await this.applyPut(operation, data);
+			this.state.entities[operation.key] = recordFrom({
+				...operation,
+				vector: mergeVectors(operation.vector, local?.vector ?? {}),
+			});
+			delete this.state.tombstones[operation.key];
+			this.currentScan.delete(operation.key);
+			this.clearForceUpload(operation.key);
+			this.hadChanges = true;
+			this.saveState();
+			return outcome.applied;
+		}
+		if (merged !== localText) {
+			const outcome = await applyBrowser(this.context(), operation, utf8(merged));
+			if (!outcome.applied) return false;
+			this.fileCache.delete(operation.key);
+			this.currentScan.delete(operation.key);
+		}
+		this.markForceUpload(operation.key);
+		this.state.entities[operation.key] = local
+			? { ...local, vector: mergeVectors(local.vector, operation.vector) }
+			: recordFrom({ ...operation, vector: mergeVectors(operation.vector, {}) });
+		this.hadChanges = true;
+		this.saveState();
+		return true;
+	}
+
 	/** Remember the content a device just committed as this memory's common ancestor. */
 	private rememberMemoryBase(key: string, id: string): void {
 		const text = readMemoryText(this.context(), id);
@@ -2308,7 +2384,10 @@ export class SyncEngine {
 		if (remoteCopyPath) conflict.remoteCopyPath = remoteCopyPath;
 		const localPath =
 			conversationPath(this.options.dataRoot, operation) ??
-			(operation.kind === "memory" ? join(this.options.dataRoot, operation.id) : undefined);
+			(operation.kind === "memory" ? join(this.options.dataRoot, operation.id) : undefined) ??
+			(operation.kind === "browser" && browserFileOf(operation.id)
+				? join(browserProfileDir(this.options.agentDir), browserFileOf(operation.id)!)
+				: undefined);
 		if (localPath) conflict.localPath = localPath;
 		return conflict;
 	}
@@ -2387,6 +2466,7 @@ function isSafeRecordIdentity(operation: SyncOperation): boolean {
 		operation.kind === "saved-prompts"
 	)
 		return part.test(operation.id);
+	if (operation.kind === "browser") return browserFileOf(operation.id) !== undefined;
 	return true;
 }
 
@@ -2460,6 +2540,7 @@ const KIND_RANK: Record<SyncEntityKind, number> = {
 	workspace: 0,
 	prompt: 1,
 	"saved-prompts": 1,
+	browser: 1,
 	memory: 2,
 	draft: 3,
 	session: 4,
@@ -2510,6 +2591,7 @@ const ENTITY_KINDS = new Set<SyncEntityKind>([
 	"draft",
 	"prompt",
 	"saved-prompts",
+	"browser",
 ]);
 
 /** The changes a snapshot stands for: each record as a put, each deletion as a delete, small contents attached. */

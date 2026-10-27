@@ -1,6 +1,6 @@
 /**
  * Selection translation (POST /api/translate): the text the user selected in a chat, a file preview or a website of the
- * built-in browser, translated by the helper model of Settings → Agents → Translation. A one-shot request with no
+ * built-in browser, translated by the helper model of Settings → Agent → Assistants → Translation. A one-shot request with no
  * chat history; the text is data, never instructions (see agent/runtime/selection-translation.ts).
  */
 
@@ -65,7 +65,7 @@ export function registerTranslateRoutes(server: WebHttpServer, host: WebHost, ag
 		if (text.length > MAX_TRANSLATION_CHARS)
 			throw new HttpError(400, `Select at most ${MAX_TRANSLATION_CHARS} characters to translate.`);
 		// A language picked in the translation card stays the user's preference (`remember`): the same setting as
-		// Settings → Agents → Translation.
+		// Settings → Agent → Assistants → Translation.
 		const requested = typeof payload.target === "string" ? payload.target : undefined;
 		if (requested !== undefined && requested !== "auto" && !TRANSLATION_TARGETS.includes(requested))
 			throw new HttpError(400, `Unknown target language: ${requested}`);

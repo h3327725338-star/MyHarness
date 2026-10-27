@@ -53,7 +53,7 @@ function Root() {
 render(h(Root, null), document.getElementById("app"));
 // The desktop host can drive the same workspace actions from the Agent side; answers report the state that was reached.
 installWorkspaceHost();
-// Web links open where Settings → Interface says (built-in browser or the system browser).
+// Web links open where Settings → Appearance → Interface says (built-in browser or the system browser).
 installLinkRouting();
 // The server skips its own task-end popup for the chat a focused page shows.
 installPagePresence(() => state.activeSlot);

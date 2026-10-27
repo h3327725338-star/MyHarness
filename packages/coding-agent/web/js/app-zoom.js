@@ -1,6 +1,6 @@
 // Zoom of the desktop app's window (Ctrl + "+" / "-" / 0 and Ctrl + wheel, handled by the desktop host, see
 // packages/desktop/zoom.cjs). This page only shows it: a short badge with the new size after a change, and the control
-// in Settings → Interface → Desktop app. A plain browser zooms the page itself and has no bridge, so nothing is shown.
+// in Settings → Appearance → Desktop app. A plain browser zooms the page itself and has no bridge, so nothing is shown.
 import { html, Icon, useEffect, useRef, useState } from "./ui.js";
 import { t } from "./i18n.js";
 

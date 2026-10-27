@@ -116,9 +116,9 @@ const MEDIA_TYPES: Record<string, { mime: string; kind: "pdf" | "audio" | "video
 };
 
 /**
- * Office documents open read-only: the viewer neither parses nor converts them. MyHarness ships no Office engine and
- * the desktop host may not have one installed, so the tab explains that and offers the system application / download
- * instead of pretending to render the file.
+ * Office documents: this route neither parses nor converts them. `/api/files/read` only reports `kind: "office"`, and
+ * the tab then goes through the /api/office routes (office.ts): a read-only PDF preview converted by an installed
+ * Microsoft Office or LibreOffice, or editing in the user's own ONLYOFFICE server. MyHarness ships no Office engine.
  */
 const OFFICE_EXTENSIONS = new Set([
 	".doc",
@@ -328,10 +328,10 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		};
 	}
 
-	// Chat file links land here from markdown data-local-path clicks (resolve/open/reveal/menu).
+	// Chat file links land here from markdown data-local-path clicks (resolve/choices/open/reveal/handler).
 	// All actions share resolveLocalFile, so a link created on another computer remaps the same
-	// way everywhere: direct path first, then workspace-root suffix (Drive-aware), then a unique
-	// basename fallback, else a precise 404. The resolved absolute path is what gets opened.
+	// way everywhere: direct path first, then workspace-root suffix (Drive-aware; the Data root is searched too),
+	// then a unique basename fallback, else a precise 404. The resolved absolute path is what gets opened.
 	server.route("POST", "/api/files/local", async ({ body }) => {
 		const payload = body as { path?: unknown; action?: unknown; handler?: unknown } | null;
 		if (!payload || !["resolve", "choices", "open", "reveal", "handler"].includes(String(payload.action)))
@@ -578,8 +578,9 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 	});
 
 	// ---- Session upload attachments ----------------------------------------------------
-	// Non-image composer uploads live next to their session file (`uploads/<id>/attachment-<name>`);
-	// history keeps only the absolute path as text, so the transcript and the sidebar read them back here.
+	// Non-image composer uploads live in the workspace attachment library (or, for a session without one, next to its
+	// session file as `uploads/<id>/attachment-<name>`); history keeps only the path as text (relative to the Data root,
+	// or absolute for legacy uploads), so the transcript and the sidebar read them back here.
 	// A file deleted from disk answers as missing (`exists: false` / 404) and never breaks the page.
 	function resolveUploadPath(raw: unknown): string {
 		if (typeof raw !== "string" || !raw) throw new HttpError(400, "Missing path");
@@ -1131,7 +1132,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		if (!allowed) throw new HttpError(403, "Only saved tool output can be read here");
 		const stat = statSync(real);
 		if (!stat.isFile()) throw new HttpError(400, "Not a file");
-		// Chunked first-block read: `limit` bytes from `offset` (512 KB default), opened and read at the
+		// Chunked first-block read: `limit` bytes from `offset` (512 KB default and maximum), opened and read at the
 		// offset instead of readFileSync on the whole file. The cumulative window stays 4 MB. A block that
 		// ends inside a UTF-8 sequence is cut back to the character boundary and `nextOffset` follows it,
 		// so every caller resumes on clean text. Out-of-range offsets answer with an empty block, no throw.

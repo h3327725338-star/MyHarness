@@ -4,6 +4,8 @@
 
 Durable AgentHarness / session design notes.
 
+> Status: design notes only. The recovery policies (`mark_interrupted` / `retry_unfinished`) and the durable queue, pending-write and turn records described below do not exist in `packages/agent/src` or `packages/storage/sqlite-node/src`.
+
 ## Framing
 
 A fully durable `AgentHarness` is not realistic by itself because important dependencies are runtime JS supplied by the host app:

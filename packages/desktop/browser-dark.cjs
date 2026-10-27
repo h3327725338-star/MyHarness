@@ -33,13 +33,17 @@ function engineSource() {
  * sites (by host name) where it is turned the other way.
  */
 function createDarkStore(file, log) {
-  let state = { mode: 'auto', sites: {} };
-  try {
-    const saved = JSON.parse(readFileSync(file, 'utf8'));
-    if (MODES.includes(saved?.mode)) state.mode = saved.mode;
-    if (saved?.sites && typeof saved.sites === 'object')
-      for (const [host, value] of Object.entries(saved.sites)) if (host && (value === 'on' || value === 'off')) state.sites[host] = value;
-  } catch { /* missing or unreadable: follow the app */ }
+  const read = () => {
+    const next = { mode: 'auto', sites: {} };
+    try {
+      const saved = JSON.parse(readFileSync(file, 'utf8'));
+      if (MODES.includes(saved?.mode)) next.mode = saved.mode;
+      if (saved?.sites && typeof saved.sites === 'object')
+        for (const [host, value] of Object.entries(saved.sites)) if (host && (value === 'on' || value === 'off')) next.sites[host] = value;
+    } catch { /* missing or unreadable: follow the app */ }
+    return next;
+  };
+  let state = read();
   const save = () => {
     if (!file) return;
     try {
@@ -51,6 +55,8 @@ function createDarkStore(file, log) {
   const hostOf = (url) => { try { const parsed = new URL(url); return /^https?:$/u.test(parsed.protocol) ? parsed.host : ''; } catch { return ''; } };
   return {
     get: () => ({ mode: state.mode, sites: { ...state.sites } }),
+    /** Read the file again (browser sync wrote it, browser-sync.cjs). */
+    reload() { state = read(); },
     hostOf,
     /** Whether `url` is shown dark, given whether the app itself is dark right now. */
     wanted(url, appDark) {

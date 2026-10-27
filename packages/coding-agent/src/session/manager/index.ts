@@ -1040,7 +1040,7 @@ export class SessionManager {
 	 * Does not allow writing CompactionSummaryMessage and BranchSummaryMessage directly.
 	 * Reason: we want these to be top-level entries in the session, not message session entries,
 	 * so it is easier to find them.
-	 * These need to be appended via appendCompaction() and appendBranchSummary() methods.
+	 * These need to be appended via appendCompaction() and branchWithSummary() methods.
 	 */
 	appendMessage(message: Message | CustomMessage | BashExecutionMessage, timing?: SessionMessageTiming): string {
 		const entry: SessionMessageEntry = {
@@ -1264,15 +1264,6 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	/**
-	 * Walk from entry to root, returning all entries in path order.
-	 * Includes all entry types (messages, compaction, model changes, etc.).
-	 * Use buildSessionContext() to get the resolved messages for the LLM.
-	 *
-	 * A cyclic parent chain (corrupted session file) throws
-	 * {@link SessionParentCycleError} instead of hanging or returning a
-	 * truncated transcript as complete history.
-	 */
 	/** Count without allocating the defensive entries array (idle-runtime memory estimates). */
 	getEntryCount(): number {
 		return this.byId.size;
@@ -1292,6 +1283,15 @@ export class SessionManager {
 		return { entries: tail.reverse(), hasMore: !!entry };
 	}
 
+	/**
+	 * Walk from entry to root, returning all entries in path order.
+	 * Includes all entry types (messages, compaction, model changes, etc.).
+	 * Use buildSessionContext() to get the resolved messages for the LLM.
+	 *
+	 * A cyclic parent chain (corrupted session file) throws
+	 * {@link SessionParentCycleError} instead of hanging or returning a
+	 * truncated transcript as complete history.
+	 */
 	getBranch(fromId?: string): SessionEntry[] {
 		const startId = fromId ?? this.leafId;
 		return walkSessionPath(this.getEntries(), startId, this.byId, { sessionFile: this.sessionFile });
@@ -1561,7 +1561,8 @@ export class SessionManager {
 	/**
 	 * Fill this brand-new session with the active branch of `source` (its messages, names and setup entries), keeping
 	 * this session's own id, file, cwd and storage. Used when a chat moves into another checkout (a worktree copy and
-	 * back) and must keep its history. Labels are dropped like createBranchedSession does; the source is not touched.
+	 * back) and must keep its history. Labels are not carried over (createBranchedSession re-creates them); the source
+	 * is not touched.
 	 * @throws When this session already has entries of its own.
 	 */
 	adoptHistoryFrom(source: SessionManager): void {
@@ -1685,7 +1686,7 @@ export class SessionManager {
 	/**
 	 * Open a specific session file.
 	 * @param path Path to session file
-	 * @param sessionDir Optional session directory for /new or /branch. If omitted, derives from file's parent.
+	 * @param sessionDir Optional session directory for /new or branching. If omitted, derives from file's parent.
 	 * @param cwdOverride Optional cwd override instead of the session header cwd.
 	 */
 	static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {

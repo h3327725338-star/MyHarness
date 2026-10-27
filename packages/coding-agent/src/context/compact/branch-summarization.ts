@@ -216,7 +216,7 @@ export function prepareBranchEntries(entries: SessionEntry[], tokenBudget: numbe
 				for (const f of details.readFiles) fileOps.read.add(f);
 			}
 			if (Array.isArray(details.modifiedFiles)) {
-				// Modified files go into both edited and written for proper deduplication
+				// Modified files are tracked as edited; computeFileLists() merges edited and written for deduplication
 				for (const f of details.modifiedFiles) {
 					fileOps.edited.add(f);
 				}

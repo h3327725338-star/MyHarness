@@ -80,6 +80,21 @@ export interface ProxyStreamOptions extends ProxySerializableStreamOptions {
 	proxyUrl: string;
 }
 
+function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializableStreamOptions {
+	return {
+		temperature: options.temperature,
+		maxTokens: options.maxTokens,
+		reasoning: options.reasoning,
+		cacheRetention: options.cacheRetention,
+		sessionId: options.sessionId,
+		headers: options.headers,
+		metadata: options.metadata,
+		transport: options.transport,
+		thinkingBudgets: options.thinkingBudgets,
+		maxRetryDelayMs: options.maxRetryDelayMs,
+	};
+}
+
 /**
  * Stream function that proxies through a server instead of calling LLM providers directly.
  * The server strips the partial field from delta events to reduce bandwidth.
@@ -99,21 +114,6 @@ export interface ProxyStreamOptions extends ProxySerializableStreamOptions {
  * });
  * ```
  */
-function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializableStreamOptions {
-	return {
-		temperature: options.temperature,
-		maxTokens: options.maxTokens,
-		reasoning: options.reasoning,
-		cacheRetention: options.cacheRetention,
-		sessionId: options.sessionId,
-		headers: options.headers,
-		metadata: options.metadata,
-		transport: options.transport,
-		thinkingBudgets: options.thinkingBudgets,
-		maxRetryDelayMs: options.maxRetryDelayMs,
-	};
-}
-
 export function streamProxy(model: Model<any>, context: Context, options: ProxyStreamOptions): ProxyMessageEventStream {
 	const stream = new ProxyMessageEventStream();
 

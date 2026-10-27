@@ -63,15 +63,19 @@ export interface CreateAgentSessionOptions {
 	 * Optional default tool suppression mode when no explicit allowlist is provided.
 	 *
 	 * - "all": start with no tools enabled
-	 * - "builtin": disable the default built-in tools (read, bash, pwsh, edit, write, symbols, github, mail)
+	 * - "builtin": disable the default built-in tools (the set listed under `tools` below)
 	 *   but keep extension/custom tools enabled
 	 */
 	noTools?: "all" | "builtin";
 	/**
 	 * Optional allowlist of tool names.
 	 *
-	 * When omitted, MyHarness enables the default built-in tools (read, bash, pwsh, edit, write, symbols, github, mail)
-	 * and leaves extension/custom tools enabled unless `noTools` changes that default.
+	 * When omitted, the main Agent enables the default built-in tools (read, bash, pwsh, job_list, job_output,
+	 * job_kill, edit, write, symbols, apply_rename, github, mail, memory_search, memory_get, memory_delete,
+	 * memory_claim, memory_write, session_search, session_get, ask_user_question, todo_write, plus web_search and
+	 * web_fetch when Web Search is enabled and workspace under the desktop host; `symbols` and `apply_rename` need
+	 * Code Intelligence on; delegated roles get their own whitelist instead) and leaves extension/custom tools
+	 * enabled unless `noTools` changes that default.
 	 * When provided, only the listed tool names are enabled.
 	 */
 	tools?: string[];
@@ -161,7 +165,7 @@ function getDefaultAgentDir(): string {
  * const loader = new DefaultResourceLoader({
  *   cwd: process.cwd(),
  *   agentDir: getAgentDir(),
- *   settingsManager: SettingsManager.create(),
+ *   settingsManager: SettingsManager.create(process.cwd()),
  * });
  * await loader.reload();
  * const { session: controlledSession } = await createAgentSession({

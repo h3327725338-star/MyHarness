@@ -94,11 +94,13 @@ By default, MyHarness gives the model these built-in tools:
 - `edit` - patch files
 - `write` - create or overwrite files
 - `github` - use the configured GitHub integration
+- `mail` - read and send mail through a connected Gmail/Outlook account
 - `memory_search`, `memory_get`, `memory_delete`, `memory_claim`, `memory_write` - long-term memory (when enabled)
 - `session_search`, `session_get` - find and read earlier saved chats (read-only; `sessionContinuity.autoSearch`)
 - `ask_user_question`, `todo_write` - user interaction and task tracking
 - `apply_rename` - apply a `symbols rename_preview` plan (gated with `symbols`)
 - `web_search`, `web_fetch` - only when Web Search is enabled in Settings
+- `workspace` - drive the built-in browser and the right-hand workspace (desktop app only)
 
 `grep`, `find`, and `ls` are built-in but not in the default set; select them through tool options. The `symbols` tool is disabled by default; enable `codeIntelligence.symbolsEnabled` in Settings and restart the runtime to make semantic source navigation available. The `agent`, `workflow`, `ultracode`, and `agent_tasks` tools are optional and stay off while **Sub Agent** is disabled (the default) in global settings. MyHarness runs in your current working directory and can modify files there. Use git or another checkpointing workflow if you want easy rollback.
 

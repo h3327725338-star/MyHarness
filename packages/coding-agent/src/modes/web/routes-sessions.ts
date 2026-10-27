@@ -549,10 +549,6 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		};
 	});
 
-	/**
-	 * Only un-registers the Workspace. The folder, its project files and every chat stay exactly where they are; the
-	 * chats simply belong to no Workspace afterwards (see `SessionManager.isUnbound`). Open chats keep running.
-	 */
 	server.route("POST", "/api/workspaces/rename", ({ body }) => {
 		const input = asObject(body);
 		const id = asString(input.id, "id");
@@ -564,6 +560,11 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		return { ok: true };
 	});
 
+	/**
+	 * Only un-registers the Workspace (plus the chats' artifact files when `deleteArtifacts` is true). The folder, its
+	 * project files and every chat stay exactly where they are; the chats simply belong to no Workspace afterwards (see
+	 * `SessionManager.isUnbound`). Open chats keep running.
+	 */
 	server.route("POST", "/api/workspaces/remove", ({ body }) => {
 		const input = asObject(body);
 		const id = asString(input.id, "id");

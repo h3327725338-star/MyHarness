@@ -1,12 +1,12 @@
 /**
- * Temporary compatibility entrypoint preserving the old global myharness-ai API
+ * Temporary compatibility entrypoint preserving the old global @myharness/ai API
  * surface: api-dispatch `stream()`/`complete()`, the api-registry, legacy
  * model-shaped descriptors (`getModel`), per-API lazy stream wrappers, and
  * image generation. It does not bundle or discover upstream Provider catalogs.
  *
  * Existing apps switch imports from "@myharness/ai" to
  * "@myharness/ai/compat" unchanged; new code uses `createModels()`
- * and the provider factories. This module is temporary and will be removed
+ * and `createProvider()`. This module is temporary and will be removed
  * once callers migrate off the legacy surface.
  */
 

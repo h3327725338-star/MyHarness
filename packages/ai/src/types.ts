@@ -74,7 +74,7 @@ export interface ProviderRateLimitMetadata {
 
 /**
  * Provider-neutral response metadata. Values are deliberately limited to
- * bounded operational facts; provider-specific policy belongs above @myharness-ai.
+ * bounded operational facts; provider-specific policy belongs above @myharness/ai.
  */
 export interface ProviderResponseMetadata {
 	status?: number;
@@ -238,7 +238,8 @@ export interface StreamOptions {
 	websocketConnectTimeoutMs?: number;
 	/**
 	 * Maximum retry attempts for providers/SDKs that support client-side retries.
-	 * For example, OpenAI and Anthropic SDK clients default to 2.
+	 * The OpenAI, Anthropic, Azure OpenAI Responses and Google adapters make no client-side retry when this
+	 * is unset, because the host owns retry policy.
 	 */
 	maxRetries?: number;
 	/**
@@ -299,8 +300,8 @@ export type ApiStreamOptions<TApi extends Api> = TApi extends keyof ApiOptionsMa
 /**
  * The uniform stream contract of an API implementation module: every module
  * under `src/api/` exports exactly `stream` and `streamSimple`, so the module
- * itself satisfies this interface. Lazy wrappers (`lazyApi()`) and provider
- * factories pass these around as values. This is the untyped dispatch shape;
+ * itself satisfies this interface. Lazy wrappers (`lazyApi()`) and
+ * `createProvider()` pass these around as values. This is the untyped dispatch shape;
  * per-API option typing lives on the implementation modules themselves and on
  * `Provider.stream()` via `ApiStreamOptions`.
  */
@@ -311,9 +312,10 @@ export interface ProviderStreams {
 
 /**
  * The uniform contract of an image-generation API implementation module:
- * every image API module under `src/api/` exports exactly `generateImages`,
- * so the module itself satisfies this interface. Lazy wrappers and image
- * provider factories pass these around as values.
+ * an image API module exports exactly `generateImages`, so the module itself
+ * satisfies this interface (this tree bundles no image API module under
+ * `src/api/`). Lazy wrappers and `createImagesProvider()` pass these around
+ * as values.
  */
 export interface ProviderImages {
 	generateImages(
@@ -596,15 +598,15 @@ export interface OpenAICompletionsCompat {
 	supportsUsageInStreaming?: boolean;
 	/** Which field to use for max tokens. Default: auto-detected from URL. */
 	maxTokensField?: "max_completion_tokens" | "max_tokens";
-	/** Whether tool results require the `name` field. Default: auto-detected from URL. */
+	/** Whether tool results require the `name` field. Default: false. */
 	requiresToolResultName?: boolean;
-	/** Whether a user message after tool results requires an assistant message in between. Default: auto-detected from URL. */
+	/** Whether a user message after tool results requires an assistant message in between. Default: false. */
 	requiresAssistantAfterToolResult?: boolean;
-	/** Whether thinking blocks must be converted to text blocks with <thinking> delimiters. Default: auto-detected from URL. */
+	/** Whether thinking blocks must be converted to text blocks with <thinking> delimiters. Default: false. */
 	requiresThinkingAsText?: boolean;
-	/** Whether all replayed assistant messages must include an empty reasoning_content field when reasoning is enabled. Default: auto-detected from URL. */
+	/** Whether all replayed assistant messages must include an empty reasoning_content field when reasoning is enabled. Default: true for DeepSeek, otherwise false. */
 	requiresReasoningContentOnAssistantMessages?: boolean;
-	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "deepseek" uses thinking: { type } plus reasoning_effort when supported, "together" uses reasoning: { enabled } plus reasoning_effort when supported, "zai" uses thinking: { type }, "qwen" uses top-level enable_thinking: boolean, "qwen-chat-template" uses chat_template_kwargs.enable_thinking and preserve_thinking, "chat-template" uses configurable chat_template_kwargs, "string-thinking" uses top-level thinking: string, and "ant-ling" uses reasoning: { effort } only when the mapped effort is non-null. Default: "openai". */
+	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "deepseek" uses thinking: { type } plus reasoning_effort when supported, "together" uses reasoning: { enabled } plus reasoning_effort when supported, "zai" uses thinking: { type }, "qwen" uses top-level enable_thinking: boolean, "qwen-chat-template" uses chat_template_kwargs.enable_thinking and preserve_thinking, "chat-template" uses configurable chat_template_kwargs, "string-thinking" uses top-level thinking: string, and "ant-ling" uses reasoning: { effort } only when the mapped effort is non-null. Default: auto-detected for DeepSeek, z.ai, Together, Ant Ling and OpenRouter, otherwise "openai". */
 	thinkingFormat?:
 		| "openai"
 		| "openrouter"
@@ -624,7 +626,7 @@ export interface OpenAICompletionsCompat {
 	vercelGatewayRouting?: VercelGatewayRouting;
 	/** Whether z.ai supports top-level `tool_stream: true` for streaming tool call deltas. Default: false. */
 	zaiToolStream?: boolean;
-	/** Whether the provider supports the `strict` field in tool definitions. Default: true. */
+	/** Whether the provider supports the `strict` field in tool definitions. Default: auto-detected from URL. */
 	supportsStrictMode?: boolean;
 	/** Cache control convention for prompt caching. "anthropic" applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user/assistant text content. */
 	cacheControlFormat?: "anthropic";
@@ -634,7 +636,7 @@ export interface OpenAICompletionsCompat {
 	deferredToolsMode?: "kimi";
 	/** Session-affinity header format: `openai` sends `session_id`, `x-client-request-id`, and `x-session-affinity`; `openai-nosession` sends `x-client-request-id` and `x-session-affinity`; `openrouter` sends `x-session-id`. Does not affect the `prompt_cache_key` body param, which is governed by cache retention. Default: auto-detected. */
 	sessionAffinityFormat?: SessionAffinityFormat;
-	/** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. */
+	/** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: auto-detected from URL (false for unknown custom endpoints). */
 	supportsLongCacheRetention?: boolean;
 }
 
@@ -681,17 +683,18 @@ export interface AnthropicMessagesCompat {
 	/**
 	 * Whether the model accepts the Anthropic `temperature` request field.
 	 * Claude Opus 4.7+ rejects non-default temperature values.
-	 * Default: true.
+	 * Default: derived from the Claude model ID (false for models that reject non-default
+	 * sampling values, true otherwise).
 	 */
 	supportsTemperature?: boolean;
 	/**
 	 * Whether to force adaptive thinking (`thinking.type: "adaptive"` plus
-	 * `output_config.effort`) regardless of the model id. Built-in models that
-	 * require adaptive thinking set this in generated metadata. Custom
+	 * `output_config.effort`) regardless of the model id. When unset, the Claude
+	 * model id decides (see `claude-model-traits.ts`). Custom
 	 * Anthropic-compatible providers can set this to `true` for any model whose
 	 * upstream requires the adaptive format. Set to `false` to
-	 * opt out on overridden built-in models.
-	 * Default: false.
+	 * opt out for a Claude model id that would otherwise use adaptive thinking.
+	 * Default: unset (decided by the model id).
 	 */
 	forceAdaptiveThinking?: boolean;
 	/** Whether to replay empty thinking signatures as `signature: ""` instead of converting thinking to text. Default: false. */

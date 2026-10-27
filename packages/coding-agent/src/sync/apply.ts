@@ -6,6 +6,7 @@ import { refreshMemoryIndexes, withMemoryLock, writeMemoryFile } from "../sessio
 import type { ModeStateStore } from "../session/mode-state.ts";
 import { readSessionHeader } from "../session/storage/jsonl/index.ts";
 import { writeFileAtomicallySync } from "../utils/atomic-write.ts";
+import { browserFileOf, browserProfileDir } from "./browser-data.ts";
 import { savedPromptsOf, writeSavedPrompts } from "./saved-prompts.ts";
 import type { SyncLocalStore } from "./store.ts";
 import type { SyncRecord } from "./types.ts";
@@ -397,6 +398,24 @@ export async function applyPrompt(ctx: ApplyContext, data: Uint8Array): Promise<
 export async function applySavedPrompts(ctx: ApplyContext, data: Uint8Array): Promise<ApplyOutcome> {
 	writeSavedPrompts(ctx.agentDir, savedPromptsOf(JSON.parse(fromUtf8(data)) as unknown));
 	return { ...emptyOutcome(), applied: true };
+}
+
+/**
+ * Write one file of the built-in browser's desktop profile. The desktop host watches its profile and reloads the store
+ * whose file changed. A sealed vault is not backed up: it is another computer's own file, replaced whole each time.
+ */
+export async function applyBrowser(ctx: ApplyContext, record: SyncRecord, data: Uint8Array): Promise<ApplyOutcome> {
+	const outcome = emptyOutcome();
+	const file = browserFileOf(record.id);
+	if (!file) return outcome;
+	const directory = browserProfileDir(ctx.agentDir);
+	const target = join(directory, file);
+	assertDirectTarget(target, ctx.agentDir);
+	if (!record.id.startsWith("vault-")) backupIfExists(ctx, "browser", record.key, file, target);
+	ensureDir(directory);
+	writeFileAtomicallySync(target, data);
+	outcome.applied = true;
+	return outcome;
 }
 
 /** Apply a deletion that the remote device recorded explicitly. Archives and folders the user did not delete stay. */

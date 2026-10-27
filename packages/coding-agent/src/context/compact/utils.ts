@@ -208,8 +208,10 @@ export function serializeConversation(messages: Message[]): string {
 /**
  * Bounded structured record of one completed tool execution.
  *
- * This is runtime-captured (deterministic) metadata that survives compaction
- * independently of what the generative summary decides to mention. It answers
+ * This is deterministic (not model-written) metadata read from a compaction
+ * entry's `details.executions` and rendered by renderCompactionContinuity().
+ * The current compaction runner does not write it; it is rendered only when an
+ * entry's details already carry it. It answers
  * "has this investigation already been done, with which scope, and where is
  * the full result?" so the Main Agent does not re-run heavy tools merely
  * because it forgot they ran.
@@ -228,7 +230,9 @@ export interface ToolExecutionRecord {
 /**
  * Small, deterministic copies of the user's task text that survive a
  * compaction independently of the summarization model.  These are deliberately
- * bounded and are reference material, not a second live user turn.
+ * bounded and are reference material, not a second live user turn. Like
+ * ToolExecutionRecord they are read from a compaction entry's
+ * `details.userAnchors`; the current compaction runner does not write them.
  */
 export interface CompactionUserAnchor {
 	kind: "initial-request" | "recent-request";
@@ -248,7 +252,9 @@ function _boundExecutionText(text: string, maxChars: number): string {
 /**
  * Render deterministic compaction metadata into the active summary message.
  * The generated summary remains the primary handoff; these sections preserve
- * facts that are cheap to retain and costly to rediscover.
+ * facts that are cheap to retain and costly to rediscover. Only compaction
+ * entries without `replacementHistory` are projected through this (see
+ * sessionEntryToContextMessages()).
  */
 export function renderCompactionContinuity(
 	userAnchors: CompactionUserAnchor[] | undefined,

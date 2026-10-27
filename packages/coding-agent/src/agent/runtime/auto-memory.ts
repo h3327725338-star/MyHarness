@@ -810,7 +810,8 @@ export function findMemoryContradictions(
 
 /**
  * A memory that lives outside the current conversation's own three layers: another workspace's
- * workspace/session memories, or a quarantined pending memory waiting to be claimed.
+ * workspace/session memories, the memories of the current workspace's other conversations, or a quarantined
+ * pending memory waiting to be claimed.
  * Read-only views: automatic recall never injects these; they surface through the memory_search
  * directory/summaries and are fetched in full with memory_get on demand.
  */

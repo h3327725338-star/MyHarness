@@ -74,7 +74,7 @@ export interface WebHostHubOptions {
 	idleBudgetBytes?: number;
 	/**
 	 * Per-slot byte estimate override (tests inject exact sizes without real runtimes).
-	 * Defaults to the heuristic built from entry counts, cached projection size and tracked runs.
+	 * Defaults to the heuristic built from entry counts, cached projection size, session file size and tracked runs.
 	 */
 	estimateSlotBytes?: (host: WebHost) => number;
 }

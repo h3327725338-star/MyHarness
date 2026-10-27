@@ -15,10 +15,10 @@
 
 - [README](../README.md)：安装、Agent API、消息和 event flow。
 - [Harness](agent-harness.md)：通用 harness contract。
-- [Durable Harness](durable-harness.md)：持久化和恢复边界。
-- [Hooks](hooks.md)：Agent/tool hook contract。
+- [Durable Harness](durable-harness.md)：持久化和崩溃恢复的设计笔记（尚未实现；源码里没有其中的恢复策略和队列/写入记录）。
+- [Hooks](hooks.md)：`AgentHarness` hook 系统的目标设计（尚未实现；当前实现是 `AgentHarness.subscribe()`/`on()`）。
 - [Models architecture](models.md)：Provider/Models 的历史目标设计；文件顶部已标明不是当前实现的完整 catalog。
-- [Observability](observability.md)：观测和 usage contract。
+- [Observability](observability.md)：观测事件的设计草案（尚未实现）。
 - [CHANGELOG](../CHANGELOG.md)：历史变更记录，不能单独作为当前实现证明。
 
 ## 事实边界

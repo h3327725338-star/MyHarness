@@ -85,7 +85,7 @@ git diff --stat
 
 ## 路径解析
 
-当前公开前可验证的是从源码运行的 tsx；npm package 和 standalone/Bun
+当前公开前可验证的是经 `scripts/dev-fast-loader.mjs` 从源码运行和桌面端打包；npm package 和 standalone/Bun
 binary 是独立的未来 release 路径，不能从本地 build 或源码目录推断已经
 发布。Bun binary 另有 `build:binary`/`scripts/build-binaries.sh` 路径。
 

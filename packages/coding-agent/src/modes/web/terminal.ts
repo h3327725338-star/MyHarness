@@ -2,9 +2,10 @@
  * The Terminal panel's shells: real shells running on a pseudo terminal (ConPTY on Windows) in a chat's folder. The
  * page draws what a shell writes (xterm.js) and sends what the user types; nothing here interprets commands.
  *
- * A folder has at most one shell of each kind (Windows PowerShell, CMD, …). It belongs to the folder, not
- * to a chat: every chat of that folder shows the same one, and it keeps running while chats are opened, closed or
- * released in the background. It ends when its shell exits, when the user ends or restarts it, or with the server.
+ * A folder has at most one shell of each kind (Windows PowerShell, CMD, …) per tab `instance` (a page that sends no
+ * `instance` shares one per kind). It belongs to the folder, not to a chat: every chat of that folder shows the same
+ * one, and it keeps running while chats are opened, closed or released in the background. It ends when its shell
+ * exits, when the user ends or restarts it, or with the server.
  *
  * The pseudo terminal comes from the optional package @lydell/node-pty (prebuilt binaries, no install script). It is
  * loaded on first use: where it is missing or has no binary for the platform, opening a terminal fails with a clear
@@ -132,7 +133,7 @@ export async function listTerminalShells(): Promise<TerminalShell[]> {
 type PtySpawn = typeof import("@lydell/node-pty").spawn;
 let ptySpawn: PtySpawn | undefined;
 
-/** Same two places the other optional native package (the clipboard) is looked up in: this module, then the executable. */
+/** Looked up in two places: this module, then the folder of the running executable. */
 function loadPtySpawn(): PtySpawn {
 	if (ptySpawn) return ptySpawn;
 	const roots = [import.meta.url, pathToFileURL(join(dirname(process.execPath), "package.json")).href];

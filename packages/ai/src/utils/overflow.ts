@@ -116,7 +116,7 @@ const NON_OVERFLOW_PATTERNS = [
  *
  * ## Custom Providers
  *
- * If you've added custom models via settings.json, this function may not detect
+ * If you've added custom models via models.json, this function may not detect
  * overflow errors from those providers. To add support:
  *
  * 1. Send a request that exceeds the model's context window

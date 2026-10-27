@@ -2,7 +2,7 @@ import type { FileEntry, SessionEntry, SessionHeader } from "../types.ts";
 
 /**
  * One searchable message of a saved conversation: a user message or the visible text of an assistant reply.
- * Tool output, reasoning and attachments are deliberately not part of it (see docs/session-format.md, "History index").
+ * Tool output, reasoning and attachments are deliberately not part of it (see docs/session-format.md, "Derived history data").
  */
 export interface HistoryRecord {
 	/** Entry id in the session JSONL; stable across reloads. */

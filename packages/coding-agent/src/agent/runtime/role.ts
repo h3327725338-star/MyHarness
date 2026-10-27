@@ -27,7 +27,7 @@ export const DELEGATED_TOOL_NAMES = [
 
 /**
  * Read-write delegated tools: the read-only set plus the write tools the main agent's
- * write configuration already ships with (`edit`, `write`, `pwsh`). Edits are still
+ * write configuration already ships with (`edit`, `write`, `pwsh`, `apply_rename`). Edits are still
  * confined to the worker's own Git worktree by the delegated write guard.
  */
 export const DELEGATED_WRITE_TOOL_NAMES = [...DELEGATED_TOOL_NAMES, "edit", "write", "pwsh", "apply_rename"] as const;

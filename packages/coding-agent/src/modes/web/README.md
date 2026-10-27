@@ -4,7 +4,7 @@
 
 ### 职责
 
-`--web` 模式的服务端：只绑定本机回环地址的 HTTP + SSE 服务，把同一个 `AgentSessionRuntime` 投影给浏览器。它不实现 Agent、Session、Git、Provider 的规则，只做传输和展示数据的转换。
+Web UI 的服务端（`main()` 启动后进入的就是它，不需要 `--web` 参数）：只绑定本机回环地址的 HTTP + SSE 服务，把同一个 `AgentSessionRuntime` 投影给浏览器。它不实现 Agent、Session、Git、Provider 的规则，只做传输和展示数据的转换。
 
 浏览器前端在包根的 `web/`（原生 ES modules，无构建步骤），不在 `src/` 里。
 

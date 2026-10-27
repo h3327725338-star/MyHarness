@@ -111,6 +111,8 @@ exports.createSpeedDialStore = (file, { seed } = {}) => {
   const copy = (items) => items.map((item) => (item.type === 'group' ? { ...item, items: item.items.map((site) => ({ ...site })) } : { ...item }));
   return {
     list: () => copy(load()),
+    /** Read the file again on the next use (browser sync wrote it, browser-sync.cjs). */
+    reload() { cache = null; damaged = false; },
     /** Replace the whole layout (the page sends what the user arranged) and return the cleaned version. */
     save(items) {
       const next = cleanLayout(items);

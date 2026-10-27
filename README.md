@@ -19,7 +19,7 @@ MyHarness is a Windows desktop AI coding workspace. An Electron shell runs a loc
 - **Two modes, one backend**: Coding mode works inside a repository; General mode handles research, writing and everyday tasks with per-workspace instructions, workspace memory and a document library. Chat lists, drafts and color themes are kept per mode.
 - **A browser the agent can drive**: the right panel hosts real Chromium tabs (`WebContentsView` on desktop, one persistent partition so logins survive restarts); the `workspace` tool navigates, clicks, types, reads the page or its accessibility tree, runs page scripts, screenshots, downloads files and inspects requests.
 - **Multi-agent work**: `agent` (foreground and background batches), `workflow` (staged) and `ultracode` (multi-pass) dispatch, with a three-level activity bar, per-agent stop and explicit terminal states; `agent_tasks` lets the main agent list and stop its own dispatches.
-- **Per-role model binding**: Settings → Agent binds a Provider, model and thinking level for each role — main model, sub-agents, Auto Memory, chat naming, compaction, branch and handoff summaries, commit descriptions, worktree naming, translation, vision, and a fallback model. Roles left empty inherit the main model.
+- **Per-role model binding**: the main model is picked in the composer's model menu, and Settings → Agent binds a Provider, model and thinking level for each helper role — sub-agents, Auto Memory, chat naming, compaction, branch and handoff summaries, commit descriptions, worktree naming, translation, vision, and a fallback model. A role set to “Use the main model” follows the main chat's model and effort; for the fallback model that means no fallback.
 - **Optional extras**: Web Search (Google/Bing first, optional Tavily API and browser fallback), TypeScript extensions, skills and prompt templates.
 
 The source and status documents deliberately separate implemented contracts, configured runtime behavior, and machine- or credential-dependent validation.
@@ -54,7 +54,7 @@ $env:NEBIUS_TOKEN_FACTORY_API_KEY = "<your-token-factory-key>"
 .\dev-desktop.cmd
 ```
 
-The same Provider can be created in `/settings` → **Providers** → **创建自定义 Provider** with Base URL `https://api.tokenfactory.nebius.com/v1/` and API type OpenAI Chat Completions. All three models declare `text` input and map MyHarness thinking levels onto `reasoning_effort` (`off` → `none`, otherwise the level name).
+The same Provider can be created in Settings → **Providers** → **Add provider** with Base URL `https://api.tokenfactory.nebius.com/v1/` and API type OpenAI Chat Completions. The three text models declare `text` input and map MyHarness thinking levels onto `reasoning_effort` (`off` → `none`, otherwise the level name); Super-VL declares `text` and `image` input and has no thinking-level map.
 
 - Full setup, verification steps and limits: [NVIDIA Nemotron on Nebius Token Factory](packages/coding-agent/docs/nebius-token-factory.md).
 - Ready-to-copy configuration: [`examples/nebius-models.json`](packages/coding-agent/docs/examples/nebius-models.json).
@@ -63,10 +63,10 @@ The same Provider can be created in `/settings` → **Providers** → **创建�
 
 - A resident user profile (`global/用户画像`) is sent on every turn instead of being ranked against the query, with a layered recall budget (profile slot, catalog slot, dynamic cards) so a large profile cannot crowd out the rest of the context.
 - Three memory scopes — global, workspace and session — plus archives and a pending quarantine, with tools to search, read, write, delete and claim an entry. Background maintenance folds new material into the profile and merges related memories without per-item approval.
-- MyHarness talks to the Google Drive API directly and syncs all memory scopes (archives, pending entries, the profile), General-mode workspaces and chats with their branches and handoff summaries, session attachments and artifacts, workspace library sources, drafts and per-mode personal prompts.
+- MyHarness talks to the Google Drive API directly and syncs all memory scopes (archives, pending entries, the profile), General-mode workspaces and chats with their branches and handoff summaries, session attachments and artifacts, workspace library sources, drafts, the General-mode personal prompt, saved prompts (My prompts), and the built-in browser's bookmarks, new-tab shortcuts and site settings; the browser's sign-ins and saved passwords travel only when a sync passphrase is set, sealed with it on the device before upload.
 - It does not sync API keys, OAuth tokens, trust decisions, tool permissions, locks, running tasks, Coding-mode chats or repositories, or other Web UI preferences.
 - Merging uses a stable key plus a per-device version vector: memories merge three-way against the last version both devices agreed on, chats merge by entry id so both branches survive, and a conflict that cannot be merged keeps the local version and saves the other as a recoverable copy listed in Settings. Nothing arriving from Drive can grant Project Trust or execute a command.
-- Boundary: this is implemented against the Drive API and covered by in-memory-transport tests; a real two-machine Google run has not been executed here. Sync stops when the app quits, and there is no end-to-end encryption. See [Google Drive sync](packages/coding-agent/docs/google-drive-sync.md).
+- Boundary: this is implemented against the Drive API and covered by in-memory-transport tests; a real two-machine Google run has not been executed here. Sync stops when the app quits, and apart from the browser's sealed sign-in vault there is no end-to-end encryption. See [Google Drive sync](packages/coding-agent/docs/google-drive-sync.md).
 
 ## Quick Start (Windows)
 

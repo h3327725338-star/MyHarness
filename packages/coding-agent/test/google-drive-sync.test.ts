@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readWebPrefs, writeWebPrefs } from "../src/config/web-prefs.ts";
 import { WorkspaceStore } from "../src/data/workspace-store.ts";
 import { ModeStateStore } from "../src/session/mode-state.ts";
+import { mergeBrowserText } from "../src/sync/browser-data.ts";
 import { detectExternalSyncRisk, SyncEngine } from "../src/sync/engine.ts";
 import { SyncService } from "../src/sync/service.ts";
 import { SyncLocalStore } from "../src/sync/store.ts";
@@ -816,6 +817,130 @@ describe("Google Drive sync engine", () => {
 		await sync(a, b);
 		expect(prefsOf(b.agentDir).prefs.savedPrompts).toEqual([]);
 		expect(prefsOf(b.agentDir).prefs.theme).toBe("light");
+	});
+
+	describe("built-in browser", () => {
+		const profile = (item: Device) => join(item.agentDir, "desktop-profile");
+		const writeProfile = (item: Device, name: string, value: unknown) => {
+			mkdirSync(profile(item), { recursive: true });
+			writeFileSync(
+				join(profile(item), name),
+				typeof value === "string" ? value : `${JSON.stringify(value, null, 2)}\n`,
+			);
+		};
+		const readProfile = (item: Device, name: string) => readFileSync(join(profile(item), name), "utf8");
+		const bookmark = (id: string, url: string, addedAt: string) => ({ id, title: id, url, addedAt });
+
+		it("combines the bookmarks both computers had and carries the site settings", async () => {
+			const drive = new FakeDrive();
+			const a = device(drive, "desktop", "device-a");
+			const b = device(drive, "laptop", "device-b");
+			const gmail = "https://mail.google.com/mail/u/0/";
+			writeProfile(a, "browser-bookmarks.json", {
+				version: 1,
+				bookmarks: [bookmark("a1", gmail, "2026-10-01T00:00:00.000Z")],
+			});
+			writeProfile(a, "browser-zoom.json", { version: 1, sites: { "a.example": 1.25 } });
+			writeProfile(b, "browser-bookmarks.json", {
+				version: 1,
+				bookmarks: [
+					bookmark("b1", "https://www.bilibili.com/", "2026-10-02T00:00:00.000Z"),
+					bookmark("b2", gmail, "2026-10-03T00:00:00.000Z"),
+				],
+			});
+			await sync(a, b, a, b);
+			const onA = readProfile(a, "browser-bookmarks.json");
+			expect(readProfile(b, "browser-bookmarks.json")).toBe(onA);
+			// The same page saved on both computers is kept once, as the one saved first; the order is the order added.
+			expect(JSON.parse(onA).bookmarks.map((item: { id: string }) => item.id)).toEqual(["a1", "b1"]);
+			expect(JSON.parse(readProfile(b, "browser-zoom.json")).sites).toEqual({ "a.example": 1.25 });
+			expect(a.engine.status().conflicts).toHaveLength(0);
+			expect(b.engine.status().conflicts).toHaveLength(0);
+
+			// Edited on both computers between two passes: both edits survive and both computers end with one list.
+			const both = JSON.parse(onA);
+			writeProfile(a, "browser-bookmarks.json", {
+				...both,
+				bookmarks: [...both.bookmarks, bookmark("a3", "https://a3.example/", "2026-10-05T00:00:00.000Z")],
+			});
+			writeProfile(b, "browser-bookmarks.json", {
+				...both,
+				bookmarks: [...both.bookmarks, bookmark("b3", "https://b3.example/", "2026-10-04T00:00:00.000Z")],
+			});
+			await sync(a, b, a, b);
+			const merged = readProfile(a, "browser-bookmarks.json");
+			expect(readProfile(b, "browser-bookmarks.json")).toBe(merged);
+			expect(JSON.parse(merged).bookmarks.map((item: { id: string }) => item.id)).toEqual(["a1", "b1", "b3", "a3"]);
+			expect(b.engine.status().conflicts).toHaveLength(0);
+		});
+
+		it("never removes a browser file from another computer, and passes a sealed vault on untouched", async () => {
+			const drive = new FakeDrive();
+			const a = device(drive, "desktop", "device-a");
+			const b = device(drive, "laptop", "device-b");
+			writeProfile(a, "browser-dark.json", { version: 1, mode: "on", sites: {} });
+			writeProfile(a, "browser-vault-0123456789abcdef.json", '{"version":1,"sealed":"opaque"}');
+			// Engine files of the profile are not browser data and stay where they are.
+			writeProfile(a, "Preferences", "{}");
+			await sync(a, b);
+			expect(readProfile(b, "browser-vault-0123456789abcdef.json")).toBe('{"version":1,"sealed":"opaque"}');
+			expect(existsSync(join(profile(b), "Preferences"))).toBe(false);
+			rmSync(join(profile(a), "browser-dark.json"));
+			await sync(a, b, a);
+			expect(JSON.parse(readProfile(b, "browser-dark.json")).mode).toBe("on");
+			expect(JSON.parse(readProfile(a, "browser-dark.json")).mode).toBe("on");
+		});
+
+		it("keeps one new-tab layout and adds the shortcuts only the other computer has", async () => {
+			const drive = new FakeDrive();
+			const a = device(drive, "desktop", "device-a");
+			const b = device(drive, "laptop", "device-b");
+			const site = (id: string, url: string) => ({ id, type: "site", title: id, url });
+			writeProfile(a, "browser-speed-dial.json", { version: 1, items: [site("s1", "https://one.example/")] });
+			await sync(a, b);
+			writeProfile(a, "browser-speed-dial.json", {
+				version: 1,
+				items: [site("s1", "https://one.example/"), site("s2", "https://two.example/")],
+			});
+			writeProfile(b, "browser-speed-dial.json", {
+				version: 1,
+				items: [site("s3", "https://three.example/"), site("s1", "https://one.example/")],
+			});
+			await sync(a, b, a, b);
+			const onA = readProfile(a, "browser-speed-dial.json");
+			expect(readProfile(b, "browser-speed-dial.json")).toBe(onA);
+			expect(
+				JSON.parse(onA)
+					.items.map((item: { id: string }) => item.id)
+					.sort(),
+			).toEqual(["s1", "s2", "s3"]);
+		});
+	});
+});
+
+describe("browser file merge", () => {
+	it("gives the same text whichever side is local, and a refusal on either side wins", () => {
+		const pairs: [string, unknown, unknown][] = [
+			["zoom", { version: 1, sites: { x: 1.1, y: 2 } }, { version: 1, sites: { x: 1.5, z: 0.9 } }],
+			["dark", { version: 1, mode: "on", sites: { x: "off" } }, { version: 1, mode: "auto", sites: { x: "on" } }],
+			["language", { version: 1, language: "zh-CN" }, { version: 1, language: "en-US" }],
+			[
+				"permissions",
+				{ version: 1, permissions: [{ origin: "https://a", permission: "media", allowed: true }] },
+				{ version: 1, permissions: [{ origin: "https://a", permission: "media", allowed: false }] },
+			],
+		];
+		for (const [id, left, right] of pairs) {
+			const l = JSON.stringify(left);
+			const r = JSON.stringify(right);
+			expect(mergeBrowserText(id, l, r)).toBe(mergeBrowserText(id, r, l));
+		}
+		const permissions = JSON.parse(
+			mergeBrowserText("permissions", JSON.stringify(pairs[3]![1]), JSON.stringify(pairs[3]![2]))!,
+		);
+		expect(permissions.permissions[0].allowed).toBe(false);
+		expect(mergeBrowserText("vault-0123456789abcdef", "{}", "{}")).toBeUndefined();
+		expect(mergeBrowserText("../settings", "{}", "{}")).toBeUndefined();
 	});
 });
 

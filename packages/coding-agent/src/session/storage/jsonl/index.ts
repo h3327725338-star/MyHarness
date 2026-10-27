@@ -1170,8 +1170,7 @@ async function listSessionFilesFromWorkspaceDir(
 		else missIndexes.push(i);
 		onProgress?.(i + 1, files.length);
 	}
-	// A high miss rate means the sidecar is stale: rebuild the whole workspace in one pass.
-	// Either way misses go through the existing incremental scan, which refreshes their rows.
+	// Every miss goes through the existing incremental scan, which refreshes its row.
 	const missFiles = missIndexes.map((i) => files[i]!);
 	// Progress keeps the same total as the hit loop: hits were already counted one by one.
 	let loaded = files.length - missFiles.length;
@@ -1665,7 +1664,8 @@ export function relocateSessionAttachments(
  * Move a Session file to a relocated cwd: write `targetFile` fully, then remove the source.
  * Same-file moves only rewrite. Throws when the target already exists unexpectedly.
  *
- * @returns `{ flushed: true }` on success; `warning` when the move succeeded but the old file survived.
+ * @returns `{ flushed: true }` on success; `warning` when the move succeeded but the old file survived or the
+ * attachment migration reported problems.
  */
 export function relocateSessionFile(options: RelocateSessionFileOptions): { flushed: boolean; warning?: string } {
 	const sourceResolved = resolvePath(options.sourceFile);

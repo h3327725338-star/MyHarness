@@ -25,6 +25,8 @@ Drive, have not been verified yet.
 | Coding-mode repository files, worktrees and build output | No |
 | General-mode drafts and the General personal prompt | Yes |
 | Saved prompts of the Web UI (Session panel → My prompts) | Yes, only that list; other Web UI preferences stay on each device |
+| Built-in browser (desktop app): bookmarks, new-tab shortcuts, site zoom, dark mode, website language, site permissions | Yes, as the desktop profile's own files |
+| Built-in browser: sign-ins (persistent cookies) and saved passwords | Only after the user sets a sync passphrase; sealed on the computer before upload |
 | Coding-mode chats, repositories, worktrees | No |
 | API keys, OAuth tokens, trust decisions, tool permissions, locks, running tasks | No |
 | Memory catalogs (`memory/index.json`, `memory/state.json`, `maintenance.*`), bridge descriptors and write locks | No |
@@ -36,6 +38,15 @@ device clears it on the others; retyping it afterwards is a newer version and is
 `<agentDir>/web-ui-prefs.json` with a newer `updatedAt` and keeps every other preference; open pages read it again on
 `sync_applied`. Devices running an older version ignore this record. Both devices changing the list before syncing is
 a conflict like any other non-chat record: the local list stays and the other one is kept as a copy.
+
+The built-in browser's data are records of kind `browser` (`src/sync/browser-data.ts`): each is one file of the desktop
+profile, `<agentDir>/desktop-profile` (`browser-bookmarks.json`, `browser-speed-dial.json`, `browser-zoom.json`,
+`browser-dark.json`, `browser-language.json`, `browser-permissions.json`), uploaded and written back exactly as the
+desktop stores keep them; the desktop host reloads a store when sync writes its file. No other file of that folder is
+scanned. Sign-ins and saved passwords travel only in `browser-vault-<id>.json`, one per computer, which the desktop host
+seals with AES-256-GCM under a key derived from the user's sync passphrase (Settings → Google Drive → Built-in browser); this
+side never sees the passphrase or anything inside the vault. How the desktop seals, imports and merges vaults is in
+`packages/desktop/README.md` ("Sync between computers"). Devices running an older version ignore these records.
 
 ## Setup
 
@@ -122,6 +133,14 @@ Each record has a stable key (`kind:id`) and a per-device version vector.
   detailed text. Overlapping body edits keep
   both blocks in a deterministic order, so every device computes the same text and the next pass converges without a
   review entry. Edits win over a concurrent deletion: the version that still has content is restored and re-published.
+- Concurrent edits of a built-in browser file, and the same file found on both computers before their first sync:
+  merged instead of kept apart. Bookmarks are joined by id, a page saved on both computers stays once (the one added
+  first) and the bar is ordered by when bookmarks were added; one whole new-tab layout is kept and the shortcuts only the
+  other layout has are added after it; zoom and dark mode join their per-site entries; a site permission refused on
+  either computer stays refused; a single value (dark mode, website language) is chosen by a fixed rule. The result is
+  the same whichever device merges, so both reach one text and the next pass converges. A browser file is never removed
+  because another device deleted it: the file here is published again past the deletion and the other device gets it
+  back. Vaults are written by one computer each and never merged.
 - Concurrent edits of an attachment or workspace: the local version stays in use and the other version is saved
   under `<agentDir>/sync/recovered/…`; the conflict is listed in Settings.
 - Delete vs edit: the deletion is not silently undone, but the edited content is kept as a recoverable copy.
@@ -423,6 +442,9 @@ All routes are local-only and use the same origin checks as the rest of the Web 
   in-memory Drive tests, only the read-only catch-up dry run described at the top was run against a real Drive.
 - Background sync stops when MyHarness quits and continues on the next start. Tray support and launch-at-login are not
   implemented, so after a reboot nothing uploads until MyHarness is opened.
+- Built-in browser sync was run between two profiles of one Electron process and with the in-memory Drive, not between two
+  physical computers through a real Drive. A vault is written again whenever its sign-ins changed (at most every 30
+  minutes while browsing), and Drive keeps every uploaded version as an object; old versions are not cleaned up.
 - Batches over 5000 operations written by another client are refused; this daemon never writes such a batch itself.
 - Conflicts for chats and drafts are kept for review but there is no “apply the other version” button yet; the copy
   path is shown. Memories no longer create review entries: they merge automatically.
@@ -472,6 +494,13 @@ npm.cmd --workspace packages/coding-agent run test -- test/google-drive-sync.tes
 npm.cmd --workspace packages/coding-agent run test -- test/google-drive-sync-catchup.test.ts
 npm.cmd --workspace packages/coding-agent run test -- test/workspace-file-sync.test.ts
 ```
+
+`test/google-drive-sync.test.ts` also covers the built-in browser: bookmarks both computers had are joined (a page
+saved on both stays once), concurrent edits on both sides survive and both computers end with one file, site settings
+arrive, a deleted browser file comes back instead of being removed elsewhere, a vault passes through byte for byte,
+other files of the desktop profile are not synced, one new-tab layout is kept with the other's shortcuts added, and the
+merge gives the same text whichever side is local (a permission refused on either side stays refused). The desktop side
+is checked by `packages/desktop/test/electron-browser-sync.e2e.cjs`.
 
 `test/google-drive-sync-catchup.test.ts` covers catching up: 3000 batches of lock markers and 30 versions of one file
 apply as one download of the newest version, with this computer's own lock marker untouched and the state written about

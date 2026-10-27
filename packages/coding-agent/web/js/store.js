@@ -30,7 +30,7 @@ import { readResponse } from "./http-transport.js";
 import { revealMode, reverseModeReveal } from "./mode-transition.js";
 
 import { validShortcuts } from "./shortcuts.js";
-import { normalizePanelTabs, PANEL_TAB_TYPES } from "./workspace-model.js";
+import { normalizePanelTabs, PANEL_TAB_TYPES, recentSectionTabs } from "./workspace-model.js";
 import { startInteraction, measureInteraction } from "./interaction-timing.js";
 
 const listeners = new Set();
@@ -202,11 +202,11 @@ export function slotUrl(url) {
 // panel, and coming back restores what was open there. The live values stay in `state.view` so every component keeps
 // reading them; this module remembers them per session and swaps them when the chat on screen changes. The panel width
 // and the collaboration layout stay the window's: a screen does not get narrower because another chat was on it.
-const PANEL_KEYS = ["panelOpen", "panelTab", "wsTabs", "wsActive", "wsClosed", "changesScope"];
+const PANEL_KEYS = ["panelOpen", "panelTab", "wsTabs", "wsActive", "wsRecent", "wsClosed", "changesScope"];
 const PANEL_STATES_MAX = 40;
 /** The panel of a conversation that has nothing open: where a new chat starts. */
 function emptyPanel() {
-	return { panelOpen: false, panelTab: "changes", wsTabs: [], wsActive: null, wsClosed: [], changesScope: "session" };
+	return { panelOpen: false, panelTab: "changes", wsTabs: [], wsActive: null, wsRecent: [], wsClosed: [], changesScope: "session" };
 }
 /** A saved panel of one conversation, with the tabs that cannot be shown any more dropped and the active one resolved. */
 function normalizePanel(value) {
@@ -223,6 +223,7 @@ function normalizePanel(value) {
 				: "changes",
 		wsTabs,
 		wsActive,
+		wsRecent: recentSectionTabs(source.wsRecent, wsTabs, wsActive),
 		// The restore-closed-tab list is a page-session convenience, not a conversation's saved layout.
 		wsClosed: [],
 		changesScope: source.changesScope === "worktree" ? "worktree" : "session",
@@ -276,6 +277,8 @@ export const state = {
 		/** The tabs of the chat on screen (panels, files, browser pages) and the active one; swapped with the chat. */
 		wsTabs: [],
 		wsActive: null,
+		/** The last active tab of each panel section, newest first, so going back to a section returns to where it was. */
+		wsRecent: [],
 		/** Tabs closed in this page session, newest last ("restore closed tab"). */
 		wsClosed: [],
 		/** Changes panel scope of this chat: its own saved edits, or the folder's working tree. */
@@ -323,6 +326,8 @@ export const state = {
 		wsTabIconsOnly: prefs.wsTabIconsOnly === true,
 		/** Site icons of website tabs by origin, as the desktop host reported them (not saved: they come back on load). */
 		browserIcons: {},
+		/** Sound of website tabs by tab id ({ audible, muted }), as the desktop host reports it (not saved). */
+		browserAudio: {},
 		cmd: null,
 	},
 };
@@ -409,7 +414,13 @@ function withNewBrowserTabIds(panel) {
 		if (!ids.has(tab.id)) ids.set(tab.id, `browser:${uid("b")}`);
 		return { ...tab, id: ids.get(tab.id) };
 	};
-	return { ...panel, wsTabs: panel.wsTabs.map(renew), wsClosed: (panel.wsClosed ?? []).map(renew), wsActive: ids.get(panel.wsActive) ?? panel.wsActive };
+	return {
+		...panel,
+		wsTabs: panel.wsTabs.map(renew),
+		wsClosed: (panel.wsClosed ?? []).map(renew),
+		wsActive: ids.get(panel.wsActive) ?? panel.wsActive,
+		wsRecent: (panel.wsRecent ?? []).map((id) => ids.get(id) ?? id),
+	};
 }
 
 /** The session whose panel is on screen: its tabs are the live `state.view` values. */
@@ -429,7 +440,9 @@ export function storedPanel(sessionId) {
 export function saveStoredPanel(sessionId, panel) {
 	if (!sessionId || sessionId === panelKey) return;
 	panelStates.delete(sessionId);
-	if (panel.wsTabs.length > 0 || panel.panelOpen) panelStates.set(sessionId, panel);
+	// A tab the Agent brought to the front there is also the one its section of the panel goes back to.
+	if (panel.wsTabs.length > 0 || panel.panelOpen)
+		panelStates.set(sessionId, { ...panel, wsRecent: recentSectionTabs(panel.wsRecent, panel.wsTabs, panel.wsActive) });
 	while (panelStates.size > PANEL_STATES_MAX) panelStates.delete(panelStates.keys().next().value);
 	persistView();
 }
@@ -531,6 +544,11 @@ export function setView(patch) {
 	const colorThemes = { ...state.view.colorThemes };
 	if (Object.hasOwn(patch, "colorTheme")) colorThemes[mode] = colorThemeOf(patch.colorTheme);
 	state.view = { ...state.view, ...patch, colorThemes, colorTheme: colorThemes[mode] };
+	// Each section of the panel remembers its own last tab: the navigation row goes back to it.
+	if (patch.wsActive !== undefined || patch.wsTabs !== undefined) {
+		const recent = recentSectionTabs(state.view.wsRecent, state.view.wsTabs, state.view.wsActive);
+		if (JSON.stringify(recent) !== JSON.stringify(state.view.wsRecent ?? [])) state.view.wsRecent = recent;
+	}
 	persistView();
 	emit();
 }

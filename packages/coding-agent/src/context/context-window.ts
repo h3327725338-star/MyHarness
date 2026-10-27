@@ -11,7 +11,7 @@ export interface ContextWindowSettings {
 	subagent?: number;
 }
 
-/** Binary-token presets shown in /settings. */
+/** Binary-token presets (32K to 1M). No UI lists them; the Web settings page takes a free-form value. */
 export const CONTEXT_WINDOW_PRESETS = [32 * 1024, 64 * 1024, 128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024] as const;
 
 /** Normal compaction is deliberately independent from provider output safety. */

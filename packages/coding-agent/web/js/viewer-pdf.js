@@ -120,7 +120,7 @@ function OutlineItems({ items, onGo, depth = 0 }) {
 
 /**
  * `bar(tools)` renders the file bar of the tab with the PDF controls inside it, so the tab has a single toolbar.
- * `onFailed` hands the tab back to the generic fallback (download / open outside) when pdf.js cannot open the file.
+ * `fallback(message)` renders the generic fallback (download / open outside) in the tab when pdf.js cannot open the file.
  */
 export function PdfViewer({ url, path, bar, fallback }) {
 	const stage = useRef(null);

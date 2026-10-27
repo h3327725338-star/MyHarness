@@ -1,7 +1,7 @@
 /**
  * Office documents in the workspace.
  *
- * Editing: an ONLYOFFICE Docs server the user runs (Settings → Tools → Office editing server; not bundled with
+ * Editing: an ONLYOFFICE Docs server the user runs (Settings → Files & Office → Office editing server; not bundled with
  * MyHarness). A file tab asks for an editing session; the session gets a random token, and the document server reads
  * the file from `/api/office/file/<token>` and reports saves to `/api/office/callback/<token>` (the only POST route
  * that is reachable without the Web UI header, because a document server cannot send it; the unguessable token and,

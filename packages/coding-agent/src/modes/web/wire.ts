@@ -116,7 +116,7 @@ export interface WireAttachment {
 	name: string;
 }
 
-/** Header the composer prepends to the message text for non-image uploads. */
+/** Header POST /api/prompt prepends to the message text for the composer's non-image uploads (`attachments`). */
 export const ATTACH_HEADER = "Attached files (use read to inspect):";
 
 /** Display name of an uploaded file: the basename without the server's `attachment-` prefix. */
@@ -127,7 +127,7 @@ export function attachmentName(path: string): string {
 }
 
 /**
- * Split the composer's attachment header off the message text. Historical messages keep the header as plain
+ * Split the attachment header off the message text. Historical messages keep the header as plain
  * text (`"path"` JSON lines under it); the transcript renders `attachments` as cards and `body` as Markdown.
  * Unknown lines stop the header so model/user text is never eaten. Missing/odd input yields no attachments.
  */

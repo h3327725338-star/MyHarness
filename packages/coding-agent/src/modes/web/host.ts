@@ -4,8 +4,9 @@
  * Lifecycle contract: it owns no Agent logic. It subscribes to `AgentSession` events,
  * forwards them to browsers, and runs the post-run completion steps (final change
  * detection, Git checkpoint lifecycle, Auto Memory) through the existing runtime
- * functions. `AgentSession` owns the task order (`agent_end` -> completion ->
- * `agent_settled`); this host only reacts to those events and never reimplements them.
+ * functions. `AgentSession` owns the task order (`agent_end` -> its own settling ->
+ * `agent_settled`); this host only reacts to those events (its completion steps start
+ * when `agent_settled` arrives) and never reimplements them.
  */
 
 import { existsSync } from "node:fs";
@@ -356,7 +357,7 @@ export class WebHost {
 	/** Usage/`usage` push deferred while a reply streams so it rides the next 50ms assistant wave. */
 	private usageDirty = false;
 	private usageTimer: ReturnType<typeof setTimeout> | undefined;
-	/** Output tokens per second of the model, from real streamed output (see generation-speed.ts). */
+	/** Output tokens per second, from the provider-reported output and request duration (see generation-speed.ts). */
 	private speed = new GenerationSpeedMeter();
 	private speedChanged = false;
 	private lastMeterBroadcastAt = 0;
@@ -855,8 +856,8 @@ export class WebHost {
 	 * "Desktop popup when a task ends": the setting shared with the terminal UI, with the same switch and the same
 	 * outcomes (completed, failed, interrupted). A page that is open shows it as a browser notification, which can
 	 * bring its own tab forward, and answers that it did. When no page is open, when every open page answers that its
-	 * browser will not show notifications, or when no answer comes in time, the system popup of the terminal UI is
-	 * shown instead, so the notification never depends on a permission the browser may not have given.
+	 * browser will not show notifications, or when no answer comes in time, the system popup is shown instead, so
+	 * the notification never depends on a permission the browser may not have given.
 	 */
 	private announceTaskEnd(state: RunStateSnapshot): void {
 		// The process that runs a mirrored session shows its own task-end popup.
@@ -1329,7 +1330,7 @@ export class WebHost {
 
 	private forwardEntryAppended(entry: SessionEntry): void {
 		// A persisted write changes the branch the next transcript reads: drop the projection eagerly.
-		// (The per-request id-sequence check in transcript() would refuse the stale cache anyway.)
+		// (The per-request entry-reference check in transcript() would refuse the stale cache anyway.)
 		this.transcriptCache.invalidate();
 		if (entry.type === "message") {
 			// A persisted user message announces itself here so the Web UI can back-fill the entry id its edit
@@ -1743,7 +1744,7 @@ export class WebHost {
 	}
 
 	/**
-	 * Full-branch wire projection with reuse (P0-2). The cache validates the exact entry-id sequence on every
+	 * Full-branch wire projection with reuse (P0-2). The cache validates the exact entry references on every
 	 * call, so it never serves another branch or a stale prefix; writes invalidate it eagerly on
 	 * `entry_appended` and on session rebind. Only persisted data is cached: live run/completion state keeps
 	 * coming from `AgentSession` in `snapshot()` on every call.

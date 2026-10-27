@@ -5,7 +5,7 @@
 // Files pasted with Ctrl+V join the box's own file list exactly like paperclip picks: they reach the input's attachment
 // list only when "Save quote" runs them through the composer's import pipeline, and cancelling drops them the same way.
 // "Translate" sits in the same bubble and also appears for text selected anywhere else in the app (a file preview, a
-// panel): it opens a card with the translation by the helper model of Settings → Agents → Translation. A previewed HTML
+// panel): it opens a card with the translation by the helper model of Settings → Agent → Assistants → Translation. A previewed HTML
 // page is a sandboxed frame of its own: the selection bridge html-preview.ts puts into it reports its selections here.
 // The page could post such reports itself, so their bubble stays inside the frame and needs the user's input there.
 import { html, useEffect, useMemo, useRef, useState, Icon } from "./ui.js";

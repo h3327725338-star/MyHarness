@@ -7,9 +7,10 @@
  * - a bounded estimated-bytes budget over all idle (non-busy, non-primary) slots, most-recently-touched first;
  * - a higher hard count cap as a fallback, so small chats benefit without unbounded runtime growth.
  *
- * Never evicted: the slot a request just opened or created (`keep`), the primary slot, and any busy slot
- * (running task, pending completion, open Git operation, waiting dialog, or an unread finished result whose
- * sidebar marker must not vanish unseen). Eviction only releases idle runtimes via the hub's `closeSlot`.
+ * Never evicted: the slot a request just opened or created (`keep`), the primary slot, a slot created in the last
+ * 30 seconds, and any busy slot (running task, pending completion, open or background Git operation, waiting
+ * dialog, or an unread finished result whose sidebar marker must not vanish unseen). Eviction only releases idle
+ * runtimes via the hub's `closeSlot`.
  *
  * Sizes are heuristics from data visible inside `modes/web/` (entry counts, cached projection size, on-disk
  * session file size, recorded runs), not measured heap: they rank slots and cap growth, they do not report real
@@ -101,8 +102,9 @@ export interface IdleEvictionPlan {
 
 /**
  * Pure eviction decision over evictable idle slots (same-slot `keepId` and primaries already excluded by the
- * caller passing them as kept, or flagged primary). Candidates are ordered most-recently-touched first; the
- * longest prefix that fits both the byte budget and the count cap is kept, the rest is evicted oldest-first.
+ * caller passing them as kept, or flagged primary). Candidates are ordered most-recently-touched first and
+ * walked in that order: a slot is kept while the kept group still fits both the byte budget and the count cap,
+ * otherwise it is evicted; the evictions are returned oldest-first.
  * A candidate that alone exceeds the budget still keeps its place when it is the most recent one (budgets
  * bound the group, they never close the chat the user just opened).
  */

@@ -18,7 +18,7 @@
 | --- | --- | --- | --- |
 | `agent/` | `AgentSession` 生命周期与运行状态、runtime/sdk、delegation（含后台任务登记）、vision | 复用 AgentSession/runtime；不把展示层 I/O 放进 Agent runtime；板块规则放回各领域目录，`AgentSession` 只编排 | session lifecycle、后台 Explore、delegation/vision |
 | `application/` | 跨领域 use-case（位于 `use-cases/` 下）、`ResourceLoader`、WorkspaceStore facade；`use-cases/git-push.ts` 编排显式 Push、remote 验证和 CI 验收；`use-cases/git-workspace.ts` 提供提交前的仓库与检查点检查 | 只编排领域模块；持久化实现留在 `data/`/`session/`；不把 Push 细节塞进展示层 | 跨 Git/Provider/Session/Workspace 的流程 |
-| `bun/` | Bun CLI、Bedrock 注册、sandbox 恢复 | Bun-specific 适配不反向污染普通 Node CLI | Bun 编译和运行时兼容 |
+| `bun/` | Bun 编译入口（`web.ts`）、Bedrock 注册、sandbox 恢复 | Bun-specific 适配不反向污染普通 Node CLI | Bun 编译和运行时兼容 |
 | `startup/` | Web 启动参数、帮助、文件输入、trust、浏览器 slash commands、设置表与延迟启动维护（`deferred-maintenance.ts`） | 不复制 domain/runtime 业务 | Web 启动参数与命令协议 |
 | `config/` | paths、SettingsManager、settings storage/migration、Project Trust | 配置格式、路径和信任语义集中管理 | settings、paths、trust、config migration |
 | `context/` | context item、budget/window/policy、project context、diff/presentation、compaction（含一次压缩的执行与会话树导航） | 压缩和过滤独立于具体展示组件；遵守 Agent role policy | 新上下文来源、预算和压缩策略 |
@@ -32,7 +32,7 @@
 | `prompts/` | 用户/项目 prompt templates 的发现、frontmatter、去重和 diagnostics | 与固定 system prompt 分离；保留 sourceInfo/diagnostics | prompt template loader/parser |
 | `providers/` | credentials、model config/registry、model store、recovery、`ModelRuntime`、会话的模型与 Thinking 切换（`runtime/session-model.ts`） | credential 脱敏；Provider runtime 不下沉到展示层 | Provider/model/credential/recovery |
 | `session/` | Session 类型、JSONL storage、projection、manager、migration | Session schema/version/migration/容错集中管理；UI 不直接写文件 | Session schema、storage、projection、migration |
-| `sync/` | Google Drive 同步：协议与版本向量（`types.ts`）、本机状态（`store.ts`）、扫描（`scope.ts`）、应用/合并（`apply.ts`）、引擎（`engine.ts`）、OAuth 与 Drive 客户端（`google.ts`）、Web 服务入口（`service.ts`） | 只同步数据含义，不整目录复制；删除显式表达；冲突保留两版；令牌只落本机；不触发模型或命令执行 | 新同步实体、Drive 传输、合并策略与后台调度 |
+| `sync/` | Google Drive 同步：协议与版本向量（`types.ts`）、本机状态（`store.ts`）、扫描（`scope.ts`）、应用/合并（`apply.ts`）、引擎（`engine.ts`）、OAuth 与 Drive 客户端（`google.ts`）、Web 服务入口（`service.ts`）、内置浏览器的配置文件与合并规则（`browser-data.ts`） | 只同步数据含义，不整目录复制；删除显式表达；冲突保留两版；令牌只落本机；不触发模型或命令执行 | 新同步实体、Drive 传输、合并策略与后台调度 |
 | `skills/` | SKILL.md 发现、frontmatter、ignore、sourceInfo、diagnostics；`/skill:名称` 展开与 skill 块解析 | 遵守 Trust/ResourceLoader；只负责发现、解析和展开 | skill loader、collision 和排序 |
 | `symbols/` | semantic router、LSP、semantic backend、language server、store、runtime、language helpers | 保持 protocol、semantic、router、store 分层；以 `api.ts` 和 `language.ts` 为出口。Symbols 工具由 `codeIntelligence.symbolsEnabled` 控制且默认关闭；语言服务器模块仍按语言由 `runtime-manifest.json` 管理 | 新 semantic/LSP capability 或 runtime integration |
 | `system-prompts/` | AI prompt loader 边界和 Coding Agent composer；组合 role/context/skills/tools | 固定文本在仓库资源，组合在 composer，项目资源走 loader | system prompt 内容/loader/composer |

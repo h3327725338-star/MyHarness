@@ -19,7 +19,7 @@ MyHarness 是一个 Windows 桌面 AI 编程工作区。Electron 外壳启动只
 - **双模式、同一后端**：Coding 模式在代码仓库里工作；General 模式处理查资料、写作和日常任务，带工作区指令、工作区记忆与资料库。聊天列表、草稿和配色按模式各自保存。
 - **agent 能驱动的内置浏览器**：右侧面板是真实 Chromium 标签（桌面端为 `WebContentsView`，共用一个持久分区，重启后登录态还在）；`workspace` 工具可以导航、点击、打字、读页面或无障碍树、执行页面脚本、截图、下载文件、查看网络请求。
 - **多智能体协作**：`agent`（前台与后台批次）、`workflow`（分阶段）、`ultracode`（多轮覆盖）三种派发，配三层活动条、可单独/全部停止和明确的结束状态；主 agent 可用 `agent_tasks` 列出并停止自己的派发。
-- **逐角色绑模型**：设置 → 智能体里给每个角色单独选 Provider、模型和思考档位——主模型、子智能体、Auto Memory、对话命名、压缩、分支摘要、交接摘要、提交描述、副本命名、翻译、视觉分析，以及备用模型。留空的角色继承主模型。
+- **逐角色绑模型**：主模型在输入框的模型菜单里选；设置 → 智能体里给每个辅助角色单独选 Provider、模型和思考档位——子智能体、Auto Memory、对话命名、压缩、分支摘要、交接摘要、提交描述、副本命名、翻译、视觉分析，以及备用模型。选“使用主模型”的角色跟随主对话的模型和思考档位；备用模型选它表示不启用备用。
 - **可选能力**：Web Search（优先 Google/Bing，可选 Tavily API 与浏览器兜底）、TypeScript extensions、skills 和 prompt templates。
 
 源码和状态文档会把“已经实现的 contract”“已经加载的运行时配置”和“依赖机器或凭据的验证结果”分开记录。
@@ -54,7 +54,7 @@ $env:NEBIUS_TOKEN_FACTORY_API_KEY = "<your-token-factory-key>"
 .\dev-desktop.cmd
 ```
 
-也可以在 `/settings` → **Providers** → **创建自定义 Provider** 中创建：Base URL 填 `https://api.tokenfactory.nebius.com/v1/`，API type 选 OpenAI Chat Completions。三个模型都声明 `text` 输入，并把 MyHarness 的 thinking 档位映射到 `reasoning_effort`（`off` → `none`，其余同名）。
+也可以在设置 → **Providers** → **添加 Provider** 中创建：Base URL 填 `https://api.tokenfactory.nebius.com/v1/`，API type 选 OpenAI Chat Completions。三个纯文本模型声明 `text` 输入，并把 MyHarness 的 thinking 档位映射到 `reasoning_effort`（`off` → `none`，其余同名）；Super-VL 声明 `text` 和 `image` 输入，没有 thinking 档位映射。
 
 - 完整配置、验证步骤和限制：[NVIDIA Nemotron on Nebius Token Factory](packages/coding-agent/docs/nebius-token-factory.md)。
 - 可直接复制的配置：[`examples/nebius-models.json`](packages/coding-agent/docs/examples/nebius-models.json)。
@@ -63,10 +63,10 @@ $env:NEBIUS_TOKEN_FACTORY_API_KEY = "<your-token-factory-key>"
 
 - 常驻用户画像（`global/用户画像`）每一轮都发送，不参与“是否命中本轮问题”的排序；召回预算分层（画像位、目录位、动态卡片位），画像再大也挤不掉其它上下文。
 - 三层记忆（全局、工作区、会话）加归档和待确认区，配套 search / read / write / delete / claim 工具。后台维护会把新材料压进画像、合并相近条目，不需要逐条确认。
-- 直连 Google Drive API 同步：全部记忆层（含归档、待确认条目、画像）、General 模式的工作区与聊天（含分支和交接摘要）、会话附件与产物、资料库、草稿和各模式个性提示词。
+- 直连 Google Drive API 同步：全部记忆层（含归档、待确认条目、画像）、General 模式的工作区与聊天（含分支和交接摘要）、会话附件与产物、资料库、草稿、General 模式的个性提示词、我的提示词，以及内置浏览器的书签、新标签页快捷方式和网站设置；浏览器的登录状态和已存密码只有设置了同步口令才会同步，上传前先在本机用口令加密。
 - 不同步：API key、OAuth token、信任决定、工具权限、锁、运行中的任务、Coding 模式的聊天与仓库，以及其它 Web 偏好。
 - 合并用的是稳定 key 加按设备的版本向量：记忆按与双方最后一致版本的差异做三方合并，聊天按 entry id 合并所以两条分支都保留，合不了的冲突保留本地版本、把对方存成可恢复副本并列在设置里。Drive 传来的数据不能授予项目信任、不能执行命令。
-- 边界：这是对 Drive API 的真实实现，但自动化测试用的是内存传输，尚未在真实双机 Google 账号上跑通。退出应用后同步停止，且没有端到端加密。详见 [Google Drive sync](packages/coding-agent/docs/google-drive-sync.md)。
+- 边界：这是对 Drive API 的真实实现，但自动化测试用的是内存传输，尚未在真实双机 Google 账号上跑通。退出应用后同步停止，除了浏览器加密的登录数据外没有端到端加密。详见 [Google Drive sync](packages/coding-agent/docs/google-drive-sync.md)。
 
 ## Quick Start（Windows）
 

@@ -1,4 +1,4 @@
-const { WebContentsView, session, Menu, shell, app, ipcMain, safeStorage, nativeImage } = require('electron');
+const { BrowserWindow, WebContentsView, session, Menu, shell, app, ipcMain, safeStorage, nativeImage } = require('electron');
 // Absolute paths: the tests compile this file outside the normal module loader, where a relative require would not
 // resolve against this folder.
 const { createBookmarkStore } = require(require('node:path').join(__dirname, 'browser-bookmarks.cjs'));
@@ -10,6 +10,7 @@ const page = require(require('node:path').join(__dirname, 'browser-page-helpers.
 const { attachZoom, cleanZoom, createSiteZoomStore, stepZoom } = require(require('node:path').join(__dirname, 'zoom.cjs'));
 const dark = require(require('node:path').join(__dirname, 'browser-dark.cjs'));
 const { acceptLanguage, createLanguageStore, languageList } = require(require('node:path').join(__dirname, 'browser-language.cjs'));
+const { createBrowserSync } = require(require('node:path').join(__dirname, 'browser-sync.cjs'));
 const { INTERACTIVE_QUERY } = page;
 
 exports.httpUrl = (value) => {
@@ -69,7 +70,7 @@ const AGENT_VIEWPORT = { width: 1280, height: 800 };
 // A clicked control whose text or link names a download or a file: the click waits a few seconds for a download to start.
 const DOWNLOAD_HINT = /download|下载|下載|\.(pdf|docx?|xlsx?|pptx?|csv|txt|zip|rar|7z|gz|png|jpe?g|gif|mp3|mp4|mov|apk|exe|msi)\b/i;
 // Agent commands that read or act on a page's layout; each keeps the tab awake first.
-const AGENT_TAB_ACTIONS = new Set(['snapshot', 'mouse', 'keys', 'insertText', 'exec', 'ax', 'dom', 'interactive', 'click', 'type', 'text', 'scroll', 'find', 'upload', 'login', 'download', 'locate', 'wait']);
+const AGENT_TAB_ACTIONS = new Set(['snapshot', 'read', 'mouse', 'keys', 'insertText', 'exec', 'ax', 'dom', 'interactive', 'click', 'type', 'text', 'scroll', 'find', 'upload', 'login', 'download', 'locate', 'wait']);
 
 /** Whether `candidate` is the same as, or inside, `root` (Windows paths are case-insensitive). */
 const insideRoot = (root, candidate) => {
@@ -131,7 +132,7 @@ exports.createBrowser = (window, log, options = {}) => {
   const emit = (tabId, value) => send({ tabId, ...value });
   const partition = session.fromPartition(PARTITION);
   // Bookmarks and saved logins belong to this desktop profile (`options.profileDir`, the host's user-data folder),
-  // never to the Data root: they are not synced and not part of any workspace. A host without a profile has neither.
+  // never to the Data root or any workspace; browser sync (browser-sync.cjs) carries them. A host without a profile has neither.
   const profileDir = options.profileDir ? require('node:path').resolve(options.profileDir) : undefined;
   const bookmarks = profileDir ? createBookmarkStore(require('node:path').join(profileDir, 'browser-bookmarks.json')) : undefined;
   // Zoom of each website, by host (Ctrl + "+" / "-" / 0 or Ctrl + wheel inside a tab, or the toolbar's zoom badge).
@@ -414,16 +415,47 @@ exports.createBrowser = (window, log, options = {}) => {
     if (!tab.destroyed) emit(tab.id, { type: 'dark', ...darkState(tab) });
   };
   const syncDarkAll = () => { for (const tab of tabs.values()) void syncDark(tab); };
+
+  // ---- Sync between the user's computers (browser-sync.cjs) ----------------------------------------------------------
+  // Drive sync writes a store's file: the store reads it again and the open tabs and the page follow.
+  const browserSync = profileDir && safeStorage
+    ? createBrowserSync({
+      profileDir,
+      partition,
+      passwords,
+      safeStorage,
+      log,
+      stores: {
+        'browser-bookmarks.json': () => { if (bookmarks) { bookmarks.reload(); bookmarksChanged(bookmarks.list()); } },
+        'browser-speed-dial.json': () => { if (speedDial) { speedDial.reload(); speedDialChanged(speedDial.list()); } },
+        'browser-zoom.json': () => {
+          siteZoom.reload();
+          for (const tab of tabs.values()) if (tab.url) setTabZoom(tab, siteZoom.get(tab.url), false);
+        },
+        'browser-dark.json': () => { darkStore.reload(); syncDarkAll(); },
+        'browser-language.json': () => {
+          const before = siteLanguage.get();
+          const language = siteLanguage.reload();
+          if (language !== before) for (const tab of tabs.values()) emit(tab.id, { type: 'language', language });
+        },
+        'browser-permissions.json': () => permissionDecisions.reload(),
+      },
+    })
+    : undefined;
+  const requireSync = (context) => {
+    if (context.agent) throw new Error('浏览器同步只能由用户在设置里打开或关闭');
+    if (!browserSync) throw new Error('当前桌面宿主不支持浏览器同步');
+    return browserSync;
+  };
   if (ipcMain) {
-    // The engine in a tab reads cross-origin stylesheets and images through this (see browser-tab-preload.cjs).
-    // Asked by a tab's preload as its document starts (before the first paint): the canvas rules when the page will be
-    // dark. Synchronous on purpose, it costs one round trip and is the only way to beat the first paint.
     // Asked by a tab's preload as its document starts: navigator.languages for the chosen language (null: the engine's).
     ipcMain.removeAllListeners('mh-browser:languages');
     ipcMain.on('mh-browser:languages', (event) => {
       const language = tabFor(event.sender) ? siteLanguage.get() : '';
       event.returnValue = language ? languageList(language) : null;
     });
+    // Asked by a tab's preload as its document starts (before the first paint): the canvas rules when the page will be
+    // dark. Synchronous on purpose, it costs one round trip and is the only way to beat the first paint.
     ipcMain.removeAllListeners('mh-browser:dark-early');
     ipcMain.on('mh-browser:dark-early', (event, url) => {
       const tab = tabFor(event.sender);
@@ -431,6 +463,7 @@ exports.createBrowser = (window, log, options = {}) => {
       try { wanted = !!tab && !tab.destroyed && darkStore.wanted(String(url || ''), appDark); } catch { wanted = false; }
       event.returnValue = wanted ? darkCanvas() : '';
     });
+    // The engine in a tab reads cross-origin stylesheets and images through this (see browser-tab-preload.cjs).
     ipcMain.removeHandler('mh-browser:dark-fetch');
     ipcMain.handle('mh-browser:dark-fetch', (event, url) => {
       const tab = tabFor(event.sender);
@@ -438,7 +471,7 @@ exports.createBrowser = (window, log, options = {}) => {
       return dark.darkFetch(partition, url);
     });
     // Selection translation in a page (see browser-tab-preload.cjs): the app's own service translates, with the model of
-    // Settings → Agents → Translation. Only a site tab may ask; the card takes the app's colors.
+    // Settings → Agent → Assistants → Translation. Only a site tab may ask; the card takes the app's colors.
     ipcMain.removeHandler('mh-browser:translate-look');
     // British / American pronunciation for the card when Windows has no voice of that accent: the bytes of the
     // service's dictionary voice (GET /api/translate/voice), at most 1 MB.
@@ -607,6 +640,9 @@ exports.createBrowser = (window, log, options = {}) => {
       ...darkState(tab),
       // The language websites are told the user reads ('' : the engine's default).
       language: siteLanguage.get(),
+      // Sound: whether the page is playing any now, and whether the tab is muted (an Agent's tab starts muted).
+      audible: !!contents?.isCurrentlyAudible?.(),
+      muted: !!contents?.isAudioMuted?.(),
       canGoBack: !!history?.canGoBack?.(),
       canGoForward: !!history?.canGoForward?.(),
       visible: tab.view?.getVisible?.() ?? false,
@@ -767,7 +803,8 @@ exports.createBrowser = (window, log, options = {}) => {
         action: 'allow',
         outlivesOpener: true,
         createWindow: (options) => {
-          const created = createTab(target, undefined, options.webContents);
+          // A popup of a muted tab (one the Agent opened) stays as quiet as its opener.
+          const created = createTab(target, undefined, options.webContents, { muted: contents.isAudioMuted?.() === true });
           created.openerId = tab.id;
           emit(tab.id, { type: 'newTab', newTabId: created.id, url: target });
           return created.view.webContents;
@@ -820,8 +857,12 @@ exports.createBrowser = (window, log, options = {}) => {
       commit(tab, { url: target, error: '' });
     });
     contents.on('page-favicon-updated', (_event, favicons) => { if (live()) tab.favicon = Array.isArray(favicons) ? favicons[0] : undefined; });
-    contents.on('did-navigate-in-page', (_event, target) => {
-      if (!live()) return;
+    // The tab strip shows a speaker while the page plays sound (or is muted), so the panel hears of every change.
+    contents.on('audio-state-changed', () => { if (live()) commit(tab, {}); });
+    contents.on('did-navigate-in-page', (_event, target, isMainFrame) => {
+      // A frame inside the page (Gmail's side panel, an embedded player) moving within itself is not the tab's address:
+      // taking it made the address bar, a bookmark of it and a reload open that bare frame page.
+      if (!live() || isMainFrame === false) return;
       // An in-page navigation can resolve (or start) a challenge without a new load: follow the title it leaves behind.
       let challenge = false;
       try { challenge = VERIFY_PAGE.test(contents.getTitle() || ''); } catch { /* view is going away */ }
@@ -909,7 +950,7 @@ exports.createBrowser = (window, log, options = {}) => {
    * `adopted` is the contents the engine made for a page's popup (it inherits the opener's preferences, partition and
    * preload). Such a tab is loaded by the engine itself, and closing itself (`window.close()` after a sign-in) closes it.
    */
-  const createTab = (initialUrl, forcedId, adopted) => {
+  const createTab = (initialUrl, forcedId, adopted, options = {}) => {
     if (tabs.size >= MAX_TABS) throw new Error(`最多同时打开 ${MAX_TABS} 个浏览器标签`);
     const id = forcedId && !tabs.has(forcedId) ? String(forcedId) : `tab${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     // The sign-in helper runs in the page's isolated world and only when saved logins are available on this host.
@@ -925,6 +966,8 @@ exports.createBrowser = (window, log, options = {}) => {
     try { view.setBounds({ x: 0, y: 0, ...backgroundViewport() }); } catch { /* view is going away */ }
     view.setVisible(false);
     paintViewBackground(tab);
+    // A tab opened for the Agent plays nothing aloud until the user turns its sound on (the speaker on its tab).
+    if (options.muted === true) view.webContents.setAudioMuted(true);
     window.contentView.addChildView(view);
     wire(tab);
     if (adopted) {
@@ -1610,6 +1653,72 @@ exports.createBrowser = (window, log, options = {}) => {
     return list;
   };
 
+  const bounded = (number, low, high, fallback) => (Number.isFinite(Number(number)) ? Math.max(low, Math.min(high, Math.round(Number(number)))) : fallback);
+  /** What a `read` / `readUrl` command asks pageRead for, within bounds. */
+  const readOptions = (value) => ({
+    selector: typeof value.selector === 'string' && value.selector ? value.selector : undefined,
+    scroll: value.scroll === true,
+    restore: value.restore === true,
+    maxScrolls: bounded(value.maxScrolls, 1, 80, 20),
+    settleMs: bounded(value.settleMs, 100, 3000, 600),
+    maxChars: bounded(value.maxChars, 200, 200000, 40000),
+    links: value.links === true,
+    maxLinks: bounded(value.maxLinks, 1, 2000, 300),
+    tables: value.tables === true,
+    maxTables: bounded(value.maxTables, 1, 20, 5),
+    maxRows: bounded(value.maxRows, 1, 500, 100),
+  });
+
+  /** Reader pages open at once (readAddress); more wait for a free one. */
+  const READERS_MAX = 6;
+  let readersOpen = 0;
+  const readerQueue = [];
+  /**
+   * Read an address in a reader page of its own: an off-screen rendering page in the tabs' session (the user's
+   * sign-ins), muted, without dialogs or popups, never part of the workspace, closed when the reading is done. Unlike a
+   * hidden tab it draws frames, so a page that loads while it scrolls (scroll handlers, IntersectionObserver, lazy
+   * images) behaves as it does on screen. A load that takes longer than `timeoutMs` is read as far as it got.
+   */
+  const readAddress = async (value) => {
+    const url = exports.httpUrl(value.url);
+    if (readersOpen >= READERS_MAX) await new Promise((resolve) => readerQueue.push(resolve));
+    readersOpen++;
+    const reader = new BrowserWindow({
+      show: false,
+      width: AGENT_VIEWPORT.width,
+      height: AGENT_VIEWPORT.height,
+      webPreferences: { offscreen: true, session: partition, sandbox: true, contextIsolation: true, nodeIntegration: false, disableDialogs: true, backgroundThrottling: false },
+    });
+    const contents = reader.webContents;
+    try {
+      contents.setAudioMuted(true);
+      contents.setFrameRate(15);
+      contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+      contents.on('will-navigate', (event, target) => { try { exports.httpUrl(target); } catch { event.preventDefault(); } });
+      const timeoutMs = bounded(value.timeoutMs, 3000, 60000, 25000);
+      let timer;
+      const loaded = contents.loadURL(url, { userAgent: setAgent(contents, url) }).catch((error) => {
+        // A page that sends itself elsewhere aborts the first load; the page it went to is what gets read.
+        if (!/ERR_ABORTED|\(-3\)/.test(String(error?.message))) throw error;
+      });
+      await Promise.race([loaded, new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); })]).finally(() => clearTimeout(timer));
+      await new Promise((resolve) => setTimeout(resolve, bounded(value.settleMs, 100, 3000, 600)));
+      const reading = await contents.executeJavaScript(page.inPage(page.pageRead, readOptions(value)), true);
+      return reading && typeof reading === 'object' ? reading : { ok: false, error: '阅读页没有返回内容' };
+    } finally {
+      // The page closes before its window: an off-screen page whose window is already gone crashes Electron's
+      // webContents.getFocusedWebContents() (used by menu roles such as Copy) until the page itself is destroyed.
+      if (!contents.isDestroyed()) {
+        const gone = new Promise((resolve) => { contents.once('destroyed', resolve); setTimeout(resolve, 2000); });
+        try { contents.close(); } catch { /* already closing */ }
+        await gone;
+      }
+      try { if (!reader.isDestroyed()) reader.destroy(); } catch { /* already gone */ }
+      readersOpen--;
+      readerQueue.shift()?.();
+    }
+  };
+
   /**
    * One browser command. `context.agent` marks a command from the Agent's workspace tool: before it reads or acts on a
    * tab, that tab is kept awake (a background tab would otherwise ignore its input).
@@ -1626,7 +1735,7 @@ exports.createBrowser = (window, log, options = {}) => {
         // The page owns the tab id (`browser:<url>`); the host view is created under that id so both sides agree, and a
         // later `ensure` from the panel finds the same tab instead of opening another one.
         const existing = value.tabId ? tabs.get(value.tabId) : undefined;
-        const target = existing || createTab(value.url ? exports.httpUrl(value.url) : '', value.tabId);
+        const target = existing || createTab(value.url ? exports.httpUrl(value.url) : '', value.tabId, undefined, { muted: value.muted === true });
         activeTabId = target.id;
         // A new tab starts hidden until the page reports where its box is; an old rectangle must not place it.
         rectangle = cleanRect(value.rect);
@@ -1642,7 +1751,9 @@ exports.createBrowser = (window, log, options = {}) => {
         const existing = value.tabId ? tabs.get(value.tabId) : undefined;
         if (existing) return stateOf(existing);
         if (typeof value.url !== 'string' || !value.url) throw new Error('ensure 需要 url 才能创建标签');
-        const created = createTab(exports.httpUrl(value.url), value.tabId);
+        const created = createTab(exports.httpUrl(value.url), value.tabId, undefined, { muted: value.muted === true });
+        // A tab the Agent opens to work in loads at full speed even though nobody looks at it.
+        if (context.agent === true) keepAwake(created);
         return { ...stateOf(created), created: true };
       }
       case 'activate': {
@@ -1734,6 +1845,13 @@ exports.createBrowser = (window, log, options = {}) => {
       case 'forward': { const target = requireTab(value.tabId); contentsOf(target).navigationHistory.goForward(); return { ok: true }; }
       case 'reload': { const target = requireTab(value.tabId); contentsOf(target).reload(); return { ok: true }; }
       case 'stop': { const target = requireTab(value.tabId); contentsOf(target).stop(); return { ok: true }; }
+      case 'mute': {
+        // The speaker on a website tab (or the Agent): sound on or off for this tab only.
+        const target = requireTab(value.tabId);
+        contentsOf(target).setAudioMuted(value.muted === true);
+        commit(target, {});
+        return stateOf(target);
+      }
       case 'darkMode': {
         // From the app page: whether it is dark and its colors (for "auto"), and/or a new general `mode`.
         if (typeof value.appDark === 'boolean') appDark = value.appDark;
@@ -1771,6 +1889,13 @@ exports.createBrowser = (window, log, options = {}) => {
         if (typeof value.text !== 'string') throw new Error('find 需要 text 字符串');
         if (value.text.length > 500) throw new Error('find 的文本超过 500 个字符');
         const tab = requireTab(value.tabId);
+        if (context.agent === true) {
+          // The Agent only needs where the words are. The engine's own find would focus the page (taking the keyboard
+          // from whatever the user is typing in) and highlight matches on a page the user may be reading.
+          const hits = await runInPage(tab, page.inPage(page.pageFindText, { text: value.text, limit: 200, matchCase: value.matchCase === true })).catch(() => null);
+          const list = Array.isArray(hits) ? hits : [];
+          return { ok: true, text: value.text, matches: list.length, activeMatch: list.length ? 1 : 0, ...(list.length >= 200 ? { more: true } : {}), elements: list.slice(0, 10) };
+        }
         const result = await findInTab(tab, value.text, {
           forward: value.forward !== false,
           findNext: value.findNext === true,
@@ -1837,6 +1962,15 @@ exports.createBrowser = (window, log, options = {}) => {
         const target = requireTab(value.tabId);
         return { result: await runInPage(target, 'document.body ? document.body.innerText.slice(0, 100000) : ""') };
       }
+      case 'read': {
+        // The whole page in one call: text without repeated lines, optionally after scrolling to the end so lazily
+        // loaded parts are read too, plus links and tables on request (browser-page-helpers.cjs pageRead).
+        const target = requireTab(value.tabId);
+        keepAwake(target);
+        return runInPage(target, page.inPage(page.pageRead, readOptions(value)));
+      }
+      case 'readUrl':
+        return readAddress(value);
       case 'downloads': {
         // Finished downloads and the ones still running, so a long download is visible while it happens.
         const running = [...tabs.values()].flatMap((tab) => [...tab.downloads.values()].map((entry) => ({ ...entry.record, state: 'progressing' })));
@@ -1876,6 +2010,15 @@ exports.createBrowser = (window, log, options = {}) => {
         return scrollTab(requireTab(value.tabId), value);
       case 'external':
         return shell.openExternal(exports.httpUrl(value.url));
+      // Settings → Google Drive → Built-in browser: sign-ins and saved passwords, sealed with the user's sync passphrase (browser-sync.cjs).
+      case 'syncStatus':
+        return browserSync ? browserSync.status() : { available: false, on: false };
+      case 'syncPassphrase':
+        return requireSync(context).setPassphrase(value.passphrase);
+      case 'syncOff':
+        return requireSync(context).turnOff();
+      case 'syncNow':
+        return requireSync(context).syncNow();
       case 'bookmarks':
         return { bookmarks: requireBookmarks().list() };
       case 'bookmark-add': {
@@ -1934,6 +2077,7 @@ exports.createBrowser = (window, log, options = {}) => {
     refresh: () => placeActive(),
     hide: () => hideAll(),
     destroy: () => {
+      browserSync?.dispose();
       for (const tab of [...tabs.values()]) destroyTab(tab);
       activeTabId = null;
       rectangle = null;

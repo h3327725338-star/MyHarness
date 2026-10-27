@@ -11,7 +11,7 @@
  * - 模型和思考级别管理
  * - 压缩（手动和自动）
  * - Bash 执行
- * - 会话切换与分支创建
+ * - 会话树内导航与分支摘要（`navigateTree()`；新建、fork、切换会话由 `AgentSessionRuntime` 完成）
  *
  * 各运行模式使用此类，并在其上添加自己的 I/O 层。
  */
@@ -266,7 +266,7 @@ export interface AgentSessionConfig {
 	cwd: string;
 	/** Optional protection step that must succeed before a new agent run starts. */
 	beforeAgentRun?: () => Promise<void>;
-	/** Models to cycle through with Ctrl+P (from --models flag) */
+	/** Models to cycle through with cycleModel() (from the --models flag or the enabledModels setting) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 	/** Resource loader for extensions, skills, prompts, themes, context files, and system prompt */
 	resourceLoader: ResourceLoader;
@@ -295,7 +295,7 @@ export interface AgentSessionConfig {
 	extensionRunnerRef?: { current?: ExtensionRunner };
 	/** Session start event metadata emitted when extensions bind to this runtime. */
 	sessionStartEvent?: SessionStartEvent;
-	/** Optional per-process override used by delegated child sessions. */
+	/** Optional per-process override, set by the --context-window flag and by delegated child sessions. */
 	contextWindowOverride?: number;
 }
 
@@ -607,8 +607,9 @@ export class AgentSession {
 			isDisposed: () => this._disposed,
 			onChange: (state) => this._emit({ type: "run_state_changed", state }),
 		});
-		// The settings gate for the built-in tools a switch can take away (currently `symbols`): read once
-		// here, so switching it does not touch a running session and only takes effect for a new one.
+		// The settings gate for the built-in tools a switch can take away (currently `symbols` and `apply_rename`,
+		// both behind the Code Intelligence symbols switch): read once here, so switching it does not touch a
+		// running session and only takes effect for a new one.
 		const isBuiltinConfigured = (name: string): boolean =>
 			!isGatedBuiltinToolName(name) || this.settingsManager.getCodeIntelligenceSettings().symbolsEnabled;
 		const initialActiveToolNames =
@@ -675,7 +676,7 @@ export class AgentSession {
 			},
 			workflow: workflowToolOptions,
 			ultracode: workflowToolOptions,
-			// Only the terminal UI has a person who can pass a CAPTCHA in Firefox.
+			// Only the Web UI has a person who can pass a CAPTCHA in Firefox.
 			interactiveChallenges: () => this._extensionMode === "web",
 		});
 		this._contextCoordinator = new AgentSessionContextCoordinator({
@@ -892,7 +893,7 @@ export class AgentSession {
 		await this._traceCoordinator.finish();
 	}
 
-	/** Internal trace writer used by Workflow and Auto Review integrations. */
+	/** Internal trace writer of this session; the Workflow and sub-agent tools receive the same writer. */
 	getRuntimeTrace(): RuntimeTrace {
 		return this._traceCoordinator.writer;
 	}
@@ -914,7 +915,7 @@ export class AgentSession {
 		return this._traceCoordinator.activeScope;
 	}
 
-	/** Last settled run scope, used to link post-run Auto Review to its parent. */
+	/** Scope of the last settled run (kept after the run ends; nothing in src/ reads it today). */
 	getLastTraceScope(): RuntimeTraceScope | undefined {
 		return this._traceCoordinator.lastScope;
 	}
@@ -1036,8 +1037,8 @@ export class AgentSession {
 				(turn.toolResults.length > 0 || this.agent.hasQueuedMessages()) &&
 				turn.message.stopReason !== "error" &&
 				turn.message.stopReason !== "aborted";
-			// Hard gate: throws ContextBudgetBlockedError only when neither normal
-			// compaction nor a bounded request view can fit the provider budget.
+			// Hard gate: throws ContextBudgetBlockedError when compaction cannot bring the
+			// request within the provider budget (see AgentSessionContextCoordinator.ensure).
 			const result = resumeAfterCompaction
 				? await this._ensureContextBudget([], undefined, true)
 				: { status: "ok" as const, snapshot: this._buildContextBudgetSnapshot() };
@@ -1082,7 +1083,7 @@ export class AgentSession {
 	// Unified Run State (host-visible projection)
 	// =========================================================================
 
-	/** JSON-safe snapshot of the current run state, consumed by SDK, JSON, and UI hosts. */
+	/** JSON-safe snapshot of the current run state, consumed by SDK and Web hosts. */
 	getRunStateSnapshot(): RunStateSnapshot {
 		return this._runStateTracker.snapshot();
 	}
@@ -1213,8 +1214,8 @@ export class AgentSession {
 
 	/**
 	 * Extract long-term memory once from the finalized current branch.
-	 * Interactive mode calls this after Auto Review so internal review/fix turns
-	 * do not enqueue duplicate extraction jobs.
+	 * Nothing in src/ calls this today: the Web host schedules maintenance through
+	 * scheduleAutoMemoryMaintenance() after a successful task.
 	 */
 	async runAutoMemoryExtraction(): Promise<boolean> {
 		return this._autoMemory.runExtraction(this.sessionManager.getBranch());
@@ -1252,8 +1253,8 @@ export class AgentSession {
 	}
 
 	/**
-	 * 任务结束但未验证通过（PARTIAL / FAIL / ABORTED + 保留当前修改，或 startup
-	 * recovery 选择保留）：关闭 checkpoint（进入 retained 终态），保证下一次独立
+	 * 任务结束但未验证通过（失败任务没有改动、用户在撤销决策里选择保留当前修改，
+	 * 或 startup recovery 选择保留）：关闭 checkpoint（进入 retained 终态），保证下一次独立
 	 * 用户任务会创建全新的 checkpoint，而不是继续复用旧检查点。
 	 * 不表示验证通过（与 completeGitCheckpointAfterVerification 区分）。
 	 *
@@ -1489,7 +1490,7 @@ export class AgentSession {
 
 	/**
 	 * Temporarily disconnect from agent events.
-	 * User listeners are preserved and will receive events again after resubscribe().
+	 * User listeners are preserved and will receive events again after _reconnectToAgent().
 	 * Used internally during operations that need to pause event processing.
 	 */
 	private _disconnectFromAgent(): void {
@@ -1698,9 +1699,10 @@ export class AgentSession {
 	}
 
 	/**
-	 * Whether a built-in tool controlled by a settings switch (currently only `symbols`) exists in this
-	 * session. Answers from the value saved when the session was built: the switch takes effect after a
-	 * restart, so saving a new value does not change an existing session.
+	 * Whether a built-in tool controlled by a settings switch (currently `symbols` and `apply_rename`, behind
+	 * the same Code Intelligence switch) exists in this session. Answers from the value saved when the session
+	 * was built: the switch takes effect after a restart, so saving a new value does not change an existing
+	 * session.
 	 */
 	isBuiltinEnabled(toolName: string): boolean {
 		return this._tools.isBuiltinEnabled(toolName);
@@ -1779,7 +1781,7 @@ export class AgentSession {
 		return this.sessionManager.getSessionName();
 	}
 
-	/** Scoped models for cycling (from --models flag) */
+	/** Scoped models for cycling (from the --models flag or the enabledModels setting) */
 	get scopedModels(): ReadonlyArray<{ model: Model<any>; thinkingLevel?: ThinkingLevel }> {
 		return this._models.scopedModels;
 	}
@@ -2306,10 +2308,11 @@ export class AgentSession {
 
 	/**
 	 * The model finished answering while background Explore batches are still running. Their results belong to this
-	 * task, so it stays open (settling would cancel them) until each batch has reported back: the result arrives as a
-	 * queued steering message, and the caller runs one more turn on it. "continue": such a continuation (or a message
-	 * from the user) is waiting. "stopped": the user stopped the task while it waited. "none": nothing to wait for, or
-	 * everything came back without a queued message (a discarded result); the task settles as usual.
+	 * task, so it stays open (settling first would deliver them later as a separate turn) until each batch has
+	 * reported back: the result arrives as a queued steering message, and the caller runs one more turn on it.
+	 * "continue": such a continuation (or a message from the user) is waiting. "stopped": the user stopped the task
+	 * while it waited. "none": nothing to wait for, or everything came back without a queued message (a discarded
+	 * result); the task settles as usual.
 	 */
 	private async _holdForBackgroundExplore(): Promise<"none" | "continue" | "stopped"> {
 		if (this._backgroundWork.runningExploreCount === 0) return "none";
@@ -2745,7 +2748,8 @@ export class AgentSession {
 	/**
 	 * Send a custom message to the session. Creates a CustomMessageEntry.
 	 *
-	 * Handles three cases:
+	 * Handles four cases:
+	 * - deliverAs "nextTurn" (streaming or not): held and attached to the next user prompt as context
 	 * - Streaming: queues message, processed when loop pulls from queue
 	 * - Not streaming + triggerTurn: appends to state/session, starts new turn
 	 * - Not streaming + no trigger: appends to state/session, no turn
@@ -2768,7 +2772,7 @@ export class AgentSession {
 			display: message.display,
 			details: message.details,
 			timestamp: Date.now(),
-			// 板块 5：中间 Cycle 报告不进 LLM context（convertToLlm 运行时检查该字段）。
+			// excludeFromContext：消息照常持久化和显示，但不进 LLM context（convertToLlm 运行时检查该字段）。
 			...(message.excludeFromContext ? { excludeFromContext: true } : {}),
 		} satisfies CustomMessage<T> & { excludeFromContext?: boolean };
 		if (options?.deliverAs === "nextTurn") {
@@ -2985,7 +2989,8 @@ export class AgentSession {
 
 	/**
 	 * Cycle to next/previous model.
-	 * Uses scoped models (from --models flag) if available, otherwise all available models.
+	 * Uses scoped models (from the --models flag or the enabledModels setting) if available, otherwise all available
+	 * models.
 	 * @param direction - "forward" (default) or "backward"
 	 * @returns The new model info, or undefined if only one model available
 	 */
@@ -3172,16 +3177,20 @@ export class AgentSession {
 	}
 
 	/**
-	 * Check if compaction is needed and run it.
-	 * Called after agent_end and before prompt submission.
+	 * Post-turn compaction check. Called from _handlePostAgentRun after the last assistant message of a run
+	 * (its only caller in src/ uses the default for skipAbortedCheck).
 	 *
 	 * Two cases:
-	 * 1. Overflow: LLM returned context overflow error, remove error message from agent state, compact, auto-retry
-	 * 2. Threshold: Context over threshold after an Agent Loop has already ended;
-	 *    in-loop threshold compaction is handled by prepareNextTurnWithContext.
+	 * 1. Overflow: the message overflowed the context window. It is only recorded on the context coordinator
+	 *    (the next input's budget check then compacts); nothing is removed, compacted or retried here.
+	 * 2. Threshold: only with skipAbortedCheck = false and a non-error message, compact when the budget snapshot
+	 *    says so; in-loop threshold compaction is handled by prepareNextTurnWithContext.
+	 *
+	 * Always resolves false: it never asks the caller to continue the agent.
 	 *
 	 * @param assistantMessage The assistant message to check
-	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
+	 * @param skipAbortedCheck If true (default), return right after the overflow recording; false also runs the
+	 *   threshold case
 	 */
 	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
 		// Normal request overflow ends the turn in Codex; the next input may compact.
@@ -3204,9 +3213,9 @@ export class AgentSession {
 		}
 		this._contextCoordinator.setAutoCompactionFailure(undefined);
 		const settings = this._getRuntimeCompactionSettings();
-		// An in-loop threshold compaction folds the completed turn so the new
-		// checkpoint is the next provider-visible user message. Overflow recovery
-		// and pre-prompt compaction retain their protocol/history tail unchanged.
+		// Whatever the reason, the runner summarizes the whole active context and collapses it into one
+		// checkpoint (SessionCompactionRunner appends the entry with collapseToCheckpoint), which becomes
+		// the next provider-visible user message.
 		let started = false;
 		let shouldContinue = false;
 		let completionEvent: Extract<AgentSessionEvent, { type: "compaction_end" }> | undefined;
@@ -3332,7 +3341,7 @@ export class AgentSession {
 				this._endOperation(operationId);
 			}
 		}
-		// Include messages queued by compaction_end listeners after the lock was released.
+		// Include messages queued by compaction_end listeners after the auto-compaction controller was cleared.
 		return shouldContinue || this.agent.hasQueuedMessages();
 	}
 
@@ -4026,7 +4035,6 @@ export class AgentSession {
 
 	/**
 	 * Get text content of last assistant message.
-	 * Useful for /copy command.
 	 * @returns Text content, or undefined if no assistant message exists
 	 */
 	getLastAssistantText(): string | undefined {

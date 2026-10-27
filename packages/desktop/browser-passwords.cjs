@@ -4,6 +4,9 @@ const { randomUUID } = require('node:crypto');
 
 const MAX_ENTRIES = 1000;
 const MAX_FIELD = 1024;
+// A login removed here is remembered this long, so another computer's copy (browser-sync.cjs) cannot bring it back.
+const REMOVED_KEEP_MS = 90 * 24 * 60 * 60 * 1000;
+const MAX_REMOVED = 1000;
 
 const writeAtomic = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -27,12 +30,15 @@ exports.credentialOrigin = (value) => {
  * Saved site logins of the built-in browser. The whole file is one blob encrypted with the operating system's per-user
  * key (Electron `safeStorage`, DPAPI on Windows): neither the passwords nor the user names nor the sites are readable
  * in the file, and another Windows user or another machine cannot decrypt it. Without OS encryption nothing is saved.
- * The file lives in the desktop host's user-data folder, outside the Data root, so it never takes part in Drive sync.
+ * The file lives in the desktop host's user-data folder, outside the Data root; it never leaves this computer. Browser
+ * sync (browser-sync.cjs) carries the logins only inside a vault sealed with the user's sync passphrase.
  *
  * `crypto` is `{ available(), encrypt(text) -> Buffer, decrypt(Buffer) -> text }`.
  */
 exports.createPasswordStore = ({ file, crypto }) => {
   let cache = null;
+  // Logins the user removed: { origin, username, at } (browser sync only; kept inside the same encrypted blob).
+  let removed = [];
   // A file this user cannot decrypt (another account, a reset key) is never overwritten: it may still be recoverable.
   let unreadable = false;
   const load = () => {
@@ -47,6 +53,9 @@ exports.createPasswordStore = ({ file, crypto }) => {
       cache = (Array.isArray(inner?.entries) ? inner.entries : []).filter(
         (entry) => entry && typeof entry.id === 'string' && typeof entry.origin === 'string' && typeof entry.username === 'string' && typeof entry.password === 'string',
       );
+      removed = (Array.isArray(inner?.removed) ? inner.removed : []).filter(
+        (entry) => entry && typeof entry.origin === 'string' && typeof entry.username === 'string' && typeof entry.at === 'string',
+      );
     } catch {
       unreadable = true;
       cache = [];
@@ -56,7 +65,9 @@ exports.createPasswordStore = ({ file, crypto }) => {
   const persist = (entries) => {
     if (!crypto.available()) throw new Error('系统加密不可用，未保存密码');
     if (unreadable) throw new Error('已保存的密码文件无法用当前 Windows 账户解密，未覆盖它');
-    const data = crypto.encrypt(JSON.stringify({ entries })).toString('base64');
+    const now = Date.now();
+    removed = removed.filter((entry) => now - Date.parse(entry.at) < REMOVED_KEEP_MS).slice(-MAX_REMOVED);
+    const data = crypto.encrypt(JSON.stringify({ entries, removed })).toString('base64');
     writeAtomic(file, `${JSON.stringify({ version: 1, data })}\n`);
     cache = entries;
   };
@@ -108,9 +119,57 @@ exports.createPasswordStore = ({ file, crypto }) => {
     },
     remove(id) {
       const entries = load();
-      if (!entries.some((entry) => entry.id === id)) throw new Error('这个已保存的登录已不存在');
+      const found = entries.find((entry) => entry.id === id);
+      if (!found) throw new Error('这个已保存的登录已不存在');
+      removed = [...removed.filter((entry) => entry.origin !== found.origin || entry.username !== found.username), { origin: found.origin, username: found.username, at: new Date().toISOString() }];
       persist(entries.filter((entry) => entry.id !== id));
       return { ok: true };
+    },
+    /** Everything browser sync seals: the logins with their passwords, and the logins removed here. */
+    syncEntries() {
+      const entries = load().map(({ origin, username, password, createdAt, updatedAt }) => ({ origin, username, password, createdAt, updatedAt }));
+      return { entries: entries.sort((a, b) => a.origin.localeCompare(b.origin) || a.username.localeCompare(b.username)), removed: removed.map((entry) => ({ ...entry })) };
+    },
+    /**
+     * Take another computer's logins: the newer password of the same site and user name wins, and a login removed on
+     * either computer after it last changed is removed. Returns how many logins changed here.
+     */
+    mergeEntries(remote) {
+      if (!crypto.available()) return 0;
+      let entries = load();
+      if (unreadable) return 0;
+      const sameLogin = (a, b) => a.origin === b.origin && a.username === b.username;
+      const newer = (a, b) => String(a || '') > String(b || '');
+      let changed = 0;
+      for (const gone of Array.isArray(remote?.removed) ? remote.removed : []) {
+        if (typeof gone?.origin !== 'string' || typeof gone?.username !== 'string' || typeof gone?.at !== 'string') continue;
+        const here = entries.find((entry) => sameLogin(entry, gone));
+        if (here && !newer(here.updatedAt, gone.at)) {
+          entries = entries.filter((entry) => entry !== here);
+          changed += 1;
+        }
+        const known = removed.find((entry) => sameLogin(entry, gone));
+        if (!known) removed = [...removed, { origin: gone.origin, username: gone.username, at: gone.at }];
+        else if (newer(gone.at, known.at)) known.at = gone.at;
+      }
+      for (const login of Array.isArray(remote?.entries) ? remote.entries : []) {
+        if (typeof login?.origin !== 'string' || typeof login?.username !== 'string' || typeof login?.password !== 'string' || !login.password) continue;
+        if (login.password.length > MAX_FIELD || login.username.length > MAX_FIELD) continue;
+        const gone = removed.find((entry) => sameLogin(entry, login));
+        if (gone && !newer(login.updatedAt, gone.at)) continue;
+        const here = entries.find((entry) => sameLogin(entry, login));
+        if (here) {
+          if (here.password === login.password || !newer(login.updatedAt, here.updatedAt)) continue;
+          entries = entries.map((entry) => (entry === here ? { ...here, password: login.password, updatedAt: login.updatedAt } : entry));
+        } else {
+          if (entries.length >= MAX_ENTRIES) continue;
+          const at = typeof login.updatedAt === 'string' ? login.updatedAt : new Date().toISOString();
+          entries = [...entries, { id: randomUUID(), origin: login.origin, username: login.username, password: login.password, createdAt: login.createdAt || at, updatedAt: at, usedAt: at }];
+        }
+        changed += 1;
+      }
+      if (changed) persist(entries);
+      return changed;
     },
   };
 };

@@ -2,8 +2,10 @@
 // files (text, code, PDF, image, media, Office) and any number of website tabs (each backed by a real browser view in
 // the desktop host). Every tab keeps its own state; opening something new activates or adds a tab instead of replacing
 // what is already there. The strip scrolls when the tabs do not fit, can be reordered by dragging, and remembers the
-// open tabs in the page preferences.
-import { COLLAPSE_MS, html, Icon, motionEnabled, useEffect, useLayoutEffect, useRef, useState } from "./ui.js";
+// open tabs in the page preferences. The panel's first row (`PanelNav`) holds every section: Changes, Files, Terminal,
+// Session and, set apart, the browser. A strip of tabs is the second row and lists only the tabs of the section on
+// screen (website tabs, or the file list and the open files), so the browser never mixes with the files and panels.
+import { COLLAPSE_MS, html, Icon, Menu, MenuItem, MenuSep, motionEnabled, useEffect, useLayoutEffect, useRef, useState } from "./ui.js";
 import { t } from "./i18n.js";
 import { workspaceTabHint, workspaceTabTitle } from "./workspace-model.js";
 
@@ -13,6 +15,7 @@ export {
 	PANEL_TAB_TYPES,
 	workspaceTabHint,
 	workspaceTabId,
+	workspaceTabSection,
 	workspaceTabTitle,
 } from "./workspace-model.js";
 
@@ -24,6 +27,112 @@ const TYPE_ICONS = {
 	browser: "globe",
 	file: "file",
 };
+
+const NAV_SECTIONS = [
+	["changes", "fileDiff", "Changes"],
+	["files", "folder", "Files"],
+	["terminal", "terminal", "Terminal"],
+	["context", "layers", "Session"],
+];
+
+/**
+ * The panel's navigation row: every section is one click away, and the browser sits after a divider as a place of its
+ * own. The tabs of the section on screen (`children`: website tabs, or the file list and open files) come after the
+ * divider in the same row; the section names then fold to icons to make room, as they do in a narrow panel (the names
+ * stay in the tooltips). In the browser its tabs take the place of the browser entry.
+ */
+export function PanelNav({ section, browser = true, onShow, children = null, fold = "", onRestore = null }) {
+	const item = (value, icon, label) => {
+		const on = section === value;
+		return html`<button type="button" role="tab" class=${`ws-nav-btn ${on ? "active" : ""}`} aria-selected=${on} title=${label} aria-label=${label}
+			onClick=${() => onShow(value)}><${Icon} name=${icon} size=${15} /><span class="ws-nav-label">${label}</span></button>`;
+	};
+	const sep = html`<span class="ws-nav-sep" aria-hidden="true" />`;
+	const browserHere = section === "browser" && children;
+	if (fold === "tight") {
+		// Too narrow for every section side by side: one button names the section on screen and lists the others (and
+		// the restore of a closed tab), so the tabs of that section keep their room and nothing is drawn over anything.
+		const sections = [...NAV_SECTIONS, ...(browser ? [["browser", "globe", "Browser"]] : [])];
+		const current = sections.find(([value]) => value === section) || sections[0];
+		return html`<div class=${`ws-nav tight ${children ? "compact" : ""}`} role="tablist" aria-label=${t("Panel")}>
+			<${Menu} trigger=${({ toggle, open }) => html`<button type="button" class=${`ws-nav-btn ws-nav-menu ${open ? "open" : ""}`} aria-haspopup="menu" aria-expanded=${open}
+				title=${t(current[2])} aria-label=${t("Panel sections: {name}", { name: t(current[2]) })} onClick=${toggle}><${Icon} name=${current[1]} size=${15} /><${Icon} name="chevronDown" size=${11} class="ws-nav-caret" /></button>`}>
+				${(close) => html`${sections.map(([value, icon, label]) => html`<${MenuItem} icon=${icon} label=${t(label)} active=${section === value} onClick=${() => {
+					close();
+					onShow(value);
+				}} />`)}
+				${onRestore ? html`<${MenuSep} /><${MenuItem} icon="undo" label=${t("Restore closed tab")} onClick=${() => {
+					close();
+					onRestore();
+				}} />` : null}`}
+			<//>
+			${children ? html`${sep}<div class="ws-nav-strip">${children}</div>` : null}
+		</div>`;
+	}
+	return html`<div class=${`ws-nav ${children ? "compact" : ""} ${fold === "icons" ? "icons" : ""}`} role="tablist" aria-label=${t("Panel")}>
+		${NAV_SECTIONS.map(([value, icon, label]) => item(value, icon, t(label)))}
+		${browserHere ? html`${sep}<div class="ws-nav-strip">${children}</div>` : null}
+		${!browserHere && browser ? html`${sep}${item("browser", "globe", t("Browser"))}` : null}
+		${!browserHere && children ? html`${sep}<div class="ws-nav-strip">${children}</div>` : null}
+	</div>`;
+}
+
+/** The narrowest a tab of the row may get before the row is "tight" (the smallest width of a tab at rest). */
+const TAB_ROOM = 72;
+
+/**
+ * How much the panel head (`headRef`) has to fold its row so nothing runs under anything: "" (section names shown),
+ * "icons" (the names fold into their icons) or "tight" (the sections fold into one menu, PanelNav `fold`). The row is
+ * too wide when the section buttons run past their box or the section's tabs get less than TAB_ROOM. The width each
+ * fuller step needed is remembered, so the row unfolds only once that step fits and never flips back and forth at the
+ * edge; a change of what the row holds (`signature`) measures the full row again before it is painted. Names that are
+ * still folding count as gone, so a measurement in the middle of that motion does not fold the row further.
+ */
+export function useRowFold(headRef, signature) {
+	const [fold, setFold] = useState("");
+	const needs = useRef({ full: 0, icons: 0 });
+	const measure = () => {
+		const head = headRef.current;
+		if (!head) return;
+		const style = getComputedStyle(head);
+		const room = head.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+		if (fold === "tight") {
+			if (room >= needs.current.icons) setFold("icons");
+			return;
+		}
+		const nav = head.querySelector(".ws-nav");
+		const strip = nav?.querySelector(".ws-tabs");
+		const over = nav ? Math.max(0, nav.scrollWidth - nav.clientWidth) : 0;
+		const short = strip && strip.childElementCount > 0 ? Math.max(0, TAB_ROOM - strip.clientWidth) : 0;
+		let names = 0;
+		for (const label of nav?.querySelectorAll(".ws-nav-label") ?? []) names += label.getBoundingClientRect().width + parseFloat(getComputedStyle(label).marginLeft || "0");
+		const missing = over + short;
+		if (fold === "") {
+			if (missing <= 0.5) return;
+			needs.current.full = room + missing;
+			needs.current.icons = room + Math.max(0, missing - names);
+			setFold(missing - names > 0.5 ? "tight" : "icons");
+			return;
+		}
+		// "icons": the names may still be folding; what they hold now is room that is about to be free.
+		if (missing - names > 0.5) {
+			needs.current.icons = room + missing - names;
+			setFold("tight");
+		} else if (room >= needs.current.full) setFold("");
+	};
+	useLayoutEffect(() => {
+		if (fold) setFold("");
+	}, [signature]);
+	useLayoutEffect(measure);
+	useEffect(() => {
+		const head = headRef.current;
+		if (!head || typeof ResizeObserver === "undefined") return undefined;
+		const observer = new ResizeObserver(() => measure());
+		observer.observe(head);
+		return () => observer.disconnect();
+	}, [fold]);
+	return fold;
+}
 
 /** A tab unfolds from its left edge and folds away with the same motion; the enter flag is cleared after it. */
 const ENTER_MS = COLLAPSE_MS + 20;
@@ -51,7 +160,12 @@ function TabIcon({ tab, icons }) {
  * Drag a tab onto another to move it there; the order is the user's and is saved with the rest of the workspace. With
  * `iconsOnly`, website tabs show only their site icon (the title stays in the tooltip), the way pinned tabs look.
  */
-export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthers, onMove, iconsOnly = false, icons = null, onToggleIconsOnly = null }) {
+export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthers, onMove, iconsOnly = false, icons = null, onToggleIconsOnly = null, titleFor = null, closable = null, audio = null, onToggleMute = null }) {
+	// A strip may name a tab its own way (the file list next to the open files) and keep a tab without a close button.
+	const titleOf = (tab) => titleFor?.(tab) || workspaceTabTitle(tab);
+	const canClose = (tab) => !closable || closable(tab);
+	// A website tab's sound: { audible, muted } from the desktop host, else the tab's own saved `muted`.
+	const soundOf = (tab) => (tab.type !== "browser" || !onToggleMute ? null : (audio?.[tab.id] ?? (tab.muted === true ? { audible: false, muted: true } : null)));
 	const strip = useRef(null);
 	const [dragging, setDragging] = useState(null);
 	const [menu, setMenu] = useState(null);
@@ -124,10 +238,36 @@ export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthe
 		window.addEventListener("pointerdown", close, true);
 		return () => window.removeEventListener("pointerdown", close, true);
 	}, []);
+	// Also once a new tab has finished growing: tabs at rest keep a smallest width, so the strip can get wider then.
 	useEffect(() => {
 		const element = strip.current?.querySelector(".ws-tab.active");
 		element?.scrollIntoView({ block: "nearest", inline: "nearest" });
-	}, [activeId, tabs.length]);
+	}, [activeId, tabs.length, entering.size === 0]);
+	// An edge fades only while tabs are hidden past it; a strip that shows everything has crisp edges.
+	useEffect(() => {
+		const element = strip.current;
+		if (!element) return undefined;
+		const mark = () => {
+			const right = element.scrollLeft + element.clientWidth < element.scrollWidth - 1;
+			const left = element.scrollLeft > 1;
+			if (right !== element.hasAttribute("data-more-right")) element.toggleAttribute("data-more-right", right);
+			if (left !== element.hasAttribute("data-more-left")) element.toggleAttribute("data-more-left", left);
+		};
+		mark();
+		element.addEventListener("scroll", mark, { passive: true });
+		// A strip that gets narrower (the panel resized, the section names folded) keeps the active tab in view.
+		const resized = () => {
+			element.querySelector(".ws-tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+			mark();
+		};
+		const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resized);
+		observer?.observe(element);
+		for (const child of element.children) observer?.observe(child);
+		return () => {
+			element.removeEventListener("scroll", mark);
+			observer?.disconnect();
+		};
+	}, [signature]);
 	const drop = (event, target) => {
 		event.preventDefault();
 		const from = dragging;
@@ -186,19 +326,19 @@ export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthe
 			ref=${isLeaving ? (element) => foldAway(element, width) : entering.has(tab.id) ? growIn : null}>
 			<div role="tab" tabindex=${isLeaving ? -1 : 0} draggable=${!isLeaving}
 			aria-hidden=${isLeaving ? "true" : null}
-			aria-label=${iconsOnly && tab.type === "browser" ? workspaceTabTitle(tab) : null}
+			aria-label=${iconsOnly && tab.type === "browser" ? titleOf(tab) : null}
 			class=${`ws-tab ${!isLeaving && activeId === tab.id ? "active" : ""} ${tab.type === "browser" ? (iconsOnly ? "icon-only" : "site") : ""}`} aria-selected=${!isLeaving && activeId === tab.id}
-			title=${iconsOnly && tab.type === "browser" ? `${workspaceTabTitle(tab)}\n${workspaceTabHint(tab) || ""}`.trim() : workspaceTabHint(tab)}
+			title=${iconsOnly && tab.type === "browser" ? `${titleOf(tab)}\n${workspaceTabHint(tab) || ""}`.trim() : tab.type === "file" || tab.type === "browser" ? workspaceTabHint(tab) : titleOf(tab)}
 			onClick=${() => !isLeaving && onActivate(tab.id)}
 			onKeyDown=${(event) => {
 				if (isLeaving) return;
 				if (event.key === "Enter" || event.key === " ") onActivate(tab.id);
-				if (event.key === "Delete" || event.key === "Backspace") onClose(tab.id);
+				if ((event.key === "Delete" || event.key === "Backspace") && canClose(tab)) onClose(tab.id);
 			}}
 			onAuxClick=${(event) => {
 				if (isLeaving || event.button !== 1) return;
 				event.preventDefault();
-				onClose(tab.id);
+				if (canClose(tab)) onClose(tab.id);
 			}}
 			onDragStart=${(event) => {
 				if (isLeaving) {
@@ -219,22 +359,40 @@ export function WorkspaceTabs({ tabs, activeId, onActivate, onClose, onCloseOthe
 			}}
 			onContextMenu=${(event) => {
 				event.preventDefault();
-				if (!isLeaving && (tabs.length > 1 || onToggleIconsOnly)) setMenu({ x: event.clientX, y: event.clientY, id: tab.id });
+				if (!isLeaving && (tabs.length > 1 || onToggleIconsOnly || soundOf(tab) !== null || (tab.type === "browser" && onToggleMute))) setMenu({ x: event.clientX, y: event.clientY, id: tab.id });
 			}}>
 			<${TabIcon} tab=${tab} icons=${icons} />
-			<span class="ws-tab-label truncate">${workspaceTabTitle(tab)}</span>
-			<button class="ws-tab-close" aria-label=${t("Close tab")} title=${t("Close tab")} onClick=${(event) => {
+			<span class="ws-tab-label truncate">${titleOf(tab)}</span>
+			${(() => {
+				const sound = soundOf(tab);
+				if (!sound || (!sound.audible && !sound.muted)) return null;
+				const label = sound.muted ? t("Unmute tab") : t("Mute tab");
+				return html`<button class=${`ws-tab-audio ${sound.muted ? "muted" : ""}`} aria-label=${label} title=${label} aria-pressed=${sound.muted} onClick=${(event) => {
+					event.stopPropagation();
+					if (!isLeaving) onToggleMute(tab.id);
+				}}><${Icon} name=${sound.muted ? "volumeOff" : "volume"} size=${13} /></button>`;
+			})()}
+			${canClose(tab) ? html`<button class="ws-tab-close" aria-label=${t("Close tab")} title=${t("Close tab")} onClick=${(event) => {
 				event.stopPropagation();
 				if (!isLeaving) onClose(tab.id);
-			}}><${Icon} name="x" size=${12} /></button>
+			}}><${Icon} name="x" size=${12} /></button>` : null}
 		</div>
 		</div>`;
 		})}
 		${menu ? html`<div class="ws-menu" style=${{ left: `${menu.x}px`, top: `${menu.y}px`, position: "fixed" }} onPointerDown=${(event) => event.stopPropagation()}>
-			<button onClick=${() => {
+			${canClose(tabs.find((tab) => tab.id === menu.id) ?? {}) ? html`<button onClick=${() => {
 				onClose(menu.id);
 				setMenu(null);
-			}}>${t("Close tab")}</button>
+			}}>${t("Close tab")}</button>` : null}
+			${(() => {
+				const tab = tabs.find((item) => item.id === menu.id);
+				if (!tab || tab.type !== "browser" || !onToggleMute || !tab.url) return null;
+				const muted = soundOf(tab)?.muted === true;
+				return html`<button onClick=${() => {
+					onToggleMute(menu.id);
+					setMenu(null);
+				}}>${muted ? t("Unmute tab") : t("Mute tab")}</button>`;
+			})()}
 			${tabs.length > 1 ? html`<button onClick=${() => {
 				onCloseOthers(menu.id);
 				setMenu(null);

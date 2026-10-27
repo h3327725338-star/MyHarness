@@ -119,7 +119,7 @@ export function prepareCompaction(
 		firstKeptEntryId: entries.at(-1)!.id,
 		messagesToSummarize: messages,
 		// Callers that already hold a canonical snapshot (e.g. the session
-		// compaction runner, which overwrites this with buildProviderSnapshot)
+		// compaction runner, which passes buildProviderSnapshot().activeTokens)
 		// pass it in to skip a duplicate full-history estimate here.
 		tokensBefore: options.tokensBefore ?? estimateContextTokens(messages).tokens,
 		settings,

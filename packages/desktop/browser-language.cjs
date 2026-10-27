@@ -23,17 +23,22 @@ function acceptLanguage(tag) {
 }
 
 function createLanguageStore(file, log = () => undefined) {
-  let language = '';
-  try {
-    if (file && existsSync(file)) {
-      const saved = JSON.parse(readFileSync(file, 'utf8'));
-      if (BROWSER_LANGUAGES.includes(saved?.language)) language = saved.language;
+  const read = () => {
+    try {
+      if (file && existsSync(file)) {
+        const saved = JSON.parse(readFileSync(file, 'utf8'));
+        if (BROWSER_LANGUAGES.includes(saved?.language)) return saved.language;
+      }
+    } catch (error) {
+      log(`读取浏览器语言失败：${error.message}`);
     }
-  } catch (error) {
-    log(`读取浏览器语言失败：${error.message}`);
-  }
+    return '';
+  };
+  let language = read();
   return {
     get: () => language,
+    /** Read the file again (browser sync wrote it, browser-sync.cjs). */
+    reload() { language = read(); return language; },
     set(value) {
       const next = BROWSER_LANGUAGES.includes(value) ? value : '';
       if (next === language) return language;
@@ -52,4 +57,15 @@ function createLanguageStore(file, log = () => undefined) {
   };
 }
 
-module.exports = { BROWSER_LANGUAGES, languageList, acceptLanguage, createLanguageStore };
+/**
+ * The saved website language also becomes the engine's own language (Chromium's --lang), for the parts of a site that
+ * only read that one: a frame of another site and a page's workers. It has to be set before the app is ready, so a
+ * change in the toolbar reaches them after the next start. Returns the language applied ('' : the engine's default).
+ */
+function applyEngineLanguage(app, file) {
+  const language = createLanguageStore(file).get();
+  if (language) app.commandLine.appendSwitch('lang', language);
+  return language;
+}
+
+module.exports = { BROWSER_LANGUAGES, languageList, acceptLanguage, createLanguageStore, applyEngineLanguage };

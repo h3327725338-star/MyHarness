@@ -113,11 +113,6 @@ function noteUsageProbeBackoff(model: Model<"openai-completions">): void {
 	usageProbeBackoff.set(usageStreamingKey(model), Date.now() + USAGE_PROBE_BACKOFF_MS);
 }
 
-/**
- * Check if conversation messages contain tool calls or tool results.
- * This is needed because Anthropic (via proxy) requires the tools param
- * to be present when messages include tool_calls or tool role messages.
- */
 function hasHeader(headers: ProviderHeaders | undefined, name: string): boolean {
 	if (!headers) return false;
 	const expected = name.toLowerCase();
@@ -133,6 +128,11 @@ function getClientApiKey(provider: string, apiKey: string | undefined, headers: 
 	throw new Error(`No API key for provider: ${provider}`);
 }
 
+/**
+ * Check if conversation messages contain tool calls or tool results.
+ * This is needed because Anthropic (via proxy) requires the tools param
+ * to be present when messages include tool_calls or tool role messages.
+ */
 function hasToolHistory(messages: Message[]): boolean {
 	for (const msg of messages) {
 		if (msg.role === "toolResult") {
@@ -1433,7 +1433,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 	// and `reasoning_effort` are commonly rejected by third-party services.
 	// `stream_options` is the exception: usage in streaming is standard and safe to
 	// request everywhere, so it is sent by default; an endpoint that rejects it is
-	// remembered for a short window (see probeUsageStreamingUnsupported).
+	// remembered for a short window (see createCompletionStream).
 	const isGenericThirdParty =
 		!KNOWN_OPENAI_COMPLETIONS_PROVIDER_IDS.has(provider) &&
 		!isNativeOpenAI &&

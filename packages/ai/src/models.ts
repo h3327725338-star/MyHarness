@@ -69,9 +69,9 @@ export type ModelsSimpleStreamOptions = SimpleStreamOptions & ModelsStreamTransf
  * A provider is the concrete runtime unit. It owns id/name/base metadata,
  * auth methods, model listing, and stream behavior.
  *
- * `TApi` lets concrete provider factories declare which APIs their models
- * use (e.g. `openaiProvider(): Provider<"openai-responses" | "openai-completions">`),
- * giving typed model lists to direct factory users. Inside a `Models`
+ * `TApi` lets code that builds a provider with `createProvider()` declare which
+ * APIs its models use (e.g. `Provider<"openai-responses" | "openai-completions">`),
+ * giving typed model lists to direct users of that provider. Inside a `Models`
  * collection providers are held as `Provider<Api>`.
  */
 export interface Provider<TApi extends Api = Api> {

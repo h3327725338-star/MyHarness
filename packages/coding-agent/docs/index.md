@@ -56,6 +56,8 @@ Configure a Provider and model in `models.json`, Settings, or an extension befor
 ## Reference and platform setup
 
 - [Session format](session-format.md) — JSONL format, entry types, and SessionManager API.
+- [Coding / General backend](chat-modes-backend.md) — chat-mode ownership, mode state and the Web API contract.
+- [Non-Git sub-agent file mirror](non-git-sandbox.md) — the file copy sub-agents work in when the workspace is not a Git repository.
 - [Shell aliases](shell-aliases.md)
 
 ## Development

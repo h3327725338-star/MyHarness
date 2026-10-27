@@ -2,7 +2,7 @@
 
 <!-- Synced from jot 3utlzkxy. Edit this file in-repo going forward. -->
 
-Final design.
+Target design, not implemented yet. Current `AgentHarness` exposes `subscribe()` (observers) and `on()` (typed by `AgentHarnessEventResultMap` in `src/harness/types.ts`); `AgentHarnessHooks`, `observe()`, `emit()` and the hook context below do not exist in `packages/agent/src`.
 
 ## Core model
 

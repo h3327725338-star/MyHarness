@@ -56,6 +56,8 @@ npm.cmd run build
 ## 参考与平台设置
 
 - [Session format](session-format.md) — JSONL format、entry types 和 SessionManager API。
+- [Coding / General 后端约定](chat-modes-backend.md) — 聊天模式归属、模式状态和 Web 接口。
+- [非 Git 子代理文件镜像](non-git-sandbox.md) — 工作区不是 Git 仓库时子代理使用的文件副本。
 - [Shell aliases](shell-aliases.md)
 
 ## 开发

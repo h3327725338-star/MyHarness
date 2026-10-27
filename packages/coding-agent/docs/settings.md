@@ -573,7 +573,7 @@ Project `.myharness/settings.json`:
 | Setting | Type | Default | 说明 |
 |---------|------|---------|-------------|
 | `retry.enabled` | boolean | `true` | 启用 agent-level automatic retry，用于 transient errors |
-| `retry.maxRetries` | number \| `"unlimited"` | `3` | agent-level retry 的最大 attempts；`"unlimited"` 表示不限次数，一直重试到成功或用户取消（Web 设置 → 网络的“自动重试次数”行为紧凑下拉，可选 0（不重试）、1–20 或无限，超出标准范围的已保存整数仍作为额外选项保留） |
+| `retry.maxRetries` | number \| `"unlimited"` | `3` | agent-level retry 的最大 attempts；`"unlimited"` 表示不限次数，一直重试到成功或用户取消（Web 设置 → 网络与 Shell → 网络 的“自动重试次数”行为紧凑下拉，可选 0（不重试）、1–20 或无限，超出标准范围的已保存整数仍作为额外选项保留） |
 | `retry.baseDelayMs` | number | `2000` | agent-level exponential backoff 的 base delay（2s、4s、8s；逐次翻倍，单次最长 60s，保证大次数或不限次数时重试间隔不会无限增长） |
 | `retry.networkMaxAttempts` | number | `2` | 网络失败（建连、首包、静默、断连）时，同一模型最多尝试几次，**含第一次**，范围 1–20（Web 标题为“同一模型最多尝试次数（次，含第一次）”，`Attempts per model (times, first included)`）；达到次数后切换到备用模型（`fallbackModel`），没有备用模型则结束。HTTP 类错误（429、过载等）不受影响，仍用 `retry.maxRetries` |
 | ~~`retry.provider.timeoutMs`~~ | - | - | 已移除并被忽略：它是第二个整请求超时，会和首包超时叠加成两处各管一半。首包时限只有 `network.firstByteTimeoutMs` 一处 |

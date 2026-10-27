@@ -11,7 +11,7 @@ import { FilesPanel, FileTab } from "./panel-files.js";
 import { TerminalPanel } from "./panel-terminal.js";
 import { ContextPanel } from "./panel-context.js";
 import { BrowserPanel } from "./panel-browser.js";
-import { WorkspaceTabs, PANEL_TAB_TYPES } from "./workspace-tabs.js";
+import { PanelNav, useRowFold, WorkspaceTabs, PANEL_TAB_TYPES, workspaceTabSection } from "./workspace-tabs.js";
 import { GitSetupDialog } from "./overlays-git.js";
 import { ProviderEditorHost, SettingsModal } from "./overlays-settings.js";
 import { CommandPalette } from "./palette.js";
@@ -113,12 +113,42 @@ function PanelContainer() {
 	const tabs = useStore((s) => s.view.wsTabs);
 	const tabIconsOnly = useStore((s) => s.view.wsTabIconsOnly);
 	const browserIcons = useStore((s) => s.view.browserIcons);
+	const browserAudio = useStore((s) => s.view.browserAudio);
 	const activeId = useStore((s) => s.view.wsActive);
 	const closedCount = useStore((s) => s.view.wsClosed.length);
 	const wsMax = useStore((s) => s.view.wsMax);
 	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
 	const panelRef = useRef(null);
+	const headRef = useRef(null);
 	const active = tabs.find((item) => item.id === activeId) || tabs[0] || null;
+	// The header names every section; the section on screen adds its own tabs when it has any: the website tabs in the
+	// browser, the file list and the open files in Files. Changes, Terminal and Session are one panel each. Without a
+	// desktop browser (a plain web page, a read-only export) there is no browser entry unless website tabs are open.
+	const section = active ? workspaceTabSection(active) : null;
+	const browserTabs = tabs.filter((item) => item.type === "browser");
+	const fileTabs = tabs.filter((item) => item.type === "file");
+	const browserEntry = browserTabs.length > 0 || (!!window.myHarnessDesktop && !exportReadOnly());
+	const rowTabs =
+		section === "browser"
+			? browserTabs
+			: section === "files" && fileTabs.length > 0
+				? [tabs.find((item) => item.id === "files") ?? { id: "files", type: "files" }, ...fileTabs]
+				: null;
+	// The tabs of the section sit in the navigation row itself, so the browser (and a file) keeps the full height of the
+	// panel: the section names fold to icons to make room for them.
+	const strip = rowTabs
+		? html`<${WorkspaceTabs} key=${section} tabs=${rowTabs} activeId=${active?.id}
+				iconsOnly=${section === "browser" && tabIconsOnly} icons=${browserIcons}
+				audio=${browserAudio} onToggleMute=${section === "browser" && window.myHarnessDesktop ? (id) => actions.toggleBrowserMute(id) : null}
+				onToggleIconsOnly=${section === "browser" ? () => actions.toggleTabIconsOnly() : null}
+				titleFor=${(item) => (item.type === "files" ? t("File list") : null)} closable=${(item) => item.type !== "files"}
+				onActivate=${(id) => (id === "files" ? actions.openWorkspace({ type: "files" }) : actions.activateWorkspaceTab(id))}
+				onClose=${(id) => actions.closeWorkspaceTab(id)} onCloseOthers=${(id) => actions.closeOtherWorkspaceTabs(id, { sameSection: true })}
+				onMove=${(from, to) => actions.moveWorkspaceTab(from, to)} />
+			${section === "browser" ? html`<button class="icon-btn sm ws-new-tab" title=${t("New browser tab")} aria-label=${t("New browser tab")} onClick=${() => actions.openBrowserTab()}><${Icon} name="plus" size=${15} /></button>` : null}`
+		: null;
+	// A head too narrow for the section names folds them into icons, and narrower still the sections into one menu.
+	const fold = useRowFold(headRef, `${section}|${rowTabs?.length ?? 0}|${closedCount > 0}|${browserEntry}|${wsMax}|${sidebarOpen}`);
 	// The panel is never wider than the room the window leaves it (the cap of --panel-width in layout.css). A drag starts
 	// from the width that is on screen and stops at that cap, so the handle always moves with the pointer: a width saved
 	// in a larger window, or a drag past the cap, leaves no dead stretch to drag back through.
@@ -140,16 +170,17 @@ function PanelContainer() {
 	};
 	return html`<aside class="panel" aria-label=${t("Details")} ref=${panelRef}>
 		${wsMax ? null : html`<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => panelRef.current?.offsetWidth || state.view.panelW} onChange=${onWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />`}
-		<div class="panel-head">
+		<div class="panel-head" ref=${headRef}>
 			${wsMax && !sidebarOpen ? html`<button class="icon-btn sm panel-sidebar" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${16} /></button>` : null}
-			<${WorkspaceTabs} tabs=${tabs} activeId=${active?.id} iconsOnly=${tabIconsOnly} icons=${browserIcons} onToggleIconsOnly=${() => actions.toggleTabIconsOnly()} onActivate=${(id) => actions.activateWorkspaceTab(id)} onClose=${(id) => actions.closeWorkspaceTab(id)} onCloseOthers=${(id) => actions.closeOtherWorkspaceTabs(id)} onMove=${(from, to) => actions.moveWorkspaceTab(from, to)} />
-			${closedCount > 0 ? html`<button class="icon-btn sm" title=${t("Restore closed tab")} aria-label=${t("Restore closed tab")} onClick=${() => actions.reopenWorkspaceTab()}><${Icon} name="undo" size=${14} /></button>` : null}
+			<${PanelNav} section=${section} browser=${browserEntry} fold=${fold} onRestore=${closedCount > 0 ? () => actions.reopenWorkspaceTab() : null} onShow=${(value) => actions.showWorkspaceSection(value)}>${strip}<//>
+			<span class="grow" />
+			${closedCount > 0 && fold !== "tight" ? html`<button class="icon-btn sm" title=${t("Restore closed tab")} aria-label=${t("Restore closed tab")} onClick=${() => actions.reopenWorkspaceTab()}><${Icon} name="undo" size=${14} /></button>` : null}
 			<button class=${`icon-btn sm panel-max ${wsMax ? "active" : ""}`} aria-pressed=${wsMax} title=${`${t(wsMax ? "Restore the workspace (Esc)" : "Maximize the workspace and keep chatting beside it")} (${shortcutFor("workspaceMax", state.view.shortcuts)})`} aria-label=${t(wsMax ? "Restore the workspace" : "Maximize the workspace")} onClick=${() => actions.toggleWorkspaceMax()}><${Icon} name=${wsMax ? "minimize" : "maximize"} size=${14} /></button>
 			${wsMax ? null : html`<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="panelRight" size=${15} /></button>`}
 		</div>
 		<div class="panel-body">
 			${tabs.map((item) => html`<div class="panel-pane" key=${item.id} data-ws-tab=${item.id} hidden=${item.id !== active?.id}>
-				${item.id !== active?.id ? null : item.type === "file" ? html`<${FileTab} key=${item.id} path=${item.path} />` : item.type === "browser" ? html`<${BrowserPanel} key=${item.id} tabId=${item.id} url=${item.url} />` : panelTab(item.type)}
+				${item.id !== active?.id ? null : item.type === "file" ? html`<${FileTab} key=${item.id} path=${item.path} />` : item.type === "browser" ? html`<${BrowserPanel} key=${item.id} tabId=${item.id} url=${item.url} muted=${item.muted === true} />` : panelTab(item.type)}
 			</div>`)}
 			${!active ? html`<div class="panel-empty"><span class="dim">${t("No tabs open. Use the header buttons to open Changes, Files, Terminal, Session or the browser.")}</span></div>` : null}
 		</div>

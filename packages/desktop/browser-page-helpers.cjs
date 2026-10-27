@@ -305,9 +305,91 @@ function pageFocused(h) {
 }
 
 /**
+ * Read a whole page (or the element `q.selector`) in one go: its text, line by line without repeats, and on request its
+ * links and tables. With `q.scroll` the page's main scrolling area is scrolled to the end step by step first, waiting
+ * `q.settleMs` after each step, so content that only loads while scrolling (endless lists, lazy articles) is read too;
+ * lines are collected at every step, so a list that recycles its rows (virtual scrolling) still yields all of them.
+ * `q.restore` scrolls back to where the page was. Resolves to { ok, text, lines, truncated, scrolls, atEnd, links?, tables? }.
+ */
+async function pageRead(h, q) {
+  try {
+    const root = q.selector ? h.query(q.selector) : document.body;
+    if (!root) return { ok: false, error: q.selector ? `no element matches ${q.selector}` : 'the page has no body yet' };
+    const seen = new Set();
+    const lines = [];
+    let size = 0;
+    const takeText = () => {
+      for (const raw of String(root.innerText || '').split('\n')) {
+        const line = raw.replace(/[ \t\u00a0]+/g, ' ').trim();
+        if (!line || seen.has(line)) continue;
+        seen.add(line);
+        lines.push(line);
+        size += line.length + 1;
+      }
+    };
+    const links = new Map();
+    const takeLinks = () => {
+      if (links.size >= q.maxLinks) return;
+      for (const anchor of h.all('a[href]')) {
+        if (links.size >= q.maxLinks) break;
+        if (root !== document.body && !h.contains(root, anchor)) continue;
+        const href = anchor.href;
+        if (!/^https?:/i.test(href) || links.has(href)) continue;
+        links.set(href, h.clean(anchor.innerText || anchor.getAttribute('aria-label') || anchor.title || '').slice(0, 160));
+      }
+    };
+    const take = () => {
+      if (size < q.maxChars) takeText();
+      if (q.links) takeLinks();
+    };
+    take();
+    let scrolls = 0;
+    let atEnd = false;
+    if (q.scroll) {
+      const box = root !== document.body ? h.scrollerOf(root, 'y') : h.mainScroller('y');
+      if (!box) atEnd = true;
+      else {
+        const start = box.scrollTop;
+        const page = box === document.scrollingElement;
+        const settle = () => new Promise((resolve) => setTimeout(resolve, q.settleMs));
+        const bottom = () => box.scrollTop + box.clientHeight >= box.scrollHeight - 2;
+        while (scrolls < q.maxScrolls && size < q.maxChars) {
+          box.scrollBy({ top: Math.max(200, Math.round((page ? innerHeight : box.clientHeight) * 0.85)), behavior: 'instant' });
+          // A page that is not drawn (a background tab) gets its scroll event only at its next frame, which may never
+          // come: lists that load or redraw rows from their scroll handler hear of the move at once.
+          (page ? document : box).dispatchEvent(new Event('scroll', { bubbles: page }));
+          scrolls++;
+          await settle();
+          take();
+          if (!bottom()) continue;
+          // At the end: give a lazy list one more moment to append its next part.
+          const height = box.scrollHeight;
+          await settle();
+          take();
+          if (box.scrollHeight <= height && bottom()) { atEnd = true; break; }
+        }
+        if (q.restore) box.scrollTo({ top: start, behavior: 'instant' });
+      }
+    }
+    let text = lines.join('\n');
+    const truncated = text.length > q.maxChars;
+    if (truncated) text = text.slice(0, q.maxChars);
+    const out = { ok: true, url: location.href, title: document.title, text, lines: lines.length, truncated, scrolls, atEnd };
+    if (q.links) out.links = [...links].map(([href, label]) => ({ text: label, href }));
+    if (q.tables) {
+      out.tables = h.all('table').filter((table) => root === document.body || h.contains(root, table)).slice(0, q.maxTables).map((table) =>
+        Array.from(table.rows).slice(0, q.maxRows).map((row) => Array.from(row.cells).map((cell) => h.clean(cell.innerText || '').slice(0, 200))));
+    }
+    return out;
+  } catch (error) {
+    return { ok: false, error: String(error && error.message ? error.message : error) };
+  }
+}
+
+/**
  * The page script that runs `fn(helpers, arg)`. A thrown error (an invalid selector) comes back as `{ ok: false, error }`
  * instead of the engine's generic "Script failed to execute".
  */
 const inPage = (fn, arg) => `(() => { try { return (${fn})((${pageHelpers})(${JSON.stringify(INTERACTIVE_QUERY)}), ${JSON.stringify(arg ?? null)}); } catch (error) { return { ok: false, error: String(error && error.message ? error.message : error) }; } })()`;
 
-module.exports = { INTERACTIVE_QUERY, pageHelpers, inPage, pageLocate, pageInteractive, pageWaitCondition, pageFindText, pageTextOnScreen, pageScroll, pageSelectFocused, pageFocused };
+module.exports = { INTERACTIVE_QUERY, pageHelpers, inPage, pageLocate, pageInteractive, pageWaitCondition, pageFindText, pageTextOnScreen, pageScroll, pageSelectFocused, pageFocused, pageRead };

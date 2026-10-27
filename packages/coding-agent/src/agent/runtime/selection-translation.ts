@@ -1,6 +1,6 @@
 /**
  * Selection translation: a word, phrase or passage the user selected (in a chat, a file preview or a website of the
- * built-in browser) translated by the helper model of Settings → Agents → Translation. One request, no session
+ * built-in browser) translated by the helper model of Settings → Agent → Translation. One request, no session
  * history: the selected text is data to translate, never instructions. A single word or a short phrase gets a word
  * card (its language, reading, and meanings by part of speech) like a selection translator's; longer text gets the
  * translation only.
@@ -63,7 +63,10 @@ export interface TranslationEntry {
 	senses: { pos: string; meaning: string }[];
 }
 
-/** The request for one selection. `fallback` is used when the text is already in the target language. */
+/**
+ * The request for one selection. Text already in the target language is translated into a fallback language
+ * instead (Chinese when the target is English, English otherwise).
+ */
 export function buildTranslationPrompt(text: string, target: string): TranslationPrompt {
 	const targetName = LANGUAGE_NAMES[target] ?? target;
 	const fallbackName = target === "en" ? LANGUAGE_NAMES["zh-CN"] : LANGUAGE_NAMES.en;

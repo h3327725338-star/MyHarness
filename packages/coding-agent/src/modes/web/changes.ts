@@ -2,7 +2,7 @@
  * "What did the agent change" for the Web UI.
  *
  * Facts come from the existing change-detection layer (Git checkpoint, workspace
- * baseline, edit/write tool snapshots). This module only turns those facts into
+ * baseline, edit/write/apply_patch/apply_rename tool snapshots). This module only turns those facts into
  * per-file unified diffs; it never guesses content it cannot observe.
  */
 
@@ -66,7 +66,7 @@ export interface RunChangeRecord {
 	git?: GitTaskChangeSummary;
 	checkpointId?: string;
 	checkpointStatus?: string;
-	/** Tool-level file operations observed during the run (edit/write/apply_patch), independent of final detection. */
+	/** Tool-level file operations observed during the run (edit/write/apply_patch/apply_rename), regardless of detection. */
 	toolFileOps: Array<{ path: string; tool: FileMutationTool; ok: boolean }>;
 	bashRuns: number;
 	/** Shell calls that may have moved Git HEAD (git commit/merge/switch/...): HEAD progress is then treated as possibly own. */
@@ -350,7 +350,7 @@ export class ChangeTracker {
 			record.git = detection.git;
 			this.mergeToolChanges(runId, record);
 		} else {
-			// Fall back to observed edit/write/apply_patch operations so the run still reports real file writes.
+			// Fall back to observed edit/write/apply_patch/apply_rename operations so the run reports real file writes.
 			record.reliability = "indeterminate";
 			record.reason = "Final change detection was unavailable; showing files touched by edit/write only.";
 			this.mergeToolChanges(runId, record);
@@ -366,8 +366,8 @@ export class ChangeTracker {
 	}
 
 	/**
-	 * edit/write/apply_patch calls are observed directly (before/after content). Final change detection does not
-	 * cover them when Git integration is off and no shell command ran, so add the net effect here.
+	 * edit/write/apply_patch/apply_rename calls are observed directly (before/after content). Final change detection
+	 * does not cover them when Git integration is off and no shell command ran, so add the net effect here.
 	 */
 	private mergeToolChanges(runId: number, record: RunChangeRecord): void {
 		const known = new Set(record.changes.map((change) => change.path));

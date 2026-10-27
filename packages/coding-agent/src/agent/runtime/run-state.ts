@@ -5,7 +5,7 @@
  * AgentSession event stream (agent_start/end, tool_execution_*, auto_retry_*,
  * compaction_*, ...). It deliberately does NOT replace the core event system:
  * the session still emits the same AgentSessionEvents; this module only gives
- * UI/SDK hosts (TUI / Desktop / JSON consumers) a single source of truth for "what is the
+ * UI/SDK hosts (Web UI / Desktop / SDK consumers) a single source of truth for "what is the
  * task doing right now, how long has it been running, and when was the last
  * real activity".
  *

@@ -59,7 +59,29 @@ const BATCH_OPERATIONS = new Set([
 	"exec",
 	"screenshot",
 	"state",
+	"read",
 ]);
+/**
+ * Operations that change what a page shows (input, navigation, scripts, scrolling). On the user's own tab while they
+ * look at it, these run in a background copy instead, unless the call says `onUserTab: true`.
+ */
+const GUARDED_OPERATIONS = new Set([
+	"click",
+	"type",
+	"mouse",
+	"key",
+	"scroll",
+	"navigate",
+	"back",
+	"forward",
+	"reload",
+	"exec",
+	"upload",
+	"login",
+	"collect",
+]);
+/** read_many: pages read side by side. */
+const READ_MANY_LANES = 4;
 /** Screenshots are debug artifacts in the temp directory; keep the newest ones and delete older ones. */
 const SCREENSHOT_KEEP = 50;
 
@@ -193,6 +215,22 @@ const tabIdSchema = Type.Optional(Type.String({ minLength: 1, description: "Work
 const maxCharsSchema = Type.Optional(
 	Type.Integer({ minimum: 200, maximum: 100_000, description: "Cap for text output (default 20000)" }),
 );
+const onUserTabSchema = Type.Optional(
+	Type.Boolean({
+		description:
+			"Act on the user's own tab while they are looking at it. Only when the user asked you to work on their page; otherwise the action runs in a background copy of it",
+	}),
+);
+const readFormatFields = {
+	scroll: Type.Optional(
+		Type.Boolean({
+			description:
+				"Scroll the page to its end first, so content that loads while scrolling (feeds, long lists, lazy articles) is read too (default false)",
+		}),
+	),
+	links: Type.Optional(Type.Boolean({ description: "Also return the page's links (text and address)" })),
+	tables: Type.Optional(Type.Boolean({ description: "Also return its tables as rows of cells" })),
+};
 
 const workspaceParametersUnion = Type.Union([
 	Type.Object({ operation: Type.Literal("status") }, { additionalProperties: false }),
@@ -211,7 +249,8 @@ const workspaceParametersUnion = Type.Union([
 			),
 			background: Type.Optional(
 				Type.Boolean({
-					description: "type=browser: open without switching the user's view to it (default false)",
+					description:
+						"type=browser: open without switching the user's view to it (default true: you work in your own tabs). Pass false only when the user asked to see the page",
 				}),
 			),
 			path: Type.Optional(
@@ -247,6 +286,7 @@ const workspaceParametersUnion = Type.Union([
 			operation: Type.Literal("navigate"),
 			url: Type.String({ minLength: 1 }),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			timeoutMs: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 120_000 })),
 			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
 		},
@@ -256,6 +296,7 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("back"),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
 		},
 		{ additionalProperties: false },
@@ -264,6 +305,7 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("forward"),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
 		},
 		{ additionalProperties: false },
@@ -272,6 +314,7 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("reload"),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			screenshot: Type.Optional(Type.Boolean({ description: "Attach a screenshot of the tab after the action" })),
 		},
 		{ additionalProperties: false },
@@ -301,6 +344,7 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("batch"),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			steps: Type.Array(
 				Type.Object(
 					{
@@ -324,6 +368,85 @@ const workspaceParametersUnion = Type.Union([
 		{ additionalProperties: false },
 	),
 	Type.Object(
+		{
+			operation: Type.Literal("read"),
+			tabId: tabIdSchema,
+			...readFormatFields,
+			selector: Type.Optional(Type.String({ minLength: 1, description: "Read only this element (CSS selector)" })),
+			fresh: Type.Optional(
+				Type.Boolean({
+					description:
+						"Read the tab's address again in a hidden reader page (same sign-in) instead of the tab itself. A background tab is not drawn, so content that loads only when it scrolls into view may not load there; the reader draws it. What is not in the address (a typed search, an open menu) is not in the reader",
+				}),
+			),
+			maxScrolls: Type.Optional(
+				Type.Integer({ minimum: 1, maximum: 80, description: "scroll: at most this many steps (default 20)" }),
+			),
+			maxChars: Type.Optional(
+				Type.Integer({ minimum: 200, maximum: 200_000, description: "Cap for the text (default 40000)" }),
+			),
+			onUserTab: onUserTabSchema,
+		},
+		{
+			additionalProperties: false,
+			description: "The whole page in one call: its text without repeated lines (with scroll: after loading it all)",
+		},
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("collect"),
+			tabId: tabIdSchema,
+			pages: Type.Optional(
+				Type.Integer({ minimum: 1, maximum: 30, description: "How many pages to read (default 5)" }),
+			),
+			nextLabel: Type.Optional(
+				Type.String({
+					minLength: 1,
+					description: 'Words on the control that goes to the next page ("Next", "下一页", "›")',
+				}),
+			),
+			nextSelector: Type.Optional(Type.String({ minLength: 1, description: "Or a CSS selector of that control" })),
+			urlTemplate: Type.Optional(
+				Type.String({
+					minLength: 1,
+					description: "Or the address of every page with {page} for its number, e.g. https://site/list?p={page}",
+				}),
+			),
+			from: Type.Optional(
+				Type.Integer({ minimum: 0, description: "urlTemplate: number of the first page (default 1)" }),
+			),
+			...readFormatFields,
+			maxChars: Type.Optional(
+				Type.Integer({
+					minimum: 1000,
+					maximum: 200_000,
+					description: "Cap for all pages together (default 60000)",
+				}),
+			),
+			onUserTab: onUserTabSchema,
+		},
+		{
+			additionalProperties: false,
+			description:
+				"Read several pages of a paged list in one call: this page, then the next one (by nextLabel/nextSelector, or by urlTemplate) until `pages` are read or there is no next page",
+		},
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("read_many"),
+			urls: Type.Array(Type.String({ minLength: 1 }), {
+				minItems: 1,
+				maxItems: 10,
+				description: "http(s) addresses, read side by side in hidden reader pages that are closed afterwards",
+			}),
+			...readFormatFields,
+			maxChars: Type.Optional(
+				Type.Integer({ minimum: 200, maximum: 50_000, description: "Cap for each page's text (default 8000)" }),
+			),
+		},
+		{ additionalProperties: false, description: "Read up to 10 pages at once without opening tabs in the panel" },
+	),
+	Type.Object(
 		{ operation: Type.Literal("dom"), tabId: tabIdSchema, maxChars: maxCharsSchema },
 		{ additionalProperties: false },
 	),
@@ -333,6 +456,7 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("click"),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			selector: Type.Optional(Type.String({ minLength: 1, description: "CSS selector" })),
 			index: Type.Optional(Type.Integer({ minimum: 0, description: "Index in operation interactive" })),
 			label: Type.Optional(
@@ -351,6 +475,7 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("type"),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			selector: Type.Optional(Type.String({ minLength: 1 })),
 			index: Type.Optional(Type.Integer({ minimum: 0 })),
 			label: Type.Optional(
@@ -380,6 +505,7 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("mouse"),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			action: Type.Union(
 				[
 					Type.Literal("click"),
@@ -425,6 +551,7 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("key"),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			keys: Type.String({
 				minLength: 1,
 				description: 'Space-separated keys or combinations, e.g. "Enter", "Control+A Backspace", "Shift+Tab"',
@@ -438,6 +565,7 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("login"),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			submit: Type.Optional(Type.Boolean({ description: "Submit the form after filling it (default true)" })),
 		},
 		{ additionalProperties: false },
@@ -446,6 +574,7 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("upload"),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			path: Type.String({ minLength: 1, description: "File inside the current workspace (relative or absolute)" }),
 			selector: Type.Optional(Type.String({ minLength: 1, description: "CSS selector of an <input type=file>" })),
 			index: Type.Optional(Type.Integer({ minimum: 0, description: "Index in operation interactive" })),
@@ -484,6 +613,7 @@ const workspaceParametersUnion = Type.Union([
 		{
 			operation: Type.Literal("scroll"),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			deltaY: Type.Optional(
 				Type.Union([Type.Number(), Type.Literal("page")], {
 					description:
@@ -536,6 +666,7 @@ const workspaceParametersUnion = Type.Union([
 			operation: Type.Literal("exec"),
 			code: Type.String({ minLength: 1, description: "JavaScript expression or statement; its value is returned" }),
 			tabId: tabIdSchema,
+			onUserTab: onUserTabSchema,
 			maxChars: maxCharsSchema,
 		},
 		{ additionalProperties: false },
@@ -603,6 +734,10 @@ type WorkspaceResult = {
 export interface WorkspaceTabSummary {
 	id: string;
 	type: string;
+	/** A website tab that plays nothing aloud (opened by the Agent, or muted by the user). */
+	muted?: boolean;
+	/** A website tab the Agent opened (its own to drive), not one of the user's. */
+	agent?: boolean;
 	path?: string;
 	url?: string;
 	title?: string;
@@ -625,6 +760,42 @@ interface WorkspaceBookmark {
 	id: string;
 	title: string;
 	url: string;
+}
+
+/** What the host's `read` answers (packages/desktop/browser-page-helpers.cjs pageRead). */
+interface PageReading {
+	ok?: boolean;
+	error?: string;
+	url?: string;
+	title?: string;
+	text?: string;
+	lines?: number;
+	truncated?: boolean;
+	scrolls?: number;
+	atEnd?: boolean;
+	links?: Array<{ text: string; href: string }>;
+	tables?: string[][][];
+}
+
+/** A reading as text for the model: the page's words, then its links and tables when they were asked for. */
+function formatReading(value: PageReading): string {
+	const parts = [String(value.text ?? "")];
+	if (value.links?.length)
+		parts.push(
+			`links (${value.links.length}):\n${value.links.map((link) => `  ${link.text || "(no text)"} → ${link.href}`).join("\n")}`,
+		);
+	if (value.tables?.length)
+		parts.push(
+			value.tables
+				.map((rows, index) => `table ${index + 1}:\n${rows.map((cells) => `  ${cells.join(" | ")}`).join("\n")}`)
+				.join("\n"),
+		);
+	return parts.filter(Boolean).join("\n");
+}
+
+function readingLine(value: PageReading): string {
+	const scrolled = value.scrolls ? ` scrolls=${value.scrolls} end=${value.atEnd ? "yes" : "no"}` : "";
+	return `title=${JSON.stringify(value.title ?? "")} lines=${value.lines ?? 0}${scrolled}${value.truncated ? " (text cut at maxChars)" : ""}`;
 }
 
 function truncate(text: string, maxChars: number): { text: string; truncated: boolean } {
@@ -732,6 +903,131 @@ export function createWorkspaceToolDefinition(
 		}
 		if (state?.error) throw new Error(`workspace: the page failed to load: ${state.error}`);
 		return state;
+	};
+
+	/** The host's whole-page reading of a tab, with the read options of the call (scroll, links, tables, selector). */
+	const readPage = async (id: string, fields: Record<string, unknown>, maxChars: number): Promise<PageReading> => {
+		const maxScrolls = Number(fields.maxScrolls) || 20;
+		const value = (await browser(
+			{
+				action: "read",
+				tabId: id,
+				scroll: fields.scroll === true,
+				links: fields.links === true,
+				tables: fields.tables === true,
+				selector: typeof fields.selector === "string" ? fields.selector : undefined,
+				maxScrolls,
+				maxChars,
+			},
+			// Every scroll step waits for the page to append what it loads.
+			SLOW_TIMEOUT_MS + (fields.scroll === true ? maxScrolls * 1500 : 0),
+		)) as PageReading | null;
+		if (!value?.ok) throw new Error(`workspace: the page could not be read: ${value?.error ?? "no answer"}`);
+		return value;
+	};
+
+	/**
+	 * An address read in a reader page of its own (the host's off-screen page in the tabs' session): it draws frames, so
+	 * content that loads while scrolling loads as on screen, and it is closed when the reading is done.
+	 */
+	const readAddress = async (url: string, fields: Record<string, unknown>, maxChars: number): Promise<PageReading> => {
+		const maxScrolls = Number(fields.maxScrolls) || 20;
+		const value = (await browser(
+			{
+				action: "readUrl",
+				url,
+				scroll: fields.scroll === true,
+				links: fields.links === true,
+				tables: fields.tables === true,
+				selector: typeof fields.selector === "string" ? fields.selector : undefined,
+				maxScrolls,
+				maxChars,
+			},
+			SLOW_TIMEOUT_MS + 25_000 + (fields.scroll === true ? maxScrolls * 1500 : 0),
+		)) as PageReading | null;
+		if (!value?.ok) throw new Error(`workspace: the page could not be read: ${value?.error ?? "no answer"}`);
+		return value;
+	};
+
+	/** What a page shows right now, enough to tell that it changed (its address and the start of its text). */
+	const pageSignature = async (id: string): Promise<string> => {
+		const state = (await browser({ action: "state", tabId: id }).catch(() => undefined)) as
+			| { url?: string }
+			| undefined;
+		const text = (await browser({ action: "text", tabId: id }).catch(() => undefined)) as
+			| { result?: string }
+			| undefined;
+		return `${state?.url ?? ""}\n${String(text?.result ?? "").slice(0, 6000)}`;
+	};
+
+	/** Wait (at most `limitMs`) until the page differs from `before`, then until it has loaded and gone quiet. */
+	const changed = async (id: string, before: string, limitMs = 10_000): Promise<boolean> => {
+		const deadline = Date.now() + limitMs;
+		while (Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			if ((await pageSignature(id)) !== before) {
+				await settle(id, 20_000).catch(() => undefined);
+				await browser({ action: "wait", tabId: id, timeoutMs: 5000 }, 20_000).catch(() => undefined);
+				return true;
+			}
+		}
+		return false;
+	};
+
+	/** Background copies of the user's own tabs, by the tab they copy: later calls keep working in the same copy. */
+	const copies = new Map<string, string>();
+
+	/**
+	 * The user's own tab is theirs while they look at it: an operation that would change it (GUARDED_OPERATIONS, or a
+	 * scrolling read) runs in a background copy of its address instead, with the same sign-in, and the call's `tabId`
+	 * becomes that copy. Tabs the Agent opened, tabs that are not on screen and calls with `onUserTab: true` are left
+	 * as they are. Returns the note that tells the model where it acted ("" when nothing was redirected), and `arrived`
+	 * when a navigation already happened by opening the copy at its address.
+	 */
+	const keepOffUserTab = async (fields: Record<string, unknown>): Promise<{ note: string; arrived?: boolean }> => {
+		const operation = String(fields.operation || "");
+		const guarded =
+			GUARDED_OPERATIONS.has(operation) || (operation === "read" && fields.scroll === true && fields.fresh !== true);
+		const none = { note: "" };
+		if (!guarded || fields.onUserTab === true) return none;
+		// An address that will be refused anyway is refused before anything in the workspace is touched.
+		if (operation === "navigate" && !/^https?:\/\/[^\s]/i.test(String(fields.url ?? ""))) return none;
+		const id = await resolveBrowserTab(typeof fields.tabId === "string" ? fields.tabId : undefined).catch(
+			() => undefined,
+		);
+		if (!id) return none;
+		const live = (await browser({ action: "state", tabId: id }).catch(() => undefined)) as
+			| { visible?: boolean; active?: boolean; url?: string }
+			| undefined;
+		if (!live?.visible || !live.active || !live.url) return none;
+		const state = await pageTabs().catch(() => undefined);
+		if (!state || state.onScreen === false) return none;
+		const record = state.tabs.find((tab) => tab.id === id);
+		if (!record || record.agent === true) return none;
+		let copy = copies.get(id);
+		let arrived = false;
+		if (!copy || !(await browserTabs().catch(() => [] as WorkspaceTabSummary[])).some((tab) => tab.id === copy)) {
+			copy = `browser:agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+			// A navigation goes straight to its address; anything else starts from the page the user is on.
+			const start =
+				operation === "navigate" && typeof fields.url === "string" && /^https?:/i.test(fields.url)
+					? fields.url
+					: live.url;
+			await page({
+				action: "open",
+				tab: { type: "browser", id: copy, url: start, muted: true, agent: true },
+				background: true,
+			});
+			await browser({ action: "ensure", tabId: copy, url: start, muted: true }, SLOW_TIMEOUT_MS);
+			await settle(copy, 20_000).catch(() => undefined);
+			copies.set(id, copy);
+			arrived = start !== live.url;
+		}
+		fields.tabId = copy;
+		return {
+			note: `\n  note: the user is looking at their tab ${id}, so this ran in your background copy ${copy} (same address and sign-in; their page was not touched). Keep using tabId=${copy}; pass onUserTab: true only when the user asked you to act on their own page.`,
+			arrived,
+		};
 	};
 
 	/** A browser command needs an existing tab: the given one, the page's active browser tab, or the only tab open. */
@@ -845,10 +1141,13 @@ export function createWorkspaceToolDefinition(
 					}
 					if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
 						throw new Error("workspace: only http and https addresses are allowed");
-					const background = (input as { background?: boolean }).background === true;
+					// The Agent works in its own tabs: a new one stays in the background unless the user asked to see it.
+					const background = (input as { background?: boolean }).background !== false;
+					// A website tab the Agent opens plays nothing aloud until the user turns its sound on (the speaker on the tab);
+					// an address the user already has open stays their tab, with its sound as it was.
 					const opened = await page({
 						action: "open",
-						tab: { type: "browser", url: parsed.href },
+						tab: { type: "browser", url: parsed.href, muted: true, agent: true },
 						...(background ? { background: true } : {}),
 					});
 					const state = opened as { tabs?: WorkspaceTabSummary[]; activeId?: string | null };
@@ -859,7 +1158,10 @@ export function createWorkspaceToolDefinition(
 					if (!tab) throw new Error("workspace: the page did not report the browser tab it opened");
 					// The page owns the tab id and its panel creates the host view on mount; ensure is idempotent, so this
 					// call creates the view now when the panel has not mounted yet and never loads the page twice.
-					await browser({ action: "ensure", tabId: tab.id, url: parsed.href }, SLOW_TIMEOUT_MS);
+					await browser(
+						{ action: "ensure", tabId: tab.id, url: parsed.href, ...(tab.muted === true ? { muted: true } : {}) },
+						SLOW_TIMEOUT_MS,
+					);
 					const live = await settle(tab.id);
 					return {
 						content: [
@@ -1185,6 +1487,152 @@ export function createWorkspaceToolDefinition(
 						},
 					],
 					details: { operation, activeId: id, result: cut.truncated ? `${cut.text}…` : cut.text },
+				};
+			}
+			case "read": {
+				const id = await resolveBrowserTab(tabId);
+				const maxCharsRead = Number(fields.maxChars) || 40_000;
+				let value: PageReading;
+				if (fields.fresh === true) {
+					const live = (await browser({ action: "state", tabId: id })) as { url?: string } | undefined;
+					if (!live?.url) throw new Error(`workspace: tab ${id} has no address to read again`);
+					value = await readAddress(live.url, fields, maxCharsRead);
+				} else value = await readPage(id, fields, maxCharsRead);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] read ${id} ${value.url ?? ""}\n  ${readingLine(value)}\n${formatReading(value)}`,
+						},
+					],
+					details: { operation, activeId: id, result: value },
+				};
+			}
+			case "collect": {
+				const id = await resolveBrowserTab(tabId);
+				const pages = Math.max(1, Math.min(30, Number(fields.pages) || 5));
+				const nextLabel = typeof fields.nextLabel === "string" ? fields.nextLabel : undefined;
+				const nextSelector = typeof fields.nextSelector === "string" ? fields.nextSelector : undefined;
+				const template = typeof fields.urlTemplate === "string" ? fields.urlTemplate : undefined;
+				const from = Number.isInteger(fields.from) ? Number(fields.from) : 1;
+				if (template && !template.includes("{page}"))
+					throw new Error("workspace: collect urlTemplate needs {page} where the page number goes");
+				if (pages > 1 && !template && !nextLabel && !nextSelector)
+					throw new Error(
+						"workspace: collect needs nextLabel, nextSelector or urlTemplate to reach the next page",
+					);
+				const perPage = Math.max(1000, Math.floor((Number(fields.maxChars) || 60_000) / pages));
+				const sections: string[] = [];
+				const links = new Map<string, string>();
+				let stopped = "";
+				let previous = "";
+				for (let index = 0; index < pages; index++) {
+					if (template) {
+						const address = template.replaceAll("{page}", String(from + index));
+						let parsed: URL;
+						try {
+							parsed = new URL(address);
+						} catch {
+							throw new Error(`workspace: collect page address ${JSON.stringify(address)} is not a valid url`);
+						}
+						if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+							throw new Error("workspace: only http and https addresses are allowed");
+						await browser({ action: "navigate", tabId: id, url: parsed.href }, SLOW_TIMEOUT_MS);
+						await settle(id, 20_000).catch(() => undefined);
+					} else if (index > 0) {
+						// The next page is whatever the page shows after its "next" control: a new load or new content in place.
+						const before = await pageSignature(id);
+						try {
+							await browser(
+								{ action: "click", tabId: id, label: nextLabel, selector: nextSelector },
+								SLOW_TIMEOUT_MS,
+							);
+						} catch (error) {
+							stopped = `no next-page control (${error instanceof Error ? error.message : String(error)}); page ${index} was the last`;
+							break;
+						}
+						if (!(await changed(id, before))) {
+							stopped = `the page did not change after the next-page control; page ${index} was the last`;
+							break;
+						}
+					}
+					const value = await readPage(id, fields, perPage).catch(
+						(error: Error) => ({ ok: false, error: error.message }) as PageReading,
+					);
+					if (!value.ok) {
+						stopped = `page ${index + 1} could not be read: ${value.error ?? "no answer"}`;
+						break;
+					}
+					if (index > 0 && value.text === previous) {
+						stopped = `page ${index + 1} shows the same content as the page before; that was the last page`;
+						break;
+					}
+					previous = value.text ?? "";
+					for (const link of value.links ?? []) if (!links.has(link.href)) links.set(link.href, link.text);
+					sections.push(
+						`--- page ${index + 1}: ${value.url ?? ""}${value.truncated ? " (cut)" : ""}\n${formatReading({ ...value, links: undefined })}`,
+					);
+				}
+				const linkList = [...links].map(([href, text]) => `  ${text || "(no text)"} → ${href}`).join("\n");
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] collect ${id}: ${sections.length} page(s)${stopped ? ` (stopped: ${stopped})` : ""}\n${sections.join("\n")}${linkList ? `\nlinks of all pages (${links.size}):\n${linkList}` : ""}`,
+						},
+					],
+					details: { operation, activeId: id, result: { pages: sections.length, stopped: stopped || undefined } },
+				};
+			}
+			case "read_many": {
+				const urls = Array.isArray(fields.urls) ? (fields.urls as unknown[]).map(String) : [];
+				if (!urls.length || urls.length > 10) throw new Error("workspace: read_many takes 1 to 10 urls");
+				const addresses = urls.map((url) => {
+					let parsed: URL;
+					try {
+						parsed = new URL(url);
+					} catch {
+						throw new Error(`workspace: read_many: ${JSON.stringify(url)} is not a valid url`);
+					}
+					if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+						throw new Error("workspace: only http and https addresses are allowed");
+					return parsed.href;
+				});
+				const perPage = Number(fields.maxChars) || 8000;
+				const results: Array<{ url: string; value?: PageReading; error?: string }> = new Array(addresses.length);
+				let nextIndex = 0;
+				// Each page is read in a reader page of its own that never appears in the panel and is closed afterwards.
+				const lane = async () => {
+					while (nextIndex < addresses.length) {
+						const index = nextIndex++;
+						const url = addresses[index]!;
+						try {
+							results[index] = { url, value: await readAddress(url, fields, perPage) };
+						} catch (error) {
+							results[index] = { url, error: error instanceof Error ? error.message : String(error) };
+						}
+					}
+				};
+				await Promise.all(Array.from({ length: Math.min(READ_MANY_LANES, addresses.length) }, lane));
+				const text = results
+					.map((entry, index) =>
+						entry.value
+							? `=== ${index + 1}. ${entry.value.url || entry.url}\n  ${readingLine(entry.value)}\n${formatReading(entry.value)}`
+							: `=== ${index + 1}. ${entry.url}\n  FAILED: ${entry.error ?? "no answer"}`,
+					)
+					.join("\n");
+				const failed = results.filter((entry) => !entry.value).length;
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] read_many ${addresses.length} page(s)${failed ? `, ${failed} failed` : ""}\n${text}`,
+						},
+					],
+					details: {
+						operation,
+						result: results.map((entry) => ({ url: entry.url, ok: !!entry.value, error: entry.error })),
+					},
 				};
 			}
 			case "dom": {
@@ -1713,6 +2161,21 @@ export function createWorkspaceToolDefinition(
 	 */
 	const runActing = async (fields: Record<string, unknown>): Promise<WorkspaceResult> => {
 		const operation = String(fields?.operation || "");
+		const guard = await keepOffUserTab(fields);
+		if (guard.arrived) {
+			const reached = (await browser({ action: "state", tabId: String(fields.tabId) })) as
+				| { url?: string }
+				| undefined;
+			return {
+				content: [
+					{
+						type: "text",
+						text: `[workspace] navigate ${String(fields.tabId)}\n  url=${reached?.url ?? ""}${guard.note}`,
+					},
+				],
+				details: { operation, activeId: String(fields.tabId), browser: reached },
+			};
+		}
 		// Only input can start a navigation the caller did not ask for; navigate/back/reload report where they went.
 		const acting = FOLLOW_OPERATIONS.has(operation) && (operation !== "type" || fields.enter === true);
 		const look = fields.screenshot === true && LOOK_OPERATIONS.has(operation);
@@ -1722,6 +2185,10 @@ export function createWorkspaceToolDefinition(
 			? ((await browser({ action: "state", tabId: id }).catch(() => undefined)) as { url?: string } | undefined)
 			: undefined;
 		const result = await runOne(fields as WorkspaceToolInput);
+		if (guard.note) {
+			const first = result.content[0];
+			if (first?.type === "text") first.text += guard.note;
+		}
 		const resultId = result.details.activeId ?? id;
 		if (acting && resultId) {
 			const moved = await followUp(resultId, before?.url);
@@ -1756,6 +2223,7 @@ export function createWorkspaceToolDefinition(
 					`workspace: batch step ${index + 1} has operation ${JSON.stringify(operation)}; allowed: ${[...BATCH_OPERATIONS].join(", ")}`,
 				);
 			if (!step.tabId && lastId) step.tabId = lastId;
+			if (fields.onUserTab === true) step.onUserTab = true;
 			step.screenshot = operation === "screenshot" ? undefined : false;
 			try {
 				const result = await runActing(step);
@@ -1790,7 +2258,9 @@ export function createWorkspaceToolDefinition(
 		label: "workspace",
 		description: [
 			"Control the MyHarness desktop workspace: the right-hand panel, the file and media tabs in it, and the built-in browser.",
-			"Use `tabs` first to see tab ids. `open` adds a tab without closing what is already open (`background: true` keeps the user's view where it is); `close`, `activate`, `close_others`, `move` and `reopen` manage them.",
+			"Use `tabs` first to see tab ids. `open` adds a tab without closing what is already open; a website tab opens in the background by default (you work in your own tabs while the user keeps their view; pass `background: false` only when the user asked to see the page). Tabs you open start muted; the user turns their sound on. `close`, `activate`, `close_others`, `move` and `reopen` manage them.",
+			"Leave the user's page alone: an action that would change a tab of the user's that they are looking at (click, type, mouse, key, scroll, navigate, back/forward/reload, exec, upload, login, collect, a scrolling read) runs in a background copy of it instead, with the same address and sign-in; the result names the copy, keep using it. Pass `onUserTab: true` only when the user asked you to act on their own page. Reading it (text, read without scroll, screenshot, find, state) never changes it.",
+			"Read whole pages, not screens: `read` returns a page's text without repeated lines in one call (`scroll: true` first scrolls to the end so feeds and lazy lists load; `links`/`tables` add those; `selector` reads one part). `collect` reads a paged list in one call: this page, then the next by `nextLabel`/`nextSelector` (the next-page control) or by `urlTemplate` with {page}, up to `pages`, stopping at the last page. `read_many` reads up to 10 addresses side by side in hidden reader pages (the user's sign-ins) that never appear in the panel. A background tab is not drawn, so a list that loads only as it scrolls into view may stop early there; `read` with `fresh: true` reads the tab's address again in such a reader. Prefer these to clicking and scrolling page by page.",
 			"Every browser command takes a `tabId` and works on that tab whether or not it is on screen, so several tabs can be driven side by side: navigate/back/forward/reload/stop, text/dom/ax/interactive, find/stop_find, upload, exec, screenshot, downloads, download and network.",
 			"A tab on screen has exactly the size of the user's panel (a narrow panel can get a site's phone layout); a background tab is laid out at least 1280×800.",
 			"Files: a click that starts a download waits for it and its result gives the saved file's path (files go to the user's Downloads folder, so there is nothing to search for). `download` saves a link directly with the tab's sign-in and returns the path; `downloads` lists recent ones. Move or copy the file afterwards if it belongs elsewhere.",

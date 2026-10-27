@@ -24,7 +24,7 @@
 
 ## Tool / UI / platform
 
-- `tools/` 的 execution details 与 `tools/presentation/` 的展示保持分离。
+- `tools/` 只负责 execution（`tools/presentation/public.ts` 只导出不含渲染器的工具定义）；工具调用的展示在浏览器页面 `web/` 里完成，两者保持分离。
 - `web/` 负责浏览器产品交互。Web Terminal 的 node-pty/xterm 是 Web 功能，不属于已移出的 CLI/TUI。
 - `modes/web` 只做传输和展示投影：不复制 Agent、Session、Git、Provider 逻辑，改动 wire 格式或新增 API 前先读 [Web UI](web-ui.md) 的“维护”一节；前端（`packages/coding-agent/web/`）没有构建步骤。
 - UI 交互修改遵循 [Interaction guidelines](interaction-guidelines.md)；`startup/settings-menu.ts` 保留共享设置元数据，但 Web API 不展示 Terminal 专用设置。

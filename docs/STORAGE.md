@@ -44,6 +44,7 @@ The project root contains the project configuration and runtime data:
 | `<project>\data\workspaces\<workspace-id>\` | Workspace registry, metadata and Session roots | Ignored runtime data; contains user conversations and paths |
 | `<project>\data\workspaces\<workspace-id>\sessions\<session-id>\conversation\` | Session JSONL entries | Primary product Session store; user data, not disposable build output |
 | `%USERPROFILE%\.myharness\agent\code-intelligence\` | Optional downloaded semantic modules and workspace/index data | Installed runtime outside the source tree; only install published, checksummed assets |
+| `%USERPROFILE%\.myharness\agent\desktop-profile\` | The desktop app's Electron profile: built-in browser cookies and site storage, `browser-*.json` stores (bookmarks, new-tab shortcuts, zoom, dark mode, language, permissions), encrypted saved passwords, and the browser sync key and per-computer sealed vaults | Sensitive user data; never print or attach. Drive sync carries only those six store files and the sealed vaults, never the key, cookies or password file (see `packages/desktop/README.md`) |
 
 The default product Session format is JSONL plus JSON metadata. The separate
 `packages/storage/sqlite-node` package implements a Node SQLite backend, but
@@ -51,8 +52,10 @@ the current Coding Agent default path is still the project `data/workspaces/`
 tree. It must not be described as the active product storage backend without a
 runtime change and corresponding tests.
 
-Web file imports are stored alongside the originating Session JSONL in
-`uploads/<random-id>/attachment-<sanitized-name>`. Each import has a separate
+Web file imports are stored in the originating Session folder as
+`uploads/<random-id>/attachment-<sanitized-name>` with a `manifest.json` beside
+the file (a legacy flat Session without a Workspace/Session folder keeps them in
+`uploads/<random-id>/` beside its JSONL file). Each import has a separate
 directory, so matching names do not overwrite one another. These are user-owned
 original file bytes; removing a draft attachment only removes its reference, not
 the stored file. Deleting a chat keeps them (copies of the chat, such as forks,

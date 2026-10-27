@@ -12,17 +12,17 @@ MyHarness 当前的产品 UI 是本机浏览器 Web UI，交互见 [Web UI](web-
 
 | 语义 | MyHarness 实现 | 用户应能预测的行为 |
 | --- | --- | --- |
-| 即时 Boolean | `SettingItem.interaction: "toggle"`，显示 `On`/`Off`，使用 `values: ["Off", "On"]` | Enter/Space 立即切换，并立即调用设置回调 |
-| 需要额外配置的功能开关 | 主行显示摘要和 `›`，打开 detail submenu；detail 页中的开关仍使用 `toggle` | 主行进入配置，不把复杂流程伪装成一次切换 |
-| 单选 Enum / 预设数字 | `interaction: "select"` + `submenu`，子页使用 `SelectList` | 当前值显示为用户可读标签；Enter/Space 打开，方向键选择，Enter/Space 确认，Esc 返回 |
-| 多选 | 每个选项使用 `toggle`；批量操作使用 `action` | 每个选项独立显示 On/Off；“Select all/Clear all”等是可执行命令 |
-| 文本 / 数字 | `Input` 或领域输入组件；提交前校验 | 输入错误留在当前页面并说明原因；成功后提交并返回或刷新摘要 |
-| Navigation | `submenu` 或明确的导航组件；共享列表显示当前摘要和 `›` | 点击/确认进入下一层，不执行隐藏动作 |
-| 普通 Action | `interaction: "action"` + `onActivate`，显示 `▶` | Enter/Space 执行一次命令；不得用虚假的 `values: ["run"]` 伪装动作 |
-| 只读 Status | `interaction: "status"`，不提供激活回调 | 显示状态、结果或说明；Enter/Space 不改变数据 |
+| 即时 Boolean | 设置页 `type: "boolean"` 用 `Toggle` 开关；`/settings` 命令面板里是 `kind: "toggle"`（`src/startup/settings-menu.ts`），Space 切换 | Enter/Space 立即切换，并立即保存 |
+| 需要额外配置的功能开关 | 设置页里是独立页面（如 Web search、Code Intelligence）；命令面板里是 `kind: "submenu"`，行尾显示 `›` | 主行进入配置，不把复杂流程伪装成一次切换 |
+| 单选 Enum / 预设数字 | 设置页 `type: "enum"` 用 `Select` 下拉；命令面板里是 `kind: "select"` + `choices` 的选择列表 | 当前值显示为用户可读标签；Enter/Space 打开，方向键选择，Enter/Space 确认，Esc 返回 |
+| 多选 | 设置页 `type: "multi"` 用 `SearchableMultiSelect` | 每个选项独立选中或取消；“Select all/Clear all”等是可执行命令 |
+| 文本 / 数字 | 设置页 `type: "text"` / `"number"` 等输入框，失焦或 Enter 时提交 | 输入错误留在当前页面并说明原因；成功后提交并刷新摘要 |
+| Navigation | 设置页左侧的页面列表；命令面板的 `submenu` 行（行尾 `›`，标题栏用 `›` 显示层级） | 点击/确认进入下一层，不执行隐藏动作 |
+| 普通 Action | 按钮，或命令面板里不带 `›` 的命令行 | Enter/Space 执行一次命令；不得伪装成一个可切换的设置值 |
+| 只读 Status | 只显示文字的行或说明，没有控件 | 显示状态、结果或说明；Enter/Space 不改变数据 |
 | 危险操作 | 独立的 destructive 命令/确认页 | 明确写出目标和后果；确认与取消分开，Esc 取消，默认焦点放在安全选项 |
 
-`values` 在新的产品 UI 中只用于明确的二态 `toggle`。共享组件仍保留旧的 inline-cycle 行为，以兼容已有 Extension/调用方；新代码不得用它实现 Enum、数字选择、返回、保存或任意命令。
+`toggle` 只用于明确的二态设置；Enum、数字选择、返回、保存或任意命令不得用点一下循环切换的方式实现。
 
 ### 当前值和标签
 
@@ -45,7 +45,7 @@ MyHarness 当前的产品 UI 是本机浏览器 Web UI，交互见 [Web UI](web-
 
 ## Navigation、Action 和 Back
 
-共享 `SettingsList` 会为 submenu 显示 `›`，为 action 显示 `▶`，并在底部提示当前行是 open、run、toggle 还是 read-only。进入子页后由子页拥有焦点；Esc 返回上一层并恢复父列表的选中项。Back 可以是明确的 action，但不能用空字符串或单值 `values` 充当返回按钮。
+命令面板（`web/js/command-panel.js`）为 submenu 行显示 `›`，标题栏用 `›` 显示当前层级；↑/↓ 移动，Enter 或 → 进入或应用，← / Esc 返回上一层，Space 切换。进入子页后由子页拥有焦点。Back 可以是明确的 action，但不能用空的设置值充当返回按钮。
 
 普通 Button/Command 只表示立即执行的操作。打开 Providers、Model、Credential、Git、Web Search、Code Intelligence 或详细配置的行必须保持导航语义，即使它的当前值是 `On`/`Off` 摘要。
 
@@ -67,7 +67,7 @@ MyHarness 当前的产品 UI 是本机浏览器 Web UI，交互见 [Web UI](web-
 - Success：返回上一层或更新摘要，并给出可理解的完成结果。
 - Failure：保留上下文，说明可执行的下一步；不要吞掉异常或把失败显示成空状态。
 - Validation：输入错误就地显示，保留用户输入，直到修正或取消。
-- Disabled / unavailable：使用 `SettingItem.disabled` 保留可见状态但拒绝 Enter/Space；同时显示不可用原因，不要把不可用项伪装成可执行命令。
+- Disabled / unavailable：保留可见状态但拒绝 Enter/Space（命令面板行的 `disabled`，设置页行的 `off`）；同时显示不可用原因，不要把不可用项伪装成可执行命令。
 - Empty：说明“没有数据”和“加载失败”的区别。搜索无匹配与真实空列表必须可区分。
 - Authentication required：明确告诉用户需要登录/凭据，不要用普通“未设置”掩盖认证状态。
 
@@ -79,11 +79,11 @@ Web UI 的等价键盘 contract：
 
 - 列表使用 Up/Down 移动，Enter 和 Space 激活当前项；Tab 顺序仅在组件明确支持时使用；
 - Esc 在子页、输入页和确认页表示取消/返回，不提交草稿；
-- 当前焦点必须有可见标记；嵌套 Input/Editor 必须接收父组件的 `focused` 状态；
+- 当前焦点必须有可见标记；
 - overlay 打开后只把输入交给当前 overlay，关闭后恢复原焦点；
 - 每个输入、选择和动作都应有可读 label、当前状态和底部键位提示；
 - disabled 项不得响应 Enter/Space，也不得仅靠颜色表达不可用；
-- 渲染行必须遵守传入宽度，长状态或错误应截断/换行而不破坏操作提示。
+- 长状态或错误应截断/换行，不挤掉操作控件。
 
 这些规则对应 WAI-ARIA APG 中 switch、checkbox、radio、combobox、dialog 和 keyboard interface 的核心行为；在 Web UI 中实现的是相同的键盘、焦点、提交和取消语义。
 
@@ -93,18 +93,17 @@ Web UI 的等价键盘 contract：
 
 - Provider/Account Credential/Model/Session/Workspace 之间存在真实数据关系；
 - 操作需要异步网络请求、认证、安装、健康检查或 capability probe；
-- 多字段配置需要 draft、预览、原子提交或回滚；
-- 现有公开 Extension contract 要求兼容旧的 `SettingItem.values` 行为。
+- 多字段配置需要 draft、预览、原子提交或回滚。
 
 偏离只改变交互层，不应为了统一控件而修改身份绑定、持久化格式、Provider 路由、Session 数据或 Workspace 数据。
 
 ## 新 UI 的实现检查表
 
-- 这是 toggle、select、navigation、action 还是 status？是否设置了对应 `interaction`？
-- Boolean 是否只显示 `On`/`Off`，并且确实是即时生效的设置？
-- Enum/数字是否通过选择子页确认，而不是 inline cycle？
+- 这是 toggle、select、navigation、action 还是 status？命令面板是否用了对应的 `kind`，设置页是否用了对应的 `type`？
+- Boolean 是否只是开/关，并且确实是即时生效的设置？
+- Enum/数字是否通过选择列表或下拉确认，而不是点一下循环切换？
 - 当前值是否是用户可读标签，而不是内部 key？
-- 导航和动作是否分别有 `›`/`▶` 语义？
+- 导航行是否带 `›`，动作是否是按钮或命令，而不是伪装成设置值？
 - 删除、重置或清理是否有目标明确的确认和安全取消？
 - Loading、success、failure、validation、empty、unavailable 是否有清晰反馈？
 - Enter、Space、Esc、焦点恢复和宽度截断是否有测试或代码证据？

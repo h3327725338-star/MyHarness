@@ -61,7 +61,7 @@ export type CreateAgentSessionRuntimeFactory = (options: {
 }) => Promise<CreateAgentSessionRuntimeResult>;
 
 /**
- * Thrown when /import references a JSONL file path that does not exist.
+ * Thrown when `importFromJsonl()` is given a JSONL file path that does not exist.
  */
 export class SessionImportFileNotFoundError extends Error {
 	readonly filePath: string;
@@ -146,7 +146,7 @@ export class AgentSessionRuntime {
 	 * but before the current session is invalidated.
 	 *
 	 * This is for host-owned UI teardown that must not yield to the event loop,
-	 * such as detaching extension-provided TUI components before the old extension
+	 * such as dismissing extension dialogs and resetting the UI surface before the old extension
 	 * context becomes stale.
 	 */
 	setBeforeSessionInvalidate(beforeSessionInvalidate?: () => void): void {

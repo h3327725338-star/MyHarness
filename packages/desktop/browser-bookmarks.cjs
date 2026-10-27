@@ -47,8 +47,8 @@ const writeAtomic = (file, text) => {
 };
 
 /**
- * Bookmarks of the built-in browser: one JSON file in the desktop host's user-data folder (never in the Data root, so
- * Google Drive sync does not pick it up). Unknown fields of a newer version are ignored; a damaged file is set aside as
+ * Bookmarks of the built-in browser: one JSON file in the desktop host's user-data folder, outside the Data root (Drive
+ * sync carries this file as it is, browser-sync.cjs). Unknown fields of a newer version are ignored; a damaged file is set aside as
  * `.damaged` before the next write instead of being overwritten silently.
  */
 exports.createBookmarkStore = (file) => {
@@ -85,6 +85,8 @@ exports.createBookmarkStore = (file) => {
   };
   return {
     list,
+    /** Read the file again on the next use (browser sync wrote it, browser-sync.cjs). */
+    reload() { cache = null; damaged = false; },
     add({ url, title, icon }) {
       const href = webUrl(url);
       const items = load();

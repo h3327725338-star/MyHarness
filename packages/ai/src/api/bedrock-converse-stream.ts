@@ -314,7 +314,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 
 /**
  * Human-readable prefixes for Bedrock SDK exception names.
- * The downstream retry logic in agent-session matches patterns like
+ * The retry classifier (`isRetryableAssistantError()` in `utils/retry.ts`) matches patterns like
  * `server.?error` and `service.?unavailable`, so we preserve the legacy
  * prefix format rather than using the raw SDK exception name.
  */

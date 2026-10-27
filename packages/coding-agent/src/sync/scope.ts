@@ -6,6 +6,7 @@ import { WorkspaceStore } from "../data/workspace-store.ts";
 import { listMemoryFiles, type MemoryFile } from "../session/memory/store.ts";
 import type { ModeStateStore } from "../session/mode-state.ts";
 import { readSessionHeader } from "../session/storage/jsonl/index.ts";
+import { listBrowserFiles } from "./browser-data.ts";
 import { readSavedPrompts } from "./saved-prompts.ts";
 import type { ScannedEntity } from "./types.ts";
 import { stableJson } from "./util.ts";
@@ -142,8 +143,8 @@ function workspaceContent(workspace: Record<string, unknown>): string {
  * Collect every entity that belongs to the sync scope:
  * all memories (global, workspace, session, archived, pending), General-mode Workspaces and their Sessions,
  * the files inside those Sessions (uploads, artifacts, metadata), the Workspace library, the General personal
- * prompt and drafts. Coding-mode chats are deliberately excluded; Coding memories are included through the memory
- * scan because memory is shared across modes.
+ * prompt and drafts, and the built-in browser's own files. Coding-mode chats are deliberately excluded; Coding
+ * memories are included through the memory scan because memory is shared across modes.
  */
 export function scanLocalEntities(options: ScanOptions): Map<string, ScannedEntity> {
 	const entities = new Map<string, ScannedEntity>();
@@ -360,6 +361,23 @@ function* scanSteps(options: ScanOptions, entities: Map<string, ScannedEntity>):
 			mtimeMs: prefsMtime,
 			size: Buffer.byteLength(content),
 			meta: { name: "Saved prompts" },
+		});
+	}
+
+	// 6. The built-in browser's bookmarks, new-tab shortcuts, site settings and sealed sign-in vaults (browser-data.ts).
+	for (const file of listBrowserFiles(agentDir)) {
+		if (!isFile(file.path)) continue;
+		const stat = statSync(file.path);
+		if (stat.size > MAX_SCANNED_FILE_BYTES) continue;
+		entities.set(`browser:${file.id}`, {
+			key: `browser:${file.id}`,
+			kind: "browser",
+			id: file.id,
+			path: file.path,
+			updatedAt: stat.mtime.toISOString(),
+			mtimeMs: stat.mtimeMs,
+			size: stat.size,
+			meta: { name: `Browser ${file.id}` },
 		});
 	}
 }

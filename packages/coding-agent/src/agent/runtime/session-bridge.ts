@@ -1,10 +1,10 @@
 /**
  * Session bridge: lets a second MyHarness process (for example the Web UI) work on a Session that another process
- * (for example the terminal UI) currently owns, instead of failing with "already active in another process".
+ * currently owns, instead of failing with "already active in another process".
  *
  * The process that holds the Session's writer lock is the owner. It serves a small NDJSON protocol on a loopback
  * port, announced in `<session>.jsonl.bridge` (see session/bridge/descriptor.ts):
- *   server -> client  hello_ok {flags, streaming}      first message after a valid hello
+ *   server -> client  hello_ok {sessionFile, flags, streaming, subAgents}   first message after a valid hello
  *                     event {event, flags}             every AgentSessionEvent of the owner's Session
  *                     ack {id, ok, error}              answer to a command
  *   client -> server  hello {token}

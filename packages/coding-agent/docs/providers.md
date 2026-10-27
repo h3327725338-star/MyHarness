@@ -74,7 +74,7 @@ myharness
 
 对于 Anthropic，同时设置 `ANTHROPIC_OAUTH_TOKEN` 和 `ANTHROPIC_API_KEY` 时，前者优先。
 
-当前 interactive UI 只有 DeepSeek 提供了经过验证的 account-balance adapter。它使用 `<provider-base-url>/user/balance`，每 5 秒 refresh 一次。该 adapter 可以独立跟踪 main model 和 Vision Assistant。DeepSeek 会通过 Provider ID 或 official API hostname 识别，因此 custom DeepSeek configuration 不必使用固定的 catalog ID。Balance lookup failures 不会中断 model requests；Vision Assistant 没有可用 balance 时，其 footer 会显示 `余额未知`。
+`src/providers/runtime/balance-tracker.ts` 只有 DeepSeek 一个 account-balance adapter。它使用 `<provider-base-url>/user/balance`，每 5 秒 refresh 一次，可以独立跟踪 main model 和 Vision Assistant。DeepSeek 会通过 Provider ID 或 official API hostname 识别，因此 custom DeepSeek configuration 不必使用固定的 catalog ID。Balance lookup failures 不会中断 model requests。当前 Web UI 和包导出都没有调用这个模块，所以界面上不显示余额。
 
 <a id="auth-file"></a>
 #### Auth File
@@ -254,7 +254,7 @@ MyHarness 会自动设置 `x-session-affinity`，以获得 [prefix caching](http
 
 ### Google Vertex AI 配置
 
-支持显式的 Google Cloud API key、Application Default Credentials（ADC）或 service-account credentials file。Interactive model login flow 可以将所选 authentication method 及其 project/location values 保存到 `auth.json`。
+支持显式的 Google Cloud API key、Application Default Credentials（ADC）或 service-account credentials file。当前 Web UI 没有 Vertex 专用的登录流程。
 
 API-key authentication：
 

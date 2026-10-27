@@ -2,6 +2,8 @@
 
 # MyHarness Observability Design Notes
 
+> Status: design proposal only. None of the APIs, event names or packages below (`configureMyHarnessObservability`, `traceOperation`, `myharness.*` events, `packages/observability`) exist in the current source.
+
 ## Goal
 
 Make `packages/ai` and `packages/agent`/harness observable without depending on OpenTelemetry, Sentry, or any APM vendor.

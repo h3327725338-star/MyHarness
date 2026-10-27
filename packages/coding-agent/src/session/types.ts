@@ -97,7 +97,7 @@ export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	replacementHistory?: AgentMessage[];
 }
 
-/** Summary of an abandoned branch path; kept for navigation, not for model context by itself. */
+/** Summary of an abandoned branch path; on the active path it enters model context as a `branchSummary` message. */
 export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
 	type: "branch_summary";
 	fromId: string;
@@ -121,7 +121,7 @@ export interface LabelEntry extends SessionEntryBase {
 	label: string | undefined;
 }
 
-/** Display name record. The latest non-empty `name` wins; empty names clear the title. */
+/** Display name record. The latest record wins; an empty `name` clears the title. */
 export interface SessionInfoEntry extends SessionEntryBase {
 	type: "session_info";
 	name?: string;
@@ -214,7 +214,7 @@ export interface SessionInfo {
 
 export type SessionListProgress = (loaded: number, total: number) => void;
 
-/** Narrow, read-only capability surface exposed to context/application code. */
+/** Narrow, read-only capability surface exposed to context code and extensions. */
 export interface ReadonlySessionManager {
 	getCwd(): string;
 	getSessionDir(): string;

@@ -1,5 +1,5 @@
 // The selection translation card, laid out like a selection translator's popup: a head with the language pair (the
-// target is a menu; picking one translates again and keeps it as the preference of Settings → Agents → Translation), a
+// target is a menu; picking one translates again and keeps it as the preference of Settings → Agent → Assistants → Translation), a
 // word card for a word or a short phrase (the word, its reading, the translation, meanings by part of speech) or the
 // passage with its translation, and the model that answered. The head drags the card; it fades in and out, and it goes
 // away when the user works anywhere else (a click outside, the app losing focus, Escape).

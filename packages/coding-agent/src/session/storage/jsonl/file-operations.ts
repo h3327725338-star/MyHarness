@@ -509,7 +509,9 @@ async function deleteSessionDirectory(
 }
 
 /**
- * Delete a session file, preferring the platform trash command when available.
+ * Delete a session file or chat folder. A structured chat folder goes through deleteSessionDirectory when the delete is
+ * permanent, something is kept, memories are deleted, or the folder holds memory; any other deletion (a full
+ * non-permanent one, or a conversation file outside the structured layout) is handed to the platform trash command.
  *
  * Attachment safety: `artifacts/` is kept unless `deleteArtifacts === true`; `uploads/` and
  * `tool-results/` are kept unless `deleteAttachments === true`. Without explicit confirmation only

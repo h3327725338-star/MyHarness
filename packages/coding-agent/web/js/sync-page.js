@@ -62,6 +62,95 @@ function SyncCount({ status, stage, text }) {
 	</span>`;
 }
 
+/**
+ * The built-in browser (desktop app only). Bookmarks, shortcuts and site settings ride on the normal sync; sign-ins and
+ * saved passwords only once a sync passphrase seals them on this computer (packages/desktop/browser-sync.cjs).
+ */
+function BrowserSyncCard({ syncing }) {
+	const host = globalThis.myHarnessDesktop;
+	const [state, setState] = useState(null);
+	const [phrase, setPhrase] = useState("");
+	const [busy, setBusy] = useState("");
+	useEffect(() => {
+		let live = true;
+		const load = () =>
+			host
+				.browser({ action: "syncStatus" })
+				.then((value) => live && setState(value))
+				.catch(() => {});
+		void load();
+		const timer = setInterval(load, 15_000);
+		return () => {
+			live = false;
+			clearInterval(timer);
+		};
+	}, []);
+	const run = async (key, command, success) => {
+		setBusy(key);
+		try {
+			setState(await host.browser(command));
+			if (success) toast(t(success), "success");
+			return true;
+		} catch (error) {
+			toast(error?.message || t("The operation failed."), "error", 7000);
+			return false;
+		} finally {
+			setBusy("");
+		}
+	};
+	const on = state?.on === true;
+	// Today's seal by its clock time, an older one by its date: the line has to fit beside the button.
+	const sealedAt = state?.lastSealAt ? new Date(state.lastSealAt) : null;
+	const sealed = sealedAt
+		? t("Sealed {time}", {
+				time:
+					sealedAt.toDateString() === new Date().toDateString()
+						? sealedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
+						: sealedAt.toLocaleDateString(),
+			})
+		: t("Not sealed yet");
+	return html`<${Card} title=${t("Built-in browser")} description=${t("Your browser data follows you to your other computers.")}>
+		<${Row} label=${t("Bookmarks, shortcuts and site settings")} description=${t("Zoom, dark mode, website language and site permissions too. Nothing to set up.")}>
+			<span class="dim">${syncing ? t("On") : t("Off")}</span>
+		<//>
+		<${Row}
+			label=${t("Sign-ins and saved passwords")}
+			description=${on
+				? t("Sealed with your sync passphrase before upload. Some sites, such as Google, may ask you to sign in again.")
+				: t("Encrypted on this computer with a sync passphrase before upload; use the same one on each computer. Some sites, such as Google, may ask you to sign in again.")}
+			wide=${!on}
+		>
+			${on
+				? html`<div class="row sync-field">
+						<span class="dim truncate grow" role="status" title=${state?.others ? t("{count} other computers have sealed theirs", { count: state.others }) : ""}>${sealed}</span>
+						<button class="btn" disabled=${busy === "off"} onClick=${() => run("off", { action: "syncOff" }, "Sign-in sync is off on this computer.")}>${t("Turn off")}</button>
+					</div>`
+				: html`<form
+						class="row sync-field"
+						onSubmit=${async (event) => {
+							event.preventDefault();
+							if (await run("on", { action: "syncPassphrase", passphrase: phrase }, "Sign-in sync is on.")) setPhrase("");
+						}}
+					>
+						<input
+							class="field grow"
+							type="password"
+							value=${phrase}
+							minlength="8"
+							placeholder=${t("Sync passphrase, at least 8 characters")}
+							autocomplete="new-password"
+							disabled=${state && !state.available}
+							onInput=${(event) => setPhrase(event.target.value)}
+						/>
+						<button class="btn primary" type="submit" disabled=${busy === "on" || phrase.length < 8 || (state && !state.available)}>${busy === "on" ? t("Verifying…") : t("Turn on")}</button>
+					</form>`}
+		<//>
+		${state?.unreadable?.length
+			? html`<div class="notice warn">${t("This passphrase does not open the sign-ins from {names}. Enter the same passphrase on every computer.", { names: state.unreadable.join(", ") })}</div>`
+			: null}
+	<//>`;
+}
+
 export function SyncPage() {
 	const status = useStore((s) => s.syncStatus);
 	const [busy, setBusy] = useState("");
@@ -476,7 +565,17 @@ export function SyncPage() {
 				<button class="btn" disabled=${manualBlocked || busy === "download"} title=${status.paused ? t("Sync is paused. Turn Pause off first.") : ""} onClick=${() => run("download", () => post("/api/sync/download"))}>
 					<${Icon} name="download" size=${14} />${t("Download now")}
 				</button>
-				<button class="btn" disabled=${manualBlocked || busy === "sync"} title=${status.paused ? t("Sync is paused. Turn Pause off first.") : ""} onClick=${() => run("sync", () => post("/api/sync/sync"))}>
+				<button
+					class="btn"
+					disabled=${manualBlocked || busy === "sync"}
+					title=${status.paused ? t("Sync is paused. Turn Pause off first.") : ""}
+					onClick=${() =>
+						run("sync", async () => {
+							// The built-in browser seals its sign-ins first, so this pass uploads them too.
+							await globalThis.myHarnessDesktop?.browser?.({ action: "syncNow" }).catch(() => {});
+							return post("/api/sync/sync");
+						})}
+				>
 					<${Icon} name="drive" size=${14} />${t("Sync now")}
 				</button>
 			</div>
@@ -554,6 +653,7 @@ export function SyncPage() {
 					)}
 				<//>`
 			: null}
+		${typeof globalThis.myHarnessDesktop?.browser === "function" ? html`<${BrowserSyncCard} syncing=${status.connected && status.enabled && !status.paused} />` : null}
 		<${Card} title=${t("What syncs")} description=${t("Scanned by meaning, never by copying the whole Data folder.")}>
 			<button class="set-card-toggle" aria-expanded=${detailsOpen} onClick=${() => setDetailsOpen(!detailsOpen)}>
 				<${Icon} name="chevronRight" size=${13} class="disclose" /><span class="set-label">${detailsOpen ? t("Hide details") : t("Show details")}</span>
@@ -562,6 +662,7 @@ export function SyncPage() {
 				<div class="set-desc sync-list">
 					<div>${t("All memories: global, workspace, session, archived, pending and the profile.")}</div>
 					<div>${t("General mode: workspaces, chats and branches, attachments, artifacts, library files, drafts and the general personal prompt.")}</div>
+					<div>${t("Built-in browser: bookmarks, new-tab shortcuts and site settings; sign-ins and saved passwords only with a sync passphrase, sealed on this computer first.")}</div>
 					<div>${t("Coding-mode chats and repositories are not uploaded; their memories are.")}</div>
 					<div>${t("API keys, Google tokens, trust decisions, locks and running tasks never leave this computer.")}</div>
 					<div>${t("The Google token is kept in an owner-only file (Windows user permissions). It is not OS-encrypted or end-to-end encrypted.")}</div>

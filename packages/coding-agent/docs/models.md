@@ -181,7 +181,7 @@ A missing field means the default; a value written to the file (including `"auto
 
 `authMode` (optional, written by the Web UI provider form) records how the provider authenticates: `"apiKey"` uses the key saved in the credential store and leaves an `apiKey` that is also written in `models.json` unused; `"config"` uses the `apiKey` written in `models.json` even when a key is saved as well (when `models.json` holds no key, the saved key is still used). Without `authMode` the previous behaviour applies: a saved key first, then the `apiKey` in `models.json`.
 
- `apiKey` is not required to load the file: models become available when auth is configured through `auth.json`, CLI `--api-key`, or provider `apiKey`. If no auth is configured, the models load but stay unavailable in `/model` and `--list-models`.
+ `apiKey` is not required to load the file: models become available when auth is configured through `auth.json`, CLI `--api-key`, or provider `apiKey`. If no auth is configured, the models load but stay unavailable in the model menu and `/model`.
 
 ### Value Resolution
 
@@ -277,8 +277,8 @@ A cost tier supplies a complete alternate rate set and applies to the full reque
 ```
 
 Current behavior:
-- `/model`, `--list-models`, and the interactive footer display entries by model `id`.
-- The configured `name` is used for model matching and secondary model detail text. It does not replace the footer/status-bar model id.
+- The Web UI model menu and model labels show the configured `name`, and fall back to the model `id` when no `name` is set.
+- The configured `name` is also used for model matching.
 
 ### Thinking Level Map
 
@@ -422,7 +422,7 @@ Behavior notes:
 - `modelOverrides` are applied to base/provider models and matching extension-registered provider models.
 - Unknown model IDs are ignored.
 - You can combine provider-level `baseUrl`/`headers` with `modelOverrides`.
-- Overriding `name` changes model matching and secondary detail text only; the footer and primary model lists continue to show the model `id`.
+- Overriding `name` changes model matching and the name the Web UI model menu and labels show.
 - If `models` is also defined for a provider, custom models are merged first and `modelOverrides` are applied last. A custom model with the same `id` replaces the base entry and is then subject to the same `modelOverrides`.
 
 ## Anthropic Messages Compatibility

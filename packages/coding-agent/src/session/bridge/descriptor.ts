@@ -3,7 +3,8 @@
  *
  * The owner writes `<session>.jsonl.bridge` next to the Session JSONL while it holds the writer lock. Another process
  * that finds the Session locked reads it to attach to the live Session instead of failing (see
- * agent/runtime/session-bridge.ts). The file only holds a loopback port and a random token, no Session content.
+ * agent/runtime/session-bridge.ts). The file only holds the owner's pid and start time, a loopback port and a random
+ * token, no Session content.
  */
 
 import { readFileSync, rmSync, writeFileSync } from "node:fs";

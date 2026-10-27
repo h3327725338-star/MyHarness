@@ -43,11 +43,30 @@ export function mediaState(element) {
 	};
 }
 
+/**
+ * One tab as a command's answer lists it: `muted` says a website tab plays nothing aloud, `agent` that the Agent opened
+ * it (its own tab to drive, unlike the user's).
+ */
+const tabSummary = (tab) => ({ id: tab.id, type: tab.type, path: tab.path, url: tab.url, ...(tab.muted === true ? { muted: true } : {}), ...(tab.agent === true ? { agent: true } : {}) });
+
+/**
+ * The tab a command asks to open. A website tab may bring its own id (the Agent's background copy of a page the user has
+ * open: the same address, but a tab of its own) and says whether the Agent opened it.
+ */
+const openedTab = (tab) => ({
+	type: tab.type,
+	path: tab.path,
+	url: tab.url,
+	...(tab.type === "browser" && typeof tab.id === "string" && tab.id.startsWith("browser:") ? { id: tab.id } : {}),
+	...(tab.muted === true ? { muted: true } : {}),
+	...(tab.agent === true ? { agent: true } : {}),
+});
+
 export function workspaceState() {
 	return {
 		panelOpen: state.view.panelOpen,
 		activeId: state.view.wsActive,
-		tabs: state.view.wsTabs.map((tab) => ({ id: tab.id, type: tab.type, path: tab.path, url: tab.url })),
+		tabs: state.view.wsTabs.map(tabSummary),
 		closed: state.view.wsClosed.map((tab) => ({ id: tab.id, type: tab.type, path: tab.path, url: tab.url })),
 		media: mediaState(mediaIn(state.view.wsActive)),
 		onScreen: true,
@@ -74,7 +93,6 @@ async function shownOnScreen(tabId, limitMs = 800) {
 	return document.visibilityState === "visible" ? "visible" : "window-hidden";
 }
 
-const tabSummary = (tab) => ({ id: tab.id, type: tab.type, path: tab.path, url: tab.url });
 
 /**
  * A command from the Agent of a chat that is not on screen (another chat, or the other mode) changes that chat's saved
@@ -127,7 +145,7 @@ function runStoredPanelCommand(sessionId, value, action) {
 			return report();
 		case "open": {
 			const tab = value.tab || {};
-			if (!open({ type: tab.type, path: tab.path, url: tab.url }, value.background === true))
+			if (!open(openedTab(tab), value.background === true))
 				throw new Error("workspace: this tab needs type=browser with a url, or type=file with a path");
 			save();
 			return report();
@@ -193,14 +211,14 @@ export async function runWorkspaceCommand(command) {
 		}
 		case "open": {
 			const tab = value.tab || {};
-			// A link the user clicked inside an HTML preview opens where Settings → Interface says, not always as a tab.
+			// A link the user clicked inside an HTML preview opens where Settings → Appearance → Interface says, not always as a tab.
 			if (value.link === true && tab.type === "browser" && linkTargetOf(state.view.linkTarget) === "system") {
 				const url = externalWebUrl(String(tab.url || ""), "http://invalid.localhost");
 				if (!url || typeof window.myHarnessDesktop?.external !== "function") throw new Error("workspace: this link cannot be opened");
 				await window.myHarnessDesktop.external(url);
 				return workspaceState();
 			}
-			const id = actions.openWorkspace({ type: tab.type, path: tab.path, url: tab.url }, { background: value.background === true });
+			const id = actions.openWorkspace(openedTab(tab), { background: value.background === true });
 			if (!id)
 				throw new Error("workspace: this tab needs type=browser with a url, or type=file with a path");
 			// A tab opened in the background is not meant to be shown; only the one that comes to the front is checked.
@@ -283,6 +301,8 @@ export function installWorkspaceHost() {
 			actions.setBrowserIcon(value.url || tab?.url || "", value.icon);
 			return;
 		}
+		// The speaker on a website tab follows its sound whether or not the tab is on screen.
+		if (value.type === "state" && tab && value.state) actions.setBrowserAudio(tab.id, value.state);
 		if (value.type !== "state" || !tab || tab.id === state.view.wsActive) return;
 		if (value.state?.title) actions.updateWorkspaceTabTitle(tab.id, value.state.title);
 		if (value.state?.url) actions.updateWorkspaceTabUrl(tab.id, value.state.url);
