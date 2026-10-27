@@ -14,7 +14,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat as statAsync, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import ignore from "ignore";
@@ -247,6 +247,30 @@ function looksBinary(buffer: Buffer): boolean {
 	return false;
 }
 
+/** The first `limit` bytes of a file without reading the rest (a log opened in a tab can be gigabytes). */
+async function readFileHead(absolute: string, limit: number): Promise<Buffer> {
+	const handle = await open(absolute, "r");
+	try {
+		const buffer = Buffer.alloc(limit);
+		const { bytesRead } = await handle.read(buffer, 0, limit, 0);
+		return buffer.subarray(0, bytesRead);
+	} finally {
+		await handle.close();
+	}
+}
+
+/** Send a file as a download in chunks, so a large one neither fills memory nor holds other requests. */
+function streamDownload(res: import("node:http").ServerResponse, absolute: string, name: string, size: number): void {
+	res.writeHead(200, {
+		"Content-Type": "application/octet-stream",
+		"Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+		"Content-Length": size,
+	});
+	createReadStream(absolute)
+		.on("error", () => res.destroy())
+		.pipe(res);
+}
+
 function fuzzyScore(query: string, target: string): number {
 	const q = query.toLowerCase();
 	const t = target.toLowerCase();
@@ -375,16 +399,18 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 			}),
 		};
 	});
-	server.route("GET", "/api/artifacts/download", ({ url, res }) => {
+	server.route("GET", "/api/artifacts/download", async ({ url, res }) => {
 		let full: string;
+		let size: number;
 		try {
 			full = resolveArtifact(artifactDataRoot(), url.searchParams.get("path") ?? "");
+			const stat = await statAsync(full);
+			if (!stat.isFile()) throw new Error("Not a file");
+			size = stat.size;
 		} catch {
 			throw new HttpError(404, "Unknown artifact");
 		}
-		res.setHeader("Content-Type", "application/octet-stream");
-		res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(full))}`);
-		res.end(readFileSync(full));
+		streamDownload(res, full, path.basename(full), size);
 	});
 
 	server.route("GET", "/api/memory", async ({ url }) => {
@@ -670,7 +696,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		};
 	});
 
-	server.route("GET", "/api/uploads/read", ({ url }) => {
+	server.route("GET", "/api/uploads/read", async ({ url }) => {
 		const absolute = resolveUploadPath(url.searchParams.get("path"));
 		if (!existsSync(absolute)) throw new HttpError(404, "Attachment has been deleted.");
 		let stat: ReturnType<typeof statSync>;
@@ -689,15 +715,15 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 				...meta,
 				kind: "image" as const,
 				mimeType: imageType,
-				data: readFileSync(absolute).toString("base64"),
+				data: (await readFile(absolute)).toString("base64"),
 			};
 		}
 		if (stat.size > MAX_TEXT_BYTES) {
-			const head = readFileSync(absolute).subarray(0, MAX_TEXT_BYTES);
+			const head = await readFileHead(absolute, MAX_TEXT_BYTES);
 			if (looksBinary(head)) return { ...meta, kind: "binary" as const };
 			return { ...meta, kind: "text" as const, content: head.toString("utf8"), truncated: true };
 		}
-		const buffer = readFileSync(absolute);
+		const buffer = await readFile(absolute);
 		if (looksBinary(buffer)) return { ...meta, kind: "binary" as const };
 		return { ...meta, kind: "text" as const, content: buffer.toString("utf8"), truncated: false };
 	});
@@ -711,12 +737,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 			throw new HttpError(404, "Attachment has been deleted.");
 		}
 		if (!stat.isFile()) throw new HttpError(404, "Attachment has been deleted.");
-		res.setHeader("Content-Type", "application/octet-stream");
-		res.setHeader(
-			"Content-Disposition",
-			`attachment; filename*=UTF-8''${encodeURIComponent(uploadMeta(absolute).name)}`,
-		);
-		res.end(readFileSync(absolute));
+		streamDownload(res, absolute, uploadMeta(absolute).name, stat.size);
 	});
 
 	// Attachments of one conversation (sidebar groups them per chat): scanned off the persisted branch,
@@ -813,7 +834,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		return { dir: relPosix(cwd, absolute), entries };
 	});
 
-	server.route("GET", "/api/files/read", ({ url }) => {
+	server.route("GET", "/api/files/read", async ({ url }) => {
 		const cwd = root();
 		const rel = url.searchParams.get("path");
 		if (!rel) throw new HttpError(400, "Missing path");
@@ -830,7 +851,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 				...base,
 				kind: "image" as const,
 				mimeType: imageType,
-				data: readFileSync(absolute).toString("base64"),
+				data: (await readFile(absolute)).toString("base64"),
 			};
 		}
 		const media = MEDIA_TYPES[ext];
@@ -846,7 +867,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 			return { ...base, kind: "office" as const, mimeType: RAW_CONTENT_TYPES[ext] ?? "application/octet-stream" };
 		}
 		if (stat.size > MAX_TEXT_BYTES) {
-			const head = readFileSync(absolute).subarray(0, MAX_TEXT_BYTES);
+			const head = await readFileHead(absolute, MAX_TEXT_BYTES);
 			if (looksBinary(head)) return { ...base, kind: "binary" as const };
 			return {
 				...base,
@@ -856,7 +877,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 				language: LANGUAGES[ext] ?? null,
 			};
 		}
-		const buffer = readFileSync(absolute);
+		const buffer = await readFile(absolute);
 		if (looksBinary(buffer)) return { ...base, kind: "binary" as const };
 		return {
 			...base,
@@ -937,6 +958,8 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 			OFFICE_EXTENSIONS.has(path.extname(absolute).toLowerCase())
 		)
 			throw new HttpError(400, "Binary files cannot be edited as text");
+		// Refuse by size before reading: a huge file must not be loaded just to be turned down.
+		if (statSync(absolute).size > MAX_TEXT_BYTES) throw new HttpError(413, "File is too large to edit");
 		const bytes = readFileSync(absolute);
 		if (bytes.length > MAX_TEXT_BYTES) throw new HttpError(413, "File is too large to edit");
 		if (looksBinary(bytes)) throw new HttpError(400, "File cannot be edited as text");
@@ -963,6 +986,7 @@ export function registerFileRoutes(server: WebHttpServer, host: WebHost): void {
 		const absolute = resolveFileTab(root(), payload.path);
 		if (!/\.(md|markdown)$/iu.test(absolute)) throw new HttpError(400, "Only Markdown files can be edited here");
 		if (!existsSync(absolute) || !statSync(absolute).isFile()) throw new HttpError(404, "File not found");
+		if (statSync(absolute).size > MAX_TEXT_BYTES) throw new HttpError(400, "File cannot be edited");
 		const bytes = readFileSync(absolute);
 		if (bytes.length > MAX_TEXT_BYTES || looksBinary(bytes)) throw new HttpError(400, "File cannot be edited");
 		const original = bytes.toString("utf8");

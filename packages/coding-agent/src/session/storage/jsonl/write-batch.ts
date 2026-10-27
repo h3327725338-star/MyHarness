@@ -2,6 +2,7 @@ import { closeSync, fstatSync, fsyncSync, ftruncateSync, openSync, writeSync } f
 import { writeFileDurablySync } from "../../../utils/atomic-write.ts";
 import { normalizePath } from "../../../utils/paths.ts";
 import type { FileEntry } from "../../types.ts";
+import { serializeSessionEntry } from "./image-files.ts";
 import { invalidateParseCache } from "./parse-cache.ts";
 import { markIndexDirtyForFile } from "./sessions-index.ts";
 
@@ -161,7 +162,7 @@ function flushBatchTimer(key: string): void {
  */
 export function enqueueSessionAppend(filePath: string, entry: FileEntry): void {
 	const key = normalizePath(filePath);
-	const line = `${JSON.stringify(entry)}\n`;
+	const line = `${serializeSessionEntry(key, entry)}\n`;
 	if (!batchingEnabled) {
 		writeFileDurablySync(key, line, { flag: "a" });
 		invalidateParseCache(key);

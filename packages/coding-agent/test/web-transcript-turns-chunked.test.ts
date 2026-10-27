@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 const webDir = new URL("../web/js/", import.meta.url);
 const { buildTurns, buildTurnsChunked, buildTurnsWork, cachedTurns } = await import(new URL("turns.js", webDir).href);
+const { getLang } = await import(new URL("i18n.js", webDir).href);
 
 const user = (i: number) => ({
 	kind: "user",
@@ -86,15 +87,17 @@ describe("turns.js chunked build (60-step slices)", () => {
 		});
 	});
 
-	it("cachedTurns still hits only on identical items/toolRuns/cwd references", () => {
+	it("cachedTurns still hits only on identical items/toolRuns/cwd references and the same UI language", () => {
 		const toolRuns = {};
 		const items = pairs(65);
 		const turns = buildTurns(items, { cwd: "", toolRuns });
-		const cache = { items, toolRuns, cwd: "", turns };
+		// The transcript records the language the rows were built in (their verbs are translated).
+		const cache = { items, toolRuns, cwd: "", lang: getLang(), turns };
 		expect(cachedTurns(cache, items, toolRuns, "")).toBe(turns);
 		expect(cachedTurns(cache, [...items], toolRuns, "")).toBeNull();
 		expect(cachedTurns(cache, items, {}, "")).toBeNull();
 		expect(cachedTurns(cache, items, toolRuns, "C:/other")).toBeNull();
+		expect(cachedTurns({ ...cache, lang: `${getLang()}-other` }, items, toolRuns, "")).toBeNull();
 		expect(cachedTurns(null, items, toolRuns, "")).toBeNull();
 	});
 });

@@ -37,6 +37,7 @@ import {
 } from "../../git/repository/workspace-changes.ts";
 import { isWorktreeCopyPath } from "../../git/worktrees/merged-records.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
+import { imageForDisplay, imageHasData } from "../../session/storage/jsonl/image-files.ts";
 import type { SessionEntry } from "../../session/types.ts";
 import { getRenamePlanPaths } from "../../symbols/workflow/rename-plans.ts";
 import { applyPatchPaths } from "../../tools/files/apply-patch-parser.ts";
@@ -294,8 +295,8 @@ function textOf(content: unknown): { text: string; images: Array<{ mimeType: str
 	if (Array.isArray(content)) {
 		for (const part of content as Array<{ type?: string; text?: string; mimeType?: string; data?: string }>) {
 			if (part.type === "text" && typeof part.text === "string") texts.push(part.text);
-			else if (part.type === "image" && part.data && part.mimeType)
-				images.push({ mimeType: part.mimeType, data: part.data });
+			else if (part.type === "image" && part.mimeType && imageHasData(part))
+				images.push(imageForDisplay(part as { mimeType: string; data: string }));
 		}
 	}
 	return { text: texts.join(""), images };

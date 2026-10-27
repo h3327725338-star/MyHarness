@@ -16,6 +16,7 @@ import {
 } from "../../../modes/web/wire.ts";
 import { collectSessionUsageStats, type SessionUsageStats } from "../../../observability/session-stats.ts";
 import { SessionManager } from "../../../session/manager/index.ts";
+import { lineReferencesImageFiles } from "../../../session/storage/jsonl/image-files.ts";
 import type { SessionEntry, SessionHeader } from "../../../session/types.ts";
 
 export interface ProjectSessionOptions {
@@ -86,8 +87,11 @@ export function projectSession(
 	const stats = collectSessionUsageStats(entries);
 
 	let rawJsonl = "";
-	if (jsonlPath && existsSync(jsonlPath)) {
-		rawJsonl = readFileSync(jsonlPath, "utf8");
+	const fileText = jsonlPath && existsSync(jsonlPath) ? readFileSync(jsonlPath, "utf8") : undefined;
+	// A chat whose large images are stored as files beside it is written out from its loaded entries instead, which
+	// carry the image data inline, so the export stays self-contained.
+	if (fileText !== undefined && !lineReferencesImageFiles(fileText)) {
+		rawJsonl = fileText;
 	} else {
 		const lines: string[] = [];
 		if (header) lines.push(JSON.stringify(header));

@@ -247,7 +247,10 @@ describe("Session persistence and process recovery pressure", () => {
 				const marker = join(root, `cancel-${index}.marker`);
 				const started = join(root, `cancel-${index}.started`);
 				const ready = join(root, `cancel-${index}.ready`);
-				const descendant = `require("node:fs").writeFileSync(${JSON.stringify(started)}, JSON.stringify({ pid: process.pid, ppid: process.ppid, startedAt: Date.now() })); setTimeout(() => { require("node:fs").writeFileSync(${JSON.stringify(marker)}, "alive"); process.exit(0); }, 700); setInterval(() => {}, 1000);`;
+				const cancelled = join(root, `cancel-${index}.cancelled`);
+				// The descendant reports itself only if it is still alive once the cancellation has returned. A fixed
+				// timer counted from its own start raced the tree kill whenever the machine was busy.
+				const descendant = `const fs = require("node:fs"); fs.writeFileSync(${JSON.stringify(started)}, JSON.stringify({ pid: process.pid, ppid: process.ppid, startedAt: Date.now() })); setInterval(() => { if (fs.existsSync(${JSON.stringify(cancelled)})) { fs.writeFileSync(${JSON.stringify(marker)}, "alive"); process.exit(0); } }, 20); setTimeout(() => process.exit(0), 30000);`;
 				const parent = `const fs = require("node:fs"); const child = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: "ignore" }); const announceReady = () => { if (fs.existsSync(${JSON.stringify(started)})) fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: process.pid, child: child.pid })); else setTimeout(announceReady, 5); }; announceReady(); setInterval(() => {}, 1000);`;
 				const controller = new AbortController();
 				const resultPromise = execCommand(process.execPath, ["-e", parent], repoRoot, {
@@ -257,7 +260,8 @@ describe("Session persistence and process recovery pressure", () => {
 				await waitForFile(ready);
 				controller.abort();
 				const result = await resultPromise;
-				await delay(850);
+				writeFileSync(cancelled, "1");
+				await delay(500);
 				return { result, marker };
 			}),
 		);

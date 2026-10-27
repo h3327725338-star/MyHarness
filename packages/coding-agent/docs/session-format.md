@@ -79,7 +79,17 @@ interface ImageContent {
   data: string;      // base64 encoded
   mimeType: string;  // e.g., "image/jpeg", "image/png"
 }
+```
 
+**Images stored as files.** In a structured Session (`.../sessions/<session-id>/conversation/<file>.jsonl`) an image whose base64 is at least 32 KB is written once per content to `conversation/images/<sha256>.<ext>` (raw bytes, `sha256` of those bytes), and its line keeps only a reference:
+
+```json
+{"type":"image","data":"<1x1 PNG>","mimeType":"image/png","sessionImageFile":{"v":1,"sha256":"…","mimeType":"image/jpeg","bytes":24876}}
+```
+
+`data`/`mimeType` on disk are a valid 1x1 PNG so an older MyHarness that does not know `sessionImageFile` still reads a well-formed image (it shows and sends that placeholder instead of the real one). The loader turns the block back into `{ type, data, mimeType }` with the real type; `data` is read from the file the first time it is used (a model request, an export, the transcript image route), not when the chat opens. A file that is missing (for example not yet synced) yields a 1x1 placeholder of the same type and is tried again on the next read. Smaller images, non-canonical base64 and flat or custom Session folders stay inline. Writing a Session elsewhere (fork, relocation, import into another Session folder) copies the files into that folder; after a relocation the old folder's copies are removed once nothing beside them needs them. An older chat that still has large inline images is rewritten into this form in the background shortly after its owning process takes the writer lease; on any failure it stays as it was and is tried again on the next open. Code: `src/session/storage/jsonl/image-files.ts`.
+
+```typescript
 interface ThinkingContent {
   type: "thinking";
   thinking: string;

@@ -11,6 +11,7 @@ import { stripModelGuidance } from "@myharness/ai";
 import { getSupportedThinkingLevels, type Model } from "@myharness/ai/compat";
 import { parseSkillBlock } from "../../agent/runtime/agent-session.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
+import { imageBase64Length, imageForDisplay, imageHasData } from "../../session/storage/jsonl/image-files.ts";
 import type { SessionEntry, SessionMessageTiming } from "../../session/types.ts";
 import { parseExpandedBuiltinPromptCommand } from "../../startup/slash-commands.ts";
 
@@ -107,7 +108,8 @@ export function withTranscriptImageRefs<T extends { items: WireItem[] }>(page: T
 }
 
 function isLargeImage(image: WireImage): boolean {
-	return image.data.length > TRANSCRIPT_IMAGE_INLINE_MAX && TRANSCRIPT_IMAGE_TYPES.has(image.mimeType);
+	// A Session image stored as a file is measured by its record, so sending it by address never reads the file.
+	return imageBase64Length(image) > TRANSCRIPT_IMAGE_INLINE_MAX && TRANSCRIPT_IMAGE_TYPES.has(image.mimeType);
 }
 
 /** One file the composer uploaded for a user message (see ATTACH_HEADER below and web/js/attachments.js). */
@@ -312,8 +314,8 @@ function contentParts(content: unknown): { text: string; images: WireImage[] } {
 	const images: WireImage[] = [];
 	for (const part of content as Array<{ type?: string; text?: string; mimeType?: string; data?: string }>) {
 		if (part.type === "text" && typeof part.text === "string") texts.push(part.text);
-		else if (part.type === "image" && part.data && part.mimeType)
-			images.push({ mimeType: part.mimeType, data: part.data });
+		else if (part.type === "image" && part.mimeType && imageHasData(part))
+			images.push(imageForDisplay(part as { mimeType: string; data: string }));
 	}
 	return { text: texts.join(""), images };
 }

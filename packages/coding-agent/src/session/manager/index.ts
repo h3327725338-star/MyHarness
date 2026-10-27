@@ -41,6 +41,12 @@ import {
 } from "../projection/index.ts";
 import type { SessionDeleteImpact } from "../storage/jsonl/file-operations.ts";
 import {
+	hasInlineImagesToStore,
+	lineReferencesImageFiles,
+	prepareInlineImageFiles,
+	restoreSessionImages,
+} from "../storage/jsonl/image-files.ts";
+import {
 	describeSessionDeleteImpact,
 	ensureSessionDirectory,
 	findMostRecentSession,
@@ -179,6 +185,8 @@ const WRITER_LOCK_UPDATE_MS = 30 * 1000;
 const WRITER_LOCK_OWNER_SUFFIX = ".owner";
 const METADATA_WRITE_INTERVAL_MS = 5 * 1000;
 const WRITER_LOCK_RECOVERY_MARGIN_MS = 5 * 1000;
+/** Let the chat finish opening before its inline images are moved into files. */
+const INLINE_IMAGE_MOVE_DELAY_MS = 2 * 1000;
 
 interface WriterLockOwnerMarker {
 	pid: number;
@@ -875,7 +883,34 @@ export class SessionManager {
 			}
 			throw error;
 		}
+		this.scheduleInlineImageMove();
 		return "owner";
+	}
+
+	/**
+	 * Once this manager owns the Session, move an older chat's large inline images into files (see image-files.ts):
+	 * they are hashed and written in the background with async I/O, then the JSONL is rewritten under the same lease
+	 * so it only names them. Any failure leaves the chat as it was; the next open tries again.
+	 */
+	private scheduleInlineImageMove(): void {
+		const sessionFile = this.sessionFile;
+		if (!sessionFile || !this.persist || !this.flushed || this.mirror) return;
+		if (!hasInlineImagesToStore(sessionFile, this.fileEntries)) return;
+		const timer = setTimeout(() => void this.moveInlineImagesToFiles(sessionFile), INLINE_IMAGE_MOVE_DELAY_MS);
+		timer.unref?.();
+	}
+
+	private async moveInlineImagesToFiles(sessionFile: string): Promise<void> {
+		const stillOwner = () => this.writerLockRelease !== undefined && !this.mirror && this.sessionFile === sessionFile;
+		try {
+			const prepared = await prepareInlineImageFiles(sessionFile, this.fileEntries, stillOwner);
+			if (prepared === 0 || !stillOwner()) return;
+			// The lease keeps other processes out; this manager's own coalesced appends are part of fileEntries.
+			flushSessionWrites(sessionFile);
+			rewriteSessionFile(sessionFile, this.fileEntries);
+		} catch {
+			// Unchanged chat; files already written are reused next time.
+		}
 	}
 
 	/** True while another process owns this Session and this manager only follows its file. */
@@ -945,6 +980,7 @@ export class SessionManager {
 				continue;
 			}
 			if (!entry || typeof entry !== "object" || entry.type === "session" || this.byId.has(entry.id)) continue;
+			if (lineReferencesImageFiles(line)) restoreSessionImages(this.sessionFile, entry);
 			this.fileEntries.push(entry);
 			this.byId.set(entry.id, entry);
 			this.leafId = entry.id;

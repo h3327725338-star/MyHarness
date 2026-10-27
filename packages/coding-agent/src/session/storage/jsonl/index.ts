@@ -45,6 +45,12 @@ import type {
 	SessionListProgress,
 	SessionMessageEntry,
 } from "../../types.ts";
+import {
+	lineReferencesImageFiles,
+	removeMovedSessionImages,
+	restoreSessionImages,
+	serializeSessionEntry,
+} from "./image-files.ts";
 import { invalidateParseCache, lookupParseCache, storeParseCache } from "./parse-cache.ts";
 import {
 	collectIndexGarbage,
@@ -89,12 +95,16 @@ function isValidFileEntryShape(value: unknown): value is FileEntry {
 	return true;
 }
 
-/** Parse one JSONL line into a Session entry, or `null` for blank/invalid lines. */
-export function parseSessionEntryLine(line: string): FileEntry | null {
+/**
+ * Parse one JSONL line into a Session entry, or `null` for blank/invalid lines. With `sessionFile`, images stored as
+ * files beside that Session (see image-files.ts) come back as image blocks; without it they keep their reference.
+ */
+export function parseSessionEntryLine(line: string, sessionFile?: string): FileEntry | null {
 	if (!line.trim()) return null;
 	try {
 		const value: unknown = JSON.parse(line);
-		return isValidFileEntryShape(value) ? value : null;
+		if (!isValidFileEntryShape(value)) return null;
+		return sessionFile && lineReferencesImageFiles(line) ? restoreSessionImages(sessionFile, value) : value;
 	} catch {
 		return null;
 	}
@@ -205,7 +215,7 @@ export function loadEntriesFromFile(filePath: string, diagnostics?: SessionJsonl
 					);
 					return;
 				}
-				entries.push(value);
+				entries.push(lineReferencesImageFiles(line) ? restoreSessionImages(resolvedFilePath, value) : value);
 			} catch (error) {
 				addJsonlDiagnostic(
 					freshDiagnostics,
@@ -1291,7 +1301,7 @@ export async function listAllSessions(
  * Precondition: `entries[0]` is the session header. Side effect: durable file rewrite.
  */
 export function rewriteSessionFile(filePath: string, entries: FileEntry[]): void {
-	writeFileAtomicallySync(filePath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+	writeFileAtomicallySync(filePath, entries.map((entry) => `${serializeSessionEntry(filePath, entry)}\n`).join(""));
 	// Only discard pending data after the replacement actually succeeded.
 	dropPendingSessionWrites(filePath);
 	try {
@@ -1310,7 +1320,7 @@ export function rewriteSessionFile(filePath: string, entries: FileEntry[]): void
  * Caller owns locking/lease decisions; see `SessionManager.acquireWriterLock`.
  */
 export function writeSessionFile(filePath: string, entries: FileEntry[], flag: "wx" | "w" = "wx"): void {
-	const content = entries.map((entry) => `${JSON.stringify(entry)}\n`).join("");
+	const content = entries.map((entry) => `${serializeSessionEntry(filePath, entry)}\n`).join("");
 	if (flag === "wx") {
 		writeFileDurablySync(filePath, content, { flag });
 	} else {
@@ -1323,7 +1333,7 @@ export function writeSessionFile(filePath: string, entries: FileEntry[], flag: "
 
 /** Durably append one entry. Caller must hold the writer lease; no fsync ordering beyond the single write. */
 export function appendSessionEntry(filePath: string, entry: FileEntry): void {
-	writeFileDurablySync(filePath, `${JSON.stringify(entry)}\n`, { flag: "a" });
+	writeFileDurablySync(filePath, `${serializeSessionEntry(filePath, entry)}\n`, { flag: "a" });
 	invalidateParseCache(filePath);
 	markIndexDirtyForFile(filePath);
 }
@@ -1691,7 +1701,7 @@ export function relocateSessionFile(options: RelocateSessionFileOptions): { flus
 
 	mkdirSync(resolve(targetResolved, ".."), { recursive: true });
 	// The full content is written atomically, subsuming any coalesced lines.
-	const content = options.entries.map((entry) => JSON.stringify(entry)).join("\n");
+	const content = options.entries.map((entry) => serializeSessionEntry(targetResolved, entry)).join("\n");
 	writeFileAtomicallySync(targetResolved, `${content}\n`);
 	dropPendingSessionWrites(sourceResolved);
 	dropPendingSessionWrites(targetResolved);
@@ -1732,6 +1742,7 @@ export function relocateSessionFile(options: RelocateSessionFileOptions): { flus
 	if (!sameFile && sourceExists) {
 		try {
 			unlinkSync(sourceResolved);
+			removeMovedSessionImages(sourceResolved, targetResolved);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const extra = attachmentWarnings.length > 0 ? `；${attachmentWarnings.join("；")}` : "";

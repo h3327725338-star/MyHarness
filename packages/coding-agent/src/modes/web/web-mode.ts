@@ -148,6 +148,7 @@ export async function startWebBootstrap(options: { port?: number }): Promise<Web
 		console.error(`Port ${preferred} is in use; the Web UI is listening on ${address.port} instead.`);
 	}
 	console.error(`MyHarness Web UI: ${url}`);
+	server.watchStalls();
 
 	return {
 		server,

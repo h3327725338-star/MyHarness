@@ -31,6 +31,10 @@ Drive, have not been verified yet.
 | API keys, OAuth tokens, trust decisions, tool permissions, locks, running tasks | No |
 | Memory catalogs (`memory/index.json`, `memory/state.json`, `maintenance.*`), bridge descriptors and write locks | No |
 
+Images a chat stores as files (`conversation/images/<sha256>.<ext>`, see `session-format.md`) travel as ordinary
+session files. Until such a file has arrived the chat shows a 1x1 placeholder for that image and picks the real one up
+on the next read; a device still running a version from before image files shows the placeholder for good.
+
 Archive and pin markers (`<conversation>.jsonl.archived`, `.pinned`) travel with the chat, so the other device shows
 the same archived and pinned state. An empty General prompt or draft is represented as a deletion, so clearing it on one
 device clears it on the others; retyping it afterwards is a newer version and is applied again. The saved prompts work the same way (record

@@ -10,6 +10,7 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { extname, join, normalize, resolve, sep } from "node:path";
+import { StallWatch } from "./stall-watch.ts";
 
 const MAX_BODY_BYTES = 96 * 1024 * 1024;
 const SSE_KEEPALIVE_MS = 15_000;
@@ -136,9 +137,17 @@ export class WebHttpServer {
 	/** Called with the number of connected browser pages whenever it changes (page opened, reloaded, closed, or its connection died). */
 	onClientCountChange: ((count: number) => void) | undefined;
 	private requestScope: RequestScope | undefined;
+	private stallWatch: StallWatch | undefined;
 
 	setRequestScope(scope: RequestScope): void {
 		this.requestScope = scope;
+	}
+
+	/** Log event-loop stalls with the API requests in progress (the real Web service turns this on). */
+	watchStalls(watch: StallWatch = new StallWatch()): void {
+		this.stallWatch?.stop();
+		this.stallWatch = watch;
+		watch.start();
 	}
 
 	route(method: "GET" | "POST" | "PUT" | "DELETE", pattern: string, handler: RouteHandler): void {
@@ -263,6 +272,7 @@ export class WebHttpServer {
 
 	async close(): Promise<void> {
 		if (this.keepAlive) clearInterval(this.keepAlive);
+		this.stallWatch?.stop();
 		for (const entry of this.sseClients.values()) {
 			try {
 				entry.res.end();
@@ -329,14 +339,19 @@ export class WebHttpServer {
 				route.keys.forEach((key, index) => {
 					params[key] = decodeURIComponent(match[index + 1] ?? "");
 				});
-				const body = method === "GET" ? undefined : await this.readJson(req);
-				const ctx: RequestContext = { method, url, req, res, body, params };
-				const result = this.requestScope
-					? await this.requestScope({ req, url }, () => route.handler(ctx))
-					: await route.handler(ctx);
-				if (res.writableEnded || res.headersSent) return;
-				this.writeJson(res, 200, result === undefined ? { ok: true } : result);
-				return;
+				const done = this.stallWatch?.track(`${method} ${url.pathname}`);
+				try {
+					const body = method === "GET" ? undefined : await this.readJson(req);
+					const ctx: RequestContext = { method, url, req, res, body, params };
+					const result = this.requestScope
+						? await this.requestScope({ req, url }, () => route.handler(ctx))
+						: await route.handler(ctx);
+					if (res.writableEnded || res.headersSent) return;
+					this.writeJson(res, 200, result === undefined ? { ok: true } : result);
+					return;
+				} finally {
+					done?.();
+				}
 			}
 			throw new HttpError(404, `No route for ${method} ${url.pathname}`);
 		}

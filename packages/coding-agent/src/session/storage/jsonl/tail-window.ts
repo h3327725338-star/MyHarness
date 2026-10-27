@@ -177,7 +177,7 @@ export function loadSessionTail(filePath: string, options: SessionTailOptions = 
 		let skippedLines = 0;
 		for (const line of lines) {
 			if (!line.trim()) continue;
-			const entry = parseSessionEntryLine(line);
+			const entry = parseSessionEntryLine(line, resolvedFilePath);
 			if (!entry || entry.type === "session") {
 				skippedLines++;
 				continue;

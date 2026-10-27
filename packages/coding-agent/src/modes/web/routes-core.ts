@@ -6,6 +6,7 @@ import { modelsAreEqual } from "@myharness/ai/compat";
 import { AUTO_MEMORY_SYSTEM_PROMPT } from "../../agent/runtime/auto-memory.ts";
 import { buildContextBreakdown } from "../../context/context-breakdown.ts";
 import { WorktreeMergedRecords } from "../../git/worktrees/merged-records.ts";
+import { readImageBytes, storedSessionImage } from "../../session/storage/jsonl/image-files.ts";
 import { formatSkillsForPrompt } from "../../skills/loader/index.ts";
 import { resizeImage } from "../../utils/image-resize.ts";
 import { collectInputImageAttachments } from "../../utils/input-image-attachments.ts";
@@ -75,7 +76,7 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 	});
 
 	/** One image of a persisted transcript entry (the `src` that `images=ref` hands out). */
-	server.route("GET", "/api/transcript/image", ({ url, res }) => {
+	server.route("GET", "/api/transcript/image", async ({ url, res }) => {
 		const entryId = url.searchParams.get("entry") ?? "";
 		const index = Number(url.searchParams.get("index"));
 		const image =
@@ -83,12 +84,15 @@ export function registerCoreRoutes(server: WebHttpServer, host: WebHost): void {
 				? entryImages(host.session.sessionManager.getEntry(entryId))[index]
 				: undefined;
 		if (!image || !TRANSCRIPT_IMAGE_TYPES.has(image.mimeType)) throw new HttpError(404, "Image not found");
-		const bytes = Buffer.from(image.data, "base64");
+		const bytes = await readImageBytes(image);
+		const stored = storedSessionImage(image);
+		// A stored image whose file has not arrived yet (sync) answers a placeholder that must not be cached.
+		const placeholder = stored !== undefined && bytes.length !== stored.bytes;
 		res.writeHead(200, {
 			"content-type": image.mimeType,
 			"content-length": bytes.length,
 			// A persisted entry never changes; the address names the chat, the entry and the position.
-			"cache-control": "private, max-age=86400, immutable",
+			"cache-control": placeholder ? "no-store" : "private, max-age=86400, immutable",
 			"x-content-type-options": "nosniff",
 		});
 		res.end(bytes);

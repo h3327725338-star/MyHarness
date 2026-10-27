@@ -168,6 +168,8 @@ myharness
 
 服务只监听 `127.0.0.1`，面向 Windows 桌面浏览器，单用户使用。不提供手机/平板适配、局域网访问或多人协作。
 
+**卡顿记录**：服务每 0.1 秒自检一次事件循环；一旦被同步工作卡住 0.3 秒以上，就在服务日志（stderr）写一行 `Event loop blocked for <ms> ms; requests in progress: <方法 路径>…`，没有进行中的请求时写 `no API request in progress`。超过 5 分钟的间隔视为电脑休眠，不记录。列出的请求是当时“正在处理中”的，不一定就是元凶；代码见 `src/modes/web/stall-watch.ts`。文件面板和附件预览打开超过 1.5 MB 的文件时只读开头 1.5 MB，附件与产出物下载按块流式发送，不再整份读进内存。
+
 ## 界面结构
 
 ```text

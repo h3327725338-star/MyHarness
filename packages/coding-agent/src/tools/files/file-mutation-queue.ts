@@ -52,42 +52,44 @@ async function getMutationQueueKeys(filePath: string): Promise<string[]> {
 	return [...keys].sort();
 }
 
+/** One operation's place in one key's chain. */
+interface MutationSlot {
+	/** Settles when every earlier holder of this key has released it. */
+	currentQueue: Promise<void>;
+	/** Hands the key to the next waiter; safe to call more than once. */
+	release: () => void;
+}
+
+/** Join the end of one key's chain. Synchronous, so slots are taken exactly in the order this is called. */
+function registerMutationSlot(key: string): MutationSlot {
+	const currentQueue = fileMutationQueues.get(key) ?? Promise.resolve();
+	let releaseNext!: () => void;
+	const nextQueue = new Promise<void>((resolveQueue) => {
+		releaseNext = resolveQueue;
+	});
+	const chainedQueue = currentQueue.then(() => nextQueue);
+	fileMutationQueues.set(key, chainedQueue);
+	return {
+		currentQueue,
+		release: () => {
+			releaseNext();
+			if (fileMutationQueues.get(key) === chainedQueue) {
+				fileMutationQueues.delete(key);
+			}
+		},
+	};
+}
+
 /**
- * Take one key's turn. Resolves once the operation may run, and returns the
- * function that hands the key to the next waiter.
+ * Wait for one slot's turn.
  *
  * When `signal` aborts while waiting, the waiter releases its registered slot
  * (so the chain behind it never stalls) and throws `Operation aborted`. This
  * only applies before the operation starts: once acquired, the running
  * operation keeps the queue locked until it settles and observes aborts itself.
  */
-async function acquireMutationQueue(key: string, signal?: AbortSignal): Promise<() => void> {
-	const registration = registrationQueue.then(async () => {
-		const currentQueue = fileMutationQueues.get(key) ?? Promise.resolve();
-
-		let releaseNext!: () => void;
-		const nextQueue = new Promise<void>((resolveQueue) => {
-			releaseNext = resolveQueue;
-		});
-		const chainedQueue = currentQueue.then(() => nextQueue);
-		fileMutationQueues.set(key, chainedQueue);
-
-		return { currentQueue, chainedQueue, releaseNext };
-	});
-	registrationQueue = registration.then(
-		() => undefined,
-		() => undefined,
-	);
-
-	const { currentQueue, chainedQueue, releaseNext } = await registration;
-
-	const release = () => {
-		releaseNext();
-		if (fileMutationQueues.get(key) === chainedQueue) {
-			fileMutationQueues.delete(key);
-		}
-	};
-
+async function waitForMutationTurn(slot: MutationSlot, signal?: AbortSignal): Promise<void> {
+	const { currentQueue, release } = slot;
 	if (signal?.aborted) {
 		release();
 		throw new Error("Operation aborted");
@@ -121,11 +123,10 @@ async function acquireMutationQueue(key: string, signal?: AbortSignal): Promise<
 			);
 			signal.addEventListener("abort", onAbort, { once: true });
 		});
-		return release;
+		return;
 	}
 
 	await currentQueue;
-	return release;
 }
 
 /**
@@ -141,14 +142,20 @@ export async function withFileMutationQueue<T>(
 	fn: () => Promise<T>,
 	signal?: AbortSignal,
 ): Promise<T> {
-	const keys = await getMutationQueueKeys(filePath);
-	const releases: Array<() => void> = [];
+	// The keys are resolved at once, alongside other calls, but the queues are joined in call order: an edit issued
+	// after a write of the same file runs after it even when the edit's realpath lookups finish first. All of a call's
+	// keys are joined in one step, so for any two operations the earlier one is ahead on every key they share.
+	const keysReady = getMutationQueueKeys(filePath);
+	const registration = registrationQueue.then(async () => (await keysReady).map(registerMutationSlot));
+	registrationQueue = registration.then(
+		() => undefined,
+		() => undefined,
+	);
+	const slots = await registration;
 	try {
-		for (const key of keys) {
-			releases.push(await acquireMutationQueue(key, signal));
-		}
+		for (const slot of slots) await waitForMutationTurn(slot, signal);
 		return await fn();
 	} finally {
-		for (const release of releases) release();
+		for (const slot of slots) slot.release();
 	}
 }
