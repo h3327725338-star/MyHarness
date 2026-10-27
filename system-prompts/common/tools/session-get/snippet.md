@@ -1,2 +1,3 @@
 # Tool description
 - Read an earlier chat by session id: its hand-off note plus the messages around an entry id, or its newest messages. The note is orientation only; take exact numbers, quotes, corrections and execution results from the messages, check the later messages it reports for corrections, and do not treat an abandoned-branch message or an assistant's old "done" as current fact. For code work, re-check the current files and Git state before acting on anything read here.
+- This chat's own messages from before a context checkpoint are read the same way: this chat's session id and an entry id that the checkpoint lists.

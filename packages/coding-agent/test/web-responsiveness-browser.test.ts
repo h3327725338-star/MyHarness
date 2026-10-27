@@ -216,10 +216,13 @@ const glides=(label,before,list)=>{
  const between=list.filter(value=>value>before+4&&value<last-4);
  must(between.length>=3,label+' appeared at once instead of gliding: '+list);
 };
-const instant=(label,before,list)=>{
+// A block that settles at a new height (taller or shorter) with the shared motion: steadily, through frames in between.
+const settles=(label,before,list,target)=>{
  const last=list.at(-1);
- must(last>before+80,label+' did not grow: '+before+' -> '+last);
- must(!list.some(value=>value>before+4&&value<last-4),label+' moved although animations are off: '+list);
+ must(Math.abs(last-target)<=2&&Math.abs(target-before)>10,label+' did not settle at '+target+': '+before+' -> '+last);
+ const sign=Math.sign(target-before);
+ must(list.every((value,i)=>!i||(value-list[i-1])*sign>=0),label+' did not move steadily: '+list);
+ must(list.filter(value=>Math.abs(value-before)>3&&Math.abs(value-last)>3).length>=3,label+' jumped instead of moving: '+list);
 };
 try {
  const side=document.getElementById('side');
@@ -229,21 +232,27 @@ try {
  document.documentElement.dataset.motion='on'; setView({motion:'on',lang:'en'});
  set({workspaces:ws,activeSlot:'s',slots:[],snap:{session:{file:'C:/p/other.jsonl'},workspace:{id:'w',rootPath:'C:/project'}}});
 
- // 1. The sidebar's "Show N more": the group grows with the shared motion, then nothing is left clipped.
+ // 1. The sidebar's "Show N more": every chat is listed in a box twelve rows tall that scrolls inside (CHAT_ROWS_SHOWN),
+ // and the group moves to that height with the shared motion instead of jumping.
  mountSidebar(); await wait(600);
  const group=()=>side.querySelector('.ws-children');
  must(side.querySelectorAll('.chat-row').length===12&&side.querySelector('.side-more'),'the group does not start with 12 chats and a button');
  let before=group().getBoundingClientRect().height;
  side.querySelector('.side-more').click();
- glides('Show more in the sidebar',before,await heights(group,700));
+ const rows=()=>side.querySelector('.chat-rows-capped');
+ const shownRows=await heights(group,700);
  must(side.querySelectorAll('.chat-row').length===20&&!side.querySelector('.side-more'),'not all chats are listed after Show more');
+ must(rows()&&rows().scrollHeight>rows().clientHeight+100,'the expanded group does not scroll inside its twelve-row box');
+ settles('Show more in the sidebar',before,shownRows,Math.round(rows().getBoundingClientRect().height));
  must(getComputedStyle(group()).overflow==='visible','the group stayed clipped after the motion');
  // With animations off the same click shows everything at once.
  document.documentElement.dataset.motion='off'; setView({motion:'off'});
  mountSidebar(); await wait(300);
  before=group().getBoundingClientRect().height;
  side.querySelector('.side-more').click();
- instant('Show more in the sidebar',before,await heights(group,400));
+ const offRows=await heights(group,400);
+ must(Math.abs(offRows.at(-1)-before)>10,'Show more in the sidebar changed nothing with animations off');
+ must(!offRows.some(value=>Math.abs(value-before)>3&&Math.abs(value-offRows.at(-1))>3),'Show more in the sidebar moved although animations are off: '+offRows);
  document.documentElement.dataset.motion='on'; setView({motion:'on'});
 
  // 2. "Show all N" below a tool's results (the same motion for every Show all / Show more of the transcript).
@@ -276,18 +285,23 @@ try {
  const erase=count=>{ for(let i=0;i<count;i++) input.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:'deleteContentBackward'})); };
  const told=async()=>await (await fetch('/api/test/touched')).json();
  const bodies=async()=>JSON.stringify((await told()).bodies.map(body=>body.touched));
- type('hi'); await wait(450);
- must(await bodies()==='[true]','typing was not told: '+await bodies());
+ // What must arrive is awaited (a request can land a little late on a busy machine); what must not is checked after a pause.
+ const until=async want=>{ let got=await bodies(); for(const end=performance.now()+3000;got!==want&&performance.now()<end;){ await wait(30); got=await bodies(); } return got; };
+ type('hi');
+ const typed=await until('[true]');
+ must(typed==='[true]','typing was not told: '+typed);
  type('!'); await wait(300);
  must(await bodies()==='[true]','more typing was told again: '+await bodies());
- erase(3); await wait(450);
- must(await bodies()==='[true,false]','erasing the input was not told: '+await bodies());
+ erase(3);
+ const erased=await until('[true,false]');
+ must(erased==='[true,false]','erasing the input was not told: '+erased);
  type('   '); await wait(300);
  must(await bodies()==='[true,false]','white space counted as input: '+await bodies());
  erase(3); await wait(200);
  // Typed and erased again while the first request is still being answered: both arrive, in order, one after the other.
- type('a'); await wait(40); erase(1); await wait(700);
- must(await bodies()==='[true,false,true,false]','quick type and erase were not told in order: '+await bodies());
+ type('a'); await wait(40); erase(1);
+ const quick=await until('[true,false,true,false]');
+ must(quick==='[true,false,true,false]','quick type and erase were not told in order: '+quick);
  must((await told()).maxInflight===1,'requests for one chat overlapped: '+(await told()).maxInflight);
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) { document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.stack+'</p>'); }

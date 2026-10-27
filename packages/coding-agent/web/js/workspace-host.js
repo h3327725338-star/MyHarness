@@ -288,6 +288,10 @@ export function installWorkspaceHost() {
 	// title, address and site icon still reach the tab strip from here.
 	const stopStatus = desktop.onStatus?.((value) => {
 		if (!value || typeof value.tabId !== "string") return;
+		// Sound is kept for every website tab, also those of chats not on screen: the speaker on the tab and the mark of
+		// its chat in the sidebar (store.js playingChatsKey) follow it.
+		if (value.type === "state" && value.state) actions.setBrowserAudio(value.tabId, value.state);
+		else if (value.type === "closed") actions.forgetBrowserAudio(value.tabId);
 		const tab = state.view.wsTabs.find((item) => item.id === value.tabId && item.type === "browser");
 		// A popup closed itself (a finished sign-in): its tab goes away and the page that opened it comes back.
 		if (value.type === "closed" && value.selfClosed) {
@@ -301,8 +305,6 @@ export function installWorkspaceHost() {
 			actions.setBrowserIcon(value.url || tab?.url || "", value.icon);
 			return;
 		}
-		// The speaker on a website tab follows its sound whether or not the tab is on screen.
-		if (value.type === "state" && tab && value.state) actions.setBrowserAudio(tab.id, value.state);
 		if (value.type !== "state" || !tab || tab.id === state.view.wsActive) return;
 		if (value.state?.title) actions.updateWorkspaceTabTitle(tab.id, value.state.title);
 		if (value.state?.url) actions.updateWorkspaceTabUrl(tab.id, value.state.url);

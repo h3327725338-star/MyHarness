@@ -187,6 +187,68 @@ function truncateToTokenBudget(value: string, maxTokens: number): string {
 const RECALL_TOTAL_TOKEN_BUDGET = 8000;
 const RECALL_PROFILE_TOKEN_RESERVE = 3500;
 const RECALL_DIRECTORY_TOKEN_BUDGET = 4200;
+
+/**
+ * 召回消息 details 的版本。带这个版本的召回只发上下文里还没有的部分，所以会一直留在模型上下文里（前缀稳定、
+ * 命中提示缓存）；没有版本号的旧召回仍只在它那一轮发送。
+ */
+export const RECALL_DETAILS_VERSION = 2;
+
+/** 一条召回消息带了什么：后面的召回据此只发变化的部分。只存短哈希，不存正文。 */
+interface RecallDetails {
+	/** 这条消息带全文的画像与卡片 id。 */
+	ids: string[];
+	v: typeof RECALL_DETAILS_VERSION;
+	/** 带了记忆规矩头。 */
+	rules?: true;
+	/** 带了画像，值是画像段落的哈希。 */
+	profile?: string;
+	/** 目录：整份（full，cut 是截断时最后一条的 updatedAt）或增量（rows 为新增与改动的行，removed 为移除的 id）。 */
+	directory?: { full?: true; cut?: string; rows: Record<string, string>; removed?: string[] };
+	/** 带了全文的卡片：id → 卡片段落的哈希。 */
+	cards?: Record<string, string>;
+}
+
+/** 这条召回消息（的 details）是只发增量的版本，可以一直留在模型上下文里。 */
+export const isIncrementalRecall = (details: unknown): boolean =>
+	!!details && typeof details === "object" && (details as { v?: unknown }).v === RECALL_DETAILS_VERSION;
+
+const recallHash = (text: string) => createHash("sha256").update(text).digest("base64url").slice(0, 16);
+
+/** 模型上下文里的召回消息合起来已经告诉了它什么；旧版本（没有 v）的召回不计，它们不会留在上下文里。 */
+function recalledSoFar(earlier: readonly unknown[]) {
+	const known = {
+		rules: false,
+		profile: undefined as string | undefined,
+		directory: undefined as { rows: Map<string, string>; cut?: string; dropped: Set<string> } | undefined,
+		cards: new Map<string, string>(),
+	};
+	for (const item of earlier) {
+		const details = item as Partial<RecallDetails> | undefined;
+		if (!details || typeof details !== "object" || details.v !== RECALL_DETAILS_VERSION) continue;
+		if (details.rules) known.rules = true;
+		if (typeof details.profile === "string") known.profile = details.profile;
+		const directory = details.directory;
+		// 增量只在它所基于的整份目录还在上下文里时才算数（压缩可能只留下后面的增量），否则下一轮整份重发。
+		const base =
+			directory && typeof directory === "object" && directory.full
+				? { rows: new Map<string, string>(), cut: directory.cut, dropped: new Set<string>() }
+				: known.directory;
+		if (directory && typeof directory === "object" && base) {
+			known.directory = base;
+			for (const [id, hash] of Object.entries(directory.rows ?? {})) {
+				base.rows.set(id, hash);
+				base.dropped.delete(id);
+			}
+			for (const id of directory.removed ?? []) {
+				base.rows.delete(id);
+				base.dropped.add(id);
+			}
+		}
+		for (const [id, hash] of Object.entries(details.cards ?? {})) known.cards.set(id, hash);
+	}
+	return known;
+}
 // 稳定性切块：提取按 30 条聊天一切逐块推进、整理按 20 张记忆一批独立存，
 // 单次模型输出仍受 maxTokens 限制、单条记忆正文 10KB 只算正文。主聊天的召回按分层 token 预算发送（画像固定位＋目录位＋动态卡片位），不在此列。
 const EXTRACT_CHUNK_ENTRIES = 30;
@@ -1637,7 +1699,12 @@ export class AutoMemoryManager {
 		);
 	}
 
-	async recall(query: string): Promise<CustomMessage | undefined> {
+	/**
+	 * 本轮的召回消息。`earlier` 是模型上下文里已有的召回消息的 details（按顺序）：给了就只发上下文里还没有的部分
+	 * （规矩头只发一次、画像变了才重发、目录只发增删改的行、已发过且内容没变的卡片不再发），没有新东西时返回
+	 * undefined。这样旧召回可以一直留在上下文里，前缀不变，下一轮能命中供应商的提示缓存。不给时发完整召回。
+	 */
+	async recall(query: string, earlier?: readonly unknown[]): Promise<CustomMessage | undefined> {
 		if (this.disposed) return undefined;
 		const settings = this.getSettings();
 		if (!settings) return undefined;
@@ -1670,61 +1737,107 @@ export class AutoMemoryManager {
 		// 目录每轮常驻：模型先看到 id 表，需要全文再用 memory_get 按需取，避免卡片截断导致“有但看不见”。
 		const profile = selected.find(isMemoryProfile);
 		const cards = selected.filter((entry) => entry !== profile);
+		const known = recalledSoFar(earlier ?? []);
 		const sections: string[] = [];
 		const sentIds: string[] = [];
-		let usedTokens = 0;
+		const details: RecallDetails = { ids: sentIds, v: RECALL_DETAILS_VERSION };
+		let profileTokens = 0;
 		if (profile) {
 			const section = `## ${profile.name}\nType: ${profile.type}; Scope: ${profile.scope}\n${profile.content}`;
 			// 画像超长属于异常：截断到固定位，保证本轮不断流；画像本身仍要求整理器保持在 10KB 内。
 			const fitted = truncateToTokenBudget(section, RECALL_PROFILE_TOKEN_RESERVE);
-			sections.push(fitted);
-			sentIds.push(profile.id);
-			usedTokens += estimateMemoryTokens(fitted);
+			profileTokens = estimateMemoryTokens(fitted);
+			const hash = recallHash(fitted);
+			if (known.profile !== hash) {
+				sections.push(fitted);
+				sentIds.push(profile.id);
+				details.profile = hash;
+			}
 		}
 
-		const directoryRows = [...candidates]
+		const listed = [...candidates]
 			.filter((entry) => !isMemoryProfile(entry))
 			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-			.map(
-				(entry) =>
-					`${entry.id} | ${entry.scope} | ${entry.name} | ${shortenDirectoryDescription(entry.description)}`,
+			.map((entry) => {
+				const line = `${entry.id} | ${entry.scope} | ${entry.name} | ${shortenDirectoryDescription(entry.description)}`;
+				return { id: entry.id, updatedAt: entry.updatedAt, line, hash: recallHash(line) };
+			});
+		const fullDirectory = (): { text: string; rows: Record<string, string>; cut?: string } => {
+			const lines = ["记忆目录（本轮可见范围；用 memory_get 按 id 取全文）："];
+			const rows: Record<string, string> = {};
+			let tokens = estimateMemoryTokens(`${lines[0]}\n`);
+			let shown = 0;
+			for (const row of listed) {
+				const lineTokens = estimateMemoryTokens(`${row.line}\n`);
+				if (tokens + lineTokens > RECALL_DIRECTORY_TOKEN_BUDGET) break;
+				lines.push(row.line);
+				rows[row.id] = row.hash;
+				tokens += lineTokens;
+				shown += 1;
+			}
+			if (shown === listed.length) return { text: lines.join("\n"), rows };
+			lines.push(`[…目录过长，只列出前 ${shown} 条，共 ${listed.length} 条。带 query 用 memory_search 缩小范围。]`);
+			// 没列出的都比最后一条旧；之后的增量不补发它们，它们一旦更新就会变新、按变化发出。
+			return { text: lines.join("\n"), rows, cut: listed[shown - 1]?.updatedAt ?? "" };
+		};
+		const full = fullDirectory();
+		let directoryText = full.text;
+		if (known.directory) {
+			const { rows: knownRows, cut, dropped } = known.directory;
+			const changed = listed.filter(
+				(row) =>
+					knownRows.get(row.id) !== row.hash &&
+					(knownRows.has(row.id) || dropped.has(row.id) || cut === undefined || row.updatedAt > cut),
 			);
-		const directoryLines = ["记忆目录（本轮可见范围；用 memory_get 按 id 取全文）：", ...directoryRows];
-		const directory: string[] = [];
-		let directoryTokens = 0;
-		for (const line of directoryLines) {
-			const lineTokens = estimateMemoryTokens(`${line}\n`);
-			if (directory.length > 0 && directoryTokens + lineTokens > RECALL_DIRECTORY_TOKEN_BUDGET) break;
-			directory.push(line);
-			directoryTokens += lineTokens;
+			const present = new Set(listed.map((row) => row.id));
+			const removed = [...knownRows.keys()].filter((id) => !present.has(id));
+			const delta = [
+				"记忆目录变化（补充前面已列出的目录，没列出的行不变；用 memory_get 按 id 取全文）：",
+				...changed.map((row) => row.line),
+				...removed.map((id) => `${id} | （已移除）`),
+			].join("\n");
+			// 变化太多时整份重发，反而比一长串增量好读；整份重发后以它为准。
+			if (!changed.length && !removed.length) directoryText = "";
+			else if (estimateMemoryTokens(delta) <= RECALL_DIRECTORY_TOKEN_BUDGET / 2) {
+				directoryText = delta;
+				details.directory = {
+					rows: Object.fromEntries(changed.map((row) => [row.id, row.hash])),
+					...(removed.length ? { removed } : {}),
+				};
+			}
 		}
-		if (directory.length < directoryLines.length) {
-			directory.push(
-				`[…目录过长，只列出前 ${directory.length - 1} 条，共 ${directoryRows.length} 条。带 query 用 memory_search 缩小范围。]`,
-			);
-		}
-		sections.push(directory.join("\n"));
+		if (directoryText === full.text)
+			details.directory = { full: true, rows: full.rows, ...(full.cut !== undefined ? { cut: full.cut } : {}) };
+		if (directoryText) sections.push(directoryText);
 
-		const directoryTokensUsed = estimateMemoryTokens(sections[sections.length - 1]);
-		const budget = RECALL_TOTAL_TOKEN_BUDGET - usedTokens - directoryTokensUsed;
+		// 卡片额度按整份画像与目录计算，所以每轮新发的内容不会比以前多。
+		const budget = RECALL_TOTAL_TOKEN_BUDGET - profileTokens - estimateMemoryTokens(full.text);
 		let cardTokens = 0;
+		const sentCards: Record<string, string> = {};
 		for (const entry of cards) {
 			const section = `## ${entry.name}\nType: ${entry.type}; Scope: ${entry.scope}\n${entry.content}`;
+			const hash = recallHash(section);
+			// 上下文里已有同样内容的卡片：模型已经看得到，不再发。
+			if (known.cards.get(entry.id) === hash) continue;
 			const sectionTokens = estimateMemoryTokens(section);
 			// 装不下的卡片跳过、继续尝试后面更小的卡片，而不是整段停止。
 			if (cardTokens + sectionTokens > Math.max(0, budget)) continue;
 			sections.push(section);
 			cardTokens += sectionTokens;
 			sentIds.push(entry.id);
+			sentCards[entry.id] = hash;
 		}
-		// 只要目录非空就注入：画像与卡片全空时 details.ids 为空数组，语义仍是“画像+卡片 id”。
+		if (Object.keys(sentCards).length) details.cards = sentCards;
+		// 只要目录非空就注入：画像与卡片全空时 details.ids 为空数组，语义仍是“本条消息带的画像+卡片 id”。
+		if (!sections.length) return undefined;
+		if (!known.rules) details.rules = true;
 
 		return {
 			role: "custom",
 			customType: "auto-memory-recall",
-			content: `${MEMORY_CONTEXT_RULES}\n\n<recalled_memory_context>\n${sections.join("\n\n")}\n</recalled_memory_context>`,
+			content: `${known.rules ? "" : `${MEMORY_CONTEXT_RULES}\n\n`}<recalled_memory_context>\n${sections.join("\n\n")}\n</recalled_memory_context>`,
 			display: false,
-			details: { ids: sentIds },
+			details,
 			timestamp: Date.now(),
 		};
 	}

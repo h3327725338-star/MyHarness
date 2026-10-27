@@ -37,8 +37,8 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 			});
 			// 481 items: over the 400-item threshold, so the transcript is built by the async full projection and the
 			// cold-load tail window is only the first paint. The change card sits inside the previous task (about eighty
-			// items before the end): outside that tail window, inside the last 60 turns of the full transcript. Those two
-			// views of one scroll position are exactly what the two screenshots caught.
+			// items before the end): outside that tail window, inside the full transcript that replaces it. Those two views
+			// of one scroll position are exactly what the two screenshots caught.
 			const items: unknown[] = [];
 			for (let i = 1; i <= 200; i += 1) items.push(user(i), answer(i));
 			items.push({
@@ -99,8 +99,8 @@ try {
  await wait(100);
  const buildsBefore=turnsProbe.builds;
  await activateSlot('slong');
- // Cold load: the tail window paints first, the full projection replaces it, and the 60-turn window mounts in chunks.
- if(!await waitFor(()=>turns()===60,15000)) throw Error('the 60-turn window never mounted: '+turns()+' turns after '+(turnsProbe.builds-buildsBefore)+' builds');
+ // Cold load: the tail window paints first, the full projection replaces it, and all 240 turns mount in chunks.
+ if(!await waitFor(()=>turns()===240,15000)) throw Error('the full transcript never mounted: '+turns()+' turns after '+(turnsProbe.builds-buildsBefore)+' builds');
  if(!await waitFor(()=>card()!=null,15000)) throw Error('the change card never arrived with the full transcript');
  if(turnsProbe.builds-buildsBefore<2) throw Error('the tail window and the full projection did not both build: '+(turnsProbe.builds-buildsBefore));
  const marker=card();
@@ -129,7 +129,7 @@ try {
  if(builds<2) throw Error('the full projection stopped running while output streamed: '+builds+' builds');
  if(card()!==marker||!marker.isConnected) throw Error('the change card was replaced by a stream update');
  if(removedTurns>2) throw Error('stream updates remounted '+removedTurns+' turns');
- if(turns()!==60) throw Error('the shown window changed size: '+turns());
+ if(turns()!==240) throw Error('the shown transcript changed size: '+turns());
  if(!(document.querySelector('.transcript-inner').textContent||'').includes('streaming answer part 8')) throw Error('the newest streamed text never arrived');
  const moved=scroller.scrollTop-topBefore;
  if(Math.abs(moved)>40) throw Error('the reader\\'s place moved by '+Math.round(moved)+'px while output streamed');

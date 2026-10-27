@@ -13,6 +13,19 @@
 /* The content keeps its width while the column narrows, so it slides out instead of re-wrapping. */
 .sidebar > :not(.resizer) { min-width: var(--sidebar-w); }
 .sidebar.is-collapsed { visibility: hidden; opacity: 0; transition: opacity var(--t-slow) var(--ease), visibility 0s linear var(--t-slow); }
+/* Peek (sidebar-peek.js): with the sidebar hidden, resting the mouse on the show-sidebar button floats the sidebar over
+   the conversation as a lifted card that slides in from the left. It starts below the top bar, so the button stays
+   clickable, and the conversation does not move: the column stays 0px wide and the card only overflows it. */
+:root:is([data-sidebar-peek="ready"], [data-sidebar-peek="in"], [data-sidebar-peek="out"]) .app > .sidebar.is-collapsed { width: var(--sidebar-w); margin: 50px 0 6px 6px; z-index: 90; border-radius: var(--r-lg); box-shadow: 0 0 0 1px var(--border-strong), var(--shadow-pop); transform: translateX(calc(-100% - 24px)); }
+/* Ready: the pointer has reached the button. The card waits off-screen, all but transparent, on its own layer: the
+   browser draws it during the open delay, so the first slide after a page load does not stall in its first frames. */
+:root[data-sidebar-peek="ready"] .app > .sidebar.is-collapsed { visibility: visible; opacity: 0.01; will-change: transform; transition: none; }
+:root[data-sidebar-peek="in"] .app > .sidebar.is-collapsed { visibility: visible; opacity: 1; transform: none; transition: transform 200ms var(--ease-out), opacity 120ms var(--ease-out), visibility 0s; }
+:root[data-sidebar-peek="out"] .app > .sidebar.is-collapsed { transition: transform 180ms cubic-bezier(0.4, 0, 1, 1), opacity 180ms cubic-bezier(0.4, 0, 1, 1), visibility 0s linear 180ms; }
+/* A click during a peek keeps the sidebar open: the card moves up into its column while the conversation makes room
+   (both over --t-slow), then the attribute goes and the sidebar is the plain column again. */
+:root[data-sidebar-peek="dock"] .app > .sidebar { width: var(--sidebar-w); z-index: 90; margin: 0; border-radius: 0; box-shadow: none; transform: none; visibility: visible; opacity: 1; transition: margin var(--t-slow) var(--ease), border-radius var(--t-slow) var(--ease), box-shadow var(--t-slow) var(--ease), transform var(--t-slow) var(--ease), opacity var(--t-slow) var(--ease), visibility 0s; }
+:root[data-sidebar-peek="dock"] .app > .sidebar .sidebar-top { transition: padding var(--t-slow) var(--ease); }
 .sidebar-top { padding: 10px var(--pad-side) 6px; display: flex; flex-direction: column; gap: 4px; }
 .brand { display: flex; align-items: center; gap: 8px; padding: 2px 4px 8px 6px; font-weight: 650; letter-spacing: 0.01em; font-size: var(--fs-title-xs); }
 .nav-btn { display: flex; align-items: center; gap: 8px; height: var(--h-row); padding: 0 8px; border-radius: var(--r-md); color: var(--text-2); width: 100%; text-align: left; transition: background var(--t-fast) var(--ease), color var(--t-fast); }
@@ -90,6 +103,10 @@
 .chat-row:hover .row-actions, .chat-row:focus-within .row-actions { opacity: 1; pointer-events: auto; }
 .chat-row .title-edit { grid-column: 1 / -1; height: var(--h-control-sm); padding: 0 5px; }
 .chat-row .pin-mark { color: var(--text-4); margin-right: 4px; vertical-align: -1px; }
+/* A website tab of this chat plays sound (also while the chat is not on screen): a speaker before the title, in the
+   accent colour, or muted grey when only muted tabs play. */
+.chat-row .chat-sound { display: inline-flex; margin-right: 4px; vertical-align: -1px; color: var(--accent); }
+.chat-row .chat-sound.muted { color: var(--text-4); }
 /* Rows measure their place against their own list, so a list above them that folds does not count as a move (see ChatRows). */
 .chat-rows { position: relative; }
 /* A chat row that arrives or leaves (a new chat, a blank chat left behind, an archived or deleted chat). The row is never
@@ -261,6 +278,9 @@
 ::view-transition, ::view-transition-group(*), ::view-transition-image-pair(*), ::view-transition-old(*), ::view-transition-new(*) { pointer-events: none; }
 ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 ::view-transition-new(root) { clip-path: circle(0px at 0 0); }
+/* Inside the mode reveal (mode-transition.js) the new mode is drawn as it stays: its columns and panel take their place at
+   once instead of sliding and fading in under the circle, which also keeps the reveal's frames free of layout work. */
+html.mode-revealing .app, html.mode-revealing .panel-slot { transition: none; }
 /* Keep the switch above the page reveal so its soft motion and icon morph remain visible. */
 ::view-transition-group(mode-switch), ::view-transition-new(mode-switch) { animation: none; }
 ::view-transition-old(mode-switch) { display: none; }
@@ -507,6 +527,9 @@ html.ws-morph::view-transition-new(ws-sidebar) { animation: ws-morph-in var(--t-
 .desktop-frameless .app.ws-max .main { border-left-width: 1px; }
 /* The sidebar's brand row is centred on the top row, as the conversation header is. */
 .desktop-frameless .sidebar-top { padding-top: 4px; }
+/* A peeking sidebar floats below the top row: its brand row keeps the browser's spacing and is not a window drag area. */
+:root.desktop-frameless:is([data-sidebar-peek="ready"], [data-sidebar-peek="in"], [data-sidebar-peek="out"]) .app > .sidebar.is-collapsed .sidebar-top { padding-top: 10px; }
+:root.desktop-frameless:is([data-sidebar-peek="ready"], [data-sidebar-peek="in"], [data-sidebar-peek="out"]) .app > .sidebar.is-collapsed .brand { -webkit-app-region: no-drag; }
 .desktop-frameless .app:not(.panel-open) .main-header, .desktop-frameless .app.ws-max .main-header { padding-right: var(--wc-room); }
 .desktop-frameless .app.panel-open:not(.ws-max) .panel-head { padding-right: calc(var(--wc-room) + 28px); }
 .desktop-frameless .app.panel-open:not(.ws-max) .panel-close { right: var(--wc-room); }

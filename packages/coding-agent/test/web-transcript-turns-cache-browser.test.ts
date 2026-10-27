@@ -35,7 +35,7 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				stopReason: "stop",
 				final: `answer ${p} ${i}`,
 			});
-			// Eighty turns per slot: the visible window is 60, so a first mount must arrive in chunks; the turns
+			// Eighty turns per slot, all of them shown: more than one mount batch, so a first mount must arrive in chunks; the turns
 			// probe separately proves a switch-back to a visited slot builds nothing at all.
 			const seed = (p: string) => {
 				const items: unknown[] = [];
@@ -101,21 +101,21 @@ try {
  render(h(Transcript,{}),document.getElementById('app'));
  await wait(100);
  const base=turnsProbe.builds;
- // Cold open A: one build, mounting arrives in chunks (first commit at most 20 of the 60-window).
+ // Cold open A: one build, mounting arrives in chunks (first commit at most 20 of the 80 turns).
  const tapA=sampleAdds();
  await activateSlot('sa');
- if(!await waitFor(()=>turns()===60,5000)){tapA.stop();throw Error('A never reached 60 turns');}
+ if(!await waitFor(()=>turns()===80,5000)){tapA.stop();throw Error('A never reached 80 turns');}
  await wait(300);
  tapA.stop();
  if(turnsProbe.builds-base!==1) throw Error('cold A built '+turnsProbe.builds+' minus '+base);
  if(tapA.batches.length<2) throw Error('cold A did not chunk: '+tapA.batches.join(','));
  if(tapA.batches[0]>20) throw Error('cold A first commit mounted '+tapA.batches[0]+', want <= 20');
- if(tapA.batches.reduce((a,b)=>a+b,0)!==60) throw Error('cold A mounted '+tapA.batches.reduce((a,b)=>a+b,0)+' turns, want 60');
+ if(tapA.batches.reduce((a,b)=>a+b,0)!==80) throw Error('cold A mounted '+tapA.batches.reduce((a,b)=>a+b,0)+' turns, want 80');
  // Cold open B (its own build, its own chunks).
  const bAfterA=turnsProbe.builds;
  const tapB=sampleAdds();
  await activateSlot('sb');
- if(!await waitFor(()=>turns()===60,5000)){tapB.stop();throw Error('B never reached 60 turns');}
+ if(!await waitFor(()=>turns()===80,5000)){tapB.stop();throw Error('B never reached 80 turns');}
  await wait(300);
  tapB.stop();
  if(turnsProbe.builds-bAfterA!==1) throw Error('cold B did not build once');
@@ -125,12 +125,12 @@ try {
  const bAfterB=turnsProbe.builds;
  const tapBack=sampleAdds();
  await activateSlot('sa');
- if(!await waitFor(()=>turns()===60,5000)){tapBack.stop();throw Error('revisit A never reached 60 turns');}
+ if(!await waitFor(()=>turns()===80,5000)){tapBack.stop();throw Error('revisit A never reached 80 turns');}
  await wait(300);
  tapBack.stop();
  if(turnsProbe.builds!==bAfterB) throw Error('revisit A rebuilt turns: +'+(turnsProbe.builds-bAfterB));
  if(tapBack.batches[0]>20) throw Error('revisit A first commit mounted '+tapBack.batches[0]+', want <= 20 (chunking stays)');
- if(tapBack.batches.reduce((a,b)=>a+b,0)!==60) throw Error('revisit A mounted '+tapBack.batches.reduce((a,b)=>a+b,0)+' turns, want 60');
+ if(tapBack.batches.reduce((a,b)=>a+b,0)!==80) throw Error('revisit A mounted '+tapBack.batches.reduce((a,b)=>a+b,0)+' turns, want 80');
  // Unrelated store writes must not rebuild either (items/toolRuns references stay unchanged).
  const beforeQuiet=turnsProbe.builds;
  set({dialogs:[]});
@@ -141,7 +141,7 @@ try {
  set({items:[...state.items,{kind:'user',id:'u-live',ts:9000,text:'a streamed question at the end',images:[]},{kind:'assistant',id:'a-live',ts:9001,model:'m',blocks:[{type:'text',text:'a streamed answer'}],stopReason:'stop',final:'a streamed answer'}]});
  await wait(300);
  if(turnsProbe.builds-beforeStream!==1) throw Error('streamed items rebuilt '+((turnsProbe.builds-beforeStream)||'0')+' times, want 1');
- if(!document.querySelectorAll('.transcript-inner > section.turn')[59].textContent.includes('a streamed answer')) throw Error('streamed turn not shown');
+ if(![...document.querySelectorAll('.transcript-inner > section.turn')].at(-1).textContent.includes('a streamed answer')) throw Error('streamed turn not shown');
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) { document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.stack+'</p>'); }
 `,

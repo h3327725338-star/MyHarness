@@ -7,7 +7,8 @@
  * and which events hosts see is decided by AgentSession.
  */
 
-import type { Agent, AgentTool, ThinkingLevel } from "@myharness/agent-core";
+import type { Agent, AgentMessage, AgentTool, ThinkingLevel } from "@myharness/agent-core";
+import { contentText } from "@myharness/ai";
 import type { Model, Usage } from "@myharness/ai/compat";
 import { clampThinkingLevel } from "@myharness/ai/compat";
 import type { SettingsManager } from "../../config/settings/index.ts";
@@ -159,6 +160,7 @@ export class SessionCompactionRunner {
 			extensionCompaction,
 			parentSystemPrompt,
 			parentTools,
+			branchEntries,
 		);
 		const summary = outcome.result.summary;
 		const firstKeptEntryId = outcome.result.firstKeptEntryId;
@@ -203,10 +205,50 @@ export class SessionCompactionRunner {
 		extensionCompaction?: CompactionResult,
 		parentSystemPrompt?: string,
 		parentTools?: AgentTool[],
+		branchEntries: SessionEntry[] = [],
 	): Promise<{ result: CompactionResult & { estimatedTokensAfter: number }; fromExtension: boolean }> {
 		const { agent, sessionManager, contextCoordinator } = this._host;
 		const mainModel = agent.state.model as Model<any> | undefined;
 		const fromExtension = extensionCompaction !== undefined;
+		const tools = parentTools ?? agent.state.tools;
+		const sameModel =
+			mainModel?.provider === model.provider &&
+			mainModel?.id === model.id &&
+			mainModel?.api === model.api &&
+			mainModel?.baseUrl === model.baseUrl;
+		// On the chat's own model the summary request is the chat's next request plus the checkpoint instruction (same
+		// transforms, same tools), so the provider serves almost all of it from the prompt cache.
+		const mainRequest =
+			!fromExtension && sameModel
+				? {
+						messages: agent.transformContext
+							? await agent.transformContext(preparation.messagesToSummarize, signal)
+							: preparation.messagesToSummarize,
+						tools,
+					}
+				: undefined;
+		const branchMessages: AgentMessage[] = [];
+		const userEntries: Array<{ id: string; timestamp: number; text: string }> = [];
+		for (const entry of branchEntries) {
+			if (entry.type !== "message") continue;
+			branchMessages.push(entry.message);
+			if (entry.message.role === "user")
+				userEntries.push({
+					id: entry.id,
+					timestamp: entry.message.timestamp,
+					text: contentText(entry.message.content, "\n"),
+				});
+		}
+		// The checkpoint lists the earlier user messages only where session_get can read this chat back.
+		const canReadBack =
+			sessionManager.isPersisted() &&
+			sessionManager.usesDefaultSessionDir() &&
+			tools.some((tool) => tool.name === "session_get");
+		const history = {
+			contextWindow: contextCoordinator.effectiveContextWindow || undefined,
+			branchMessages,
+			...(canReadBack ? { recovery: { sessionId: sessionManager.getSessionId(), userEntries } } : {}),
+		};
 		const result =
 			extensionCompaction ??
 			(await compact(
@@ -220,11 +262,12 @@ export class SessionCompactionRunner {
 				agent.streamFunction,
 				auth.env,
 				parentSystemPrompt ?? agent.state.systemPrompt,
-				parentTools ?? agent.state.tools,
+				tools,
 				mainModel?.provider === model.provider &&
 					mainModel?.api === model.api &&
 					mainModel?.baseUrl === model.baseUrl,
 				sessionManager.getSessionId(),
+				{ mainRequest, history },
 			));
 		if (signal.aborted) throw new Error("Compaction cancelled");
 		const id = sessionManager.appendCompaction(

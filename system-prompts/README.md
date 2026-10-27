@@ -38,6 +38,8 @@
 | `tools/routing/{agent,workflow,ultracode}.md` | 各编排工具启用时的选择规则 |
 | `tools/routing/organization-heading.md`、`organization-boundary.md` | 至少一个编排工具启用时的标题与组合约束 |
 | `compaction/coding-agent/system.md` | 编程会话压缩、分支摘要、长回合前缀摘要的系统职责 |
+| `compaction/coding-agent/checkpoint.md` | 上下文压缩检查点的摘要要求（作为最后一条用户消息发出，前面是聊天自己的请求，便于命中提示缓存） |
+| `compaction/coding-agent/recovery.md` | 检查点里“之前的消息怎么读回”的说明，变量 `session`；其后由代码列出用户消息的 entry id |
 | `compaction/harness/system.md` | 通用 AgentHarness 压缩及分支摘要的系统职责；与编程版不同，不能直接合并 |
 | `memory/extractor.md`、`consolidator.md` | 后台独立记忆提取、合并请求的职责；优先更新、区分已确认事实与建议、保留适用条件；归档被替代内容；可选的 `importance` / `triggers` 标注及更新时保留原值；整理器仅在事实充分时可创建常驻用户画像初版、之后整篇重写（条目 ID 由任务文本给出，提示词文件本身不含非英文字符） |
 | `memory/recalled-context.md` | 召回记忆消息的说明；此项属于消息正文，和记忆系统约束配套管理 |

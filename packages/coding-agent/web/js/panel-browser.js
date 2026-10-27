@@ -36,6 +36,39 @@ const NOTICE_LABELS = {
 	other: "Other notices",
 };
 
+// The last picture of each website tab, kept outside the panel: a tab drawn again after a remount (a mode switch,
+// another chat) shows its page at once, also in the new picture of the mode reveal, until the native view is placed
+// over it. The host takes a picture as it hides a view, often after the panel that asked has already unmounted, so one
+// listener for the whole page records them. A picture belongs to the address the tab showed when it was taken.
+const PICTURES_MAX = 8;
+const pictures = new Map();
+const pageUrls = new Map();
+let picturesHost = null;
+function keepPicture(tabId, picture) {
+	pictures.delete(tabId);
+	if (picture) pictures.set(tabId, picture);
+	while (pictures.size > PICTURES_MAX) pictures.delete(pictures.keys().next().value);
+}
+function watchPictures(host) {
+	if (picturesHost === host || !host?.onStatus) return;
+	picturesHost = host;
+	host.onStatus((value) => {
+		if (!value?.tabId) return;
+		if (value.type === "state") {
+			pageUrls.delete(value.tabId);
+			pageUrls.set(value.tabId, value.state?.url || "");
+			if (pageUrls.size > 64) pageUrls.delete(pageUrls.keys().next().value);
+			if (value.state?.error) keepPicture(value.tabId, null);
+		} else if (value.type === "snapshot" || value.type === "frame") {
+			const src = value.type === "frame" ? value.frame : value.snapshot;
+			keepPicture(value.tabId, src ? { src, width: Math.round(value.width || 0), height: Math.round(value.height || 0), url: pageUrls.get(value.tabId) ?? null } : null);
+		} else if (value.type === "closed") {
+			keepPicture(value.tabId, null);
+			pageUrls.delete(value.tabId);
+		}
+	});
+}
+
 function navIcon(Icon, name, label, disabled, onClick) {
 	return html`<button class="icon-btn sm" title=${label} aria-label=${label} disabled=${disabled} onClick=${onClick}><${Icon} name=${name} size=${15} /></button>`;
 }
@@ -46,6 +79,7 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 	const open = useStore((s) => s.view.panelOpen);
 	const active = activeId === tabId;
 	const target = useRef(null);
+	const shot = useRef(null);
 	const findInput = useRef(null);
 	const mountedUrl = useRef(url || "");
 	const [address, setAddress] = useState(url || "");
@@ -80,7 +114,8 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 	// the render that registered it.
 	const noticesRef = useRef(noticesOn);
 	noticesRef.current = noticesOn;
-	const [snapshot, setSnapshot] = useState(null);
+	watchPictures(host);
+	const [snapshot, setSnapshot] = useState(() => pictures.get(tabId) ?? null);
 	const [findOpen, setFindOpen] = useState(false);
 	const [findText, setFindText] = useState("");
 	const [found, setFound] = useState({ activeMatch: 0, matches: 0 });
@@ -445,6 +480,24 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 				setSnapshot(value.snapshot ? { src: value.snapshot, width, height } : null);
 				return;
 			}
+			if (value.type === "frame") {
+				// A moving frame of the hidden page while an animation plays over its place (browser-view-sync.js `live`): up
+				// to 25 a second, so it goes straight into the picture instead of through a render.
+				if (!value.frame) return;
+				const width = Math.round(value.width || 0);
+				const height = Math.round(value.height || 0);
+				const img = shot.current;
+				if (!img) {
+					setSnapshot({ src: value.frame, width, height });
+					return;
+				}
+				img.src = value.frame;
+				if (width && height) {
+					img.style.width = `${width}px`;
+					img.style.height = `${height}px`;
+				}
+				return;
+			}
 			if (value.type === "newTab") {
 				// The host already made the page's window (it keeps its opener); this tab takes that view by its id. A popup
 				// that starts without an address (a sign-in steered by its opener) gets one as soon as it navigates.
@@ -511,7 +564,9 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 			.then(() => send({ action: "state" }))
 			.then((state) => {
 				if (cancelled) return;
-				setSnapshot(null);
+				// The kept picture stays under the view until it is placed, unless the tab has gone to another page since.
+				const kept = pictures.get(tabId);
+				if (!kept || kept.url !== (state?.url || "")) setSnapshot(null);
 				if (state?.url) setAddress(state.url);
 				setStatus((current) => ({ ...current, ...state }));
 				sync.start();
@@ -743,7 +798,7 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 				<p role="status">${status.error || (status.loading ? t("Loading…") : "")}</p>
 				${status.url ? html`<button class="btn sm" onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}>${t("Open in system browser")}</button>` : null}
 			</div>
-			${snapshot ? html`<img class="desktop-browser-shot" src=${snapshot.src} style=${snapshot.width && snapshot.height ? { width: `${snapshot.width}px`, height: `${snapshot.height}px` } : null} alt="" draggable="false" />` : null}
+			${snapshot ? html`<img class="desktop-browser-shot" ref=${shot} decoding="async" src=${snapshot.src} style=${snapshot.width && snapshot.height ? { width: `${snapshot.width}px`, height: `${snapshot.height}px` } : null} alt="" draggable="false" />` : null}
 		</div>
 	</div>`;
 }

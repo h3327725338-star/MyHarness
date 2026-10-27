@@ -1,6 +1,6 @@
 // Sidebar: workspaces and their chats. Rows use a fixed status slot at the head and a fixed time slot at the end, so titles never shift.
 import { html, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Icon, Menu, MenuItem, MenuSep, Modal, Overlay, Resizer, Spinner, COLLAPSE_MS, FoldIn, ListSlot, autofocusOnMount, motionEnabled, useHeightGlide, usePresence, useRetainedRows } from "./ui.js";
-import { GENERAL_KEY, api, freshRowKey, loadArchived, loadSessions, loadUnbound, loadWorkspaces, post, setView, state, useStore } from "./store.js";
+import { GENERAL_KEY, api, freshRowKey, loadArchived, loadSessions, loadUnbound, loadWorkspaces, playingChatsKey, post, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { FolderPicker } from "./folder-picker.js";
 import { t, serverText } from "./i18n.js";
@@ -13,6 +13,7 @@ import { ModeSwitch, ModeTasks } from "./mode-switch.js";
 import { ExportSidebarFoot, exportReadOnly } from "./export-mode.js";
 import { WorkspaceSettings } from "./workspace-settings.js";
 import { openSourcesPage } from "./sources-page.js";
+import { peekSidebarEnter, peekSidebarLeave } from "./sidebar-peek.js";
 
 const pathKey = (path) => normPath(path).toLowerCase();
 // A new chat is listed from the click on, under a stand-in key (see Sidebar); its real row, and later its saved row,
@@ -73,7 +74,13 @@ function ChatIndicator({ slot, currentFile, onRetry }) {
 	</span>`;
 }
 
-const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
+/** Chats with a website tab playing sound now: session id -> "on", or "muted" when only muted tabs play. */
+function usePlayingChats() {
+	const key = useStore(playingChatsKey);
+	return useMemo(() => new Map(key ? key.split("|").map((entry) => [entry.slice(0, entry.lastIndexOf("=")), entry.slice(entry.lastIndexOf("=") + 1)]) : []), [key]);
+}
+
+const ChatRow = memo(function ChatRow({ info, current, slot, currentFile, sound }) {
 	const [editing, setEditing] = useState(false);
 	const [value, setValue] = useState("");
 	// A chat that was just created has no message and no file on disk yet: it is listed as "New chat", and there is
@@ -107,7 +114,9 @@ const ChatRow = memo(function ChatRow({ info, current, slot, currentFile }) {
 			? html`<input class="field title-edit" autofocus ref=${autofocusOnMount} value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onClick=${(e) => e.stopPropagation()}
 				onKeyDown=${(e) => (e.stopPropagation(), e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
 			: html`<${ChatIndicator} slot=${slot} currentFile=${currentFile} onRetry=${() => actions.retryConversationNaming(info.path)} />
-				<span class="title truncate">${info.pinned ? html`<${Icon} name="pin" size=${12} class="pin-mark" />` : null}${title}</span>
+				<span class="title truncate">${info.pinned ? html`<${Icon} name="pin" size=${12} class="pin-mark" />` : null}${sound
+					? html`<span class=${`chat-sound ${sound === "muted" ? "muted" : ""}`} title=${sound === "muted" ? t("A website tab here is playing (muted)") : t("A website tab here is playing sound")}><${Icon} name=${sound === "muted" ? "volumeOff" : "volume"} size=${12} /></span>`
+					: null}${title}</span>
 				<span class="slot-end">${fresh ? null : html`<span class="when">${relTime(info.modified)}</span>
 					<span class="row-actions" onClick=${(e) => e.stopPropagation()}>
 						<${Menu} align="end" trigger=${({ toggle }) => html`<button class="icon-btn sm" aria-label=${t("Chat actions")} onClick=${toggle}><${Icon} name="more" size=${15} /></button>`} width=${190}>
@@ -150,6 +159,7 @@ function selectWorkspaceChats(sessions, { filter, slotsByFile, archived, current
 function Workspace({ workspace, general = false, archived = false, error, isCurrent, open, sessions, filter, currentFile, slotsByFile, drafts, hasUnreadResult, expandKey, title, showAll: controlledShowAll = undefined, onShowAll = undefined }) {
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const mode = useStore((s) => s.view.chatMode);
+	const playing = usePlayingChats();
 	const showing = open || !!filter;
 	const [rendered, setRendered] = useState(showing);
 	const [innerShowAll, setInnerShowAll] = useState(false);
@@ -209,7 +219,7 @@ function Workspace({ workspace, general = false, archived = false, error, isCurr
 				${rendered
 					? html`<div class="ws-children" ref=${glide.ref}>
 						<${FoldIn} content=${note} />
-						<${ChatRows} key=${showAll ? "all" : "head"} capped=${capped} items=${shown} renderRow=${(info) => html`<${ChatRow} key=${info.path} info=${info} current=${isShown(info, currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} />`} />
+						<${ChatRows} key=${showAll ? "all" : "head"} capped=${capped} items=${shown} renderRow=${(info) => html`<${ChatRow} key=${info.path} info=${info} current=${isShown(info, currentFile)} slot=${slotsByFile.get(pathKey(info.path))} currentFile=${currentFile} sound=${playing.get(info.id)} />`} />
 						${!filter && list.length > shown.length ? html`<button class="link-btn side-more" onClick=${() => glide.run(() => setShowAll(true))}>${t("Show {n} more", { n: list.length - shown.length })}</button>` : null}
 					</div>`
 					: null}
@@ -644,10 +654,11 @@ export function Sidebar() {
 		state.view = { ...state.view, sidebarW: w };
 		document.documentElement.style.setProperty("--sidebar-w", `${w}px`);
 	};
-	return html`<aside class=${`sidebar${sidebarOpen ? "" : " is-collapsed"}`} aria-label=${t("Workspaces and chats")}>
+	// While hidden the sidebar is only seen as a peek (sidebar-peek.js), where its own button keeps it open.
+	return html`<aside class=${`sidebar${sidebarOpen ? "" : " is-collapsed"}`} aria-label=${t("Workspaces and chats")} onPointerEnter=${peekSidebarEnter} onPointerLeave=${peekSidebarLeave}>
 		<div class="sidebar-top">
 			<div class="brand"><${ModeSwitch} /><span class="grow">MyHarness</span>
-				<button class="icon-btn sm" title=${`${t("Hide sidebar")} (${shortcutFor("sidebar", shortcuts)})`} aria-label=${t("Hide sidebar")} onClick=${() => setView({ sidebarOpen: false })}><${Icon} name="sidebar" size=${16} /></button></div>
+				<button class="icon-btn sm" title=${`${sidebarOpen ? t("Hide sidebar") : t("Show sidebar")} (${shortcutFor("sidebar", shortcuts)})`} aria-label=${sidebarOpen ? t("Hide sidebar") : t("Show sidebar")} onClick=${() => setView({ sidebarOpen: !sidebarOpen })}><${Icon} name="sidebar" size=${16} /></button></div>
 			<${ModeTasks} />
 			<button class="nav-btn primary-nav" data-export-offline="true" onClick=${() => actions.newChat()} title=${t("New chat in Default (it belongs to no workspace)")}><${Icon} name="edit" size=${16} />${t("New chat")}<span class="kbd">${shortcutFor("newChat", shortcuts)}</span></button>
 			<button class="nav-btn" onClick=${() => setView({ palette: true })}><${Icon} name="search" size=${16} />${t("Search & commands")}<span class="kbd">${shortcutFor("palette", shortcuts)}</span></button>

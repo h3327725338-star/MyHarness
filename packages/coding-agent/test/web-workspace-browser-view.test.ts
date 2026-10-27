@@ -14,6 +14,8 @@ const installed = detectInstalledBrowsers();
  *
  * - a visible box produces bounds with its exact rectangle, a moved box produces new bounds without a stale frame;
  * - a dialog/overlay over the box, or a clipping ancestor, hides the view (null bounds);
+ * - the peeking sidebar over the left side of the box cuts the view at its edge (`clip`) instead of hiding it, and a
+ *   View Transition over the screen hides it with `live` (the host then sends moving frames, drawn into the picture);
  * - unmounting the website tab — the action of switching to Session/Terminal/file/media — reports null bounds, so the
  *   native view cannot stay over the next tab;
  * - the workspace actions hide the native views before they switch to a non-browser tab or close the panel;
@@ -101,6 +103,48 @@ try {
 	check(await until(()=>lastBounds()&&lastBounds().rect),'removing the overlay did not bring the native view back');
 	coveredSync.stop();
 
+	// 2a. The sidebar peek covers only the left side of the box: the view is cut at the sidebar's edge and stays live.
+	//     Sliding in, the cut is where the sidebar comes to rest; once it has slid out the whole box is shown again.
+	mark('peek');
+	const peekSync=createBrowserViewSync({host:window.myHarnessDesktop,tabId:'browser:https://example.com/',element:()=>document.getElementById('target'),onError:()=>{}});
+	peekSync.start();
+	check(await until(()=>{const last=lastBounds();return last&&last.rect&&!last.clip}),'the box was not shown before the peek');
+	const app=document.createElement('div');
+	app.className='app';
+	app.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:50';
+	const side=document.createElement('div');
+	side.className='sidebar is-collapsed';
+	side.style.cssText='position:fixed;left:0;top:0;width:250px;height:600px;margin:0;pointer-events:auto;background:#fff;transition:none;transform:translateX(-100px)';
+	app.append(side);
+	document.body.append(app);
+	document.documentElement.dataset.sidebarPeek='in';
+	check(await until(()=>{const last=lastBounds();return last&&last.rect&&last.rect.x===100&&last.rect.width===400&&last.clip&&last.clip.x===250&&last.clip.width===250&&last.clip.y===80&&last.clip.height===400}),'the peeking sidebar did not cut the view at its resting edge: '+JSON.stringify(lastBounds()));
+	side.style.transform='none';
+	await wait(100);
+	check(lastBounds().clip&&lastBounds().clip.x===250,'the cut moved while the sidebar came to rest: '+JSON.stringify(lastBounds()));
+	// A sidebar that leaves too little of the box hides the view instead of showing a sliver.
+	side.style.width='470px';
+	check(await until(()=>lastBounds()&&lastBounds().rect===null),'a sliver of the view was left beside a wide sidebar: '+JSON.stringify(lastBounds()));
+	side.style.width='250px';
+	document.documentElement.dataset.sidebarPeek='out';
+	side.style.transform='translateX(-120px)';
+	check(await until(()=>{const last=lastBounds();return last&&last.rect&&last.clip&&last.clip.x===130}),'sliding out, the cut did not follow the sidebar: '+JSON.stringify(lastBounds()));
+	side.style.transform='translateX(-274px)';
+	check(await until(()=>{const last=lastBounds();return last&&last.rect&&!last.clip}),'the whole box did not come back after the peek: '+JSON.stringify(lastBounds()));
+	delete document.documentElement.dataset.sidebarPeek;
+	app.remove();
+
+	// 2b. A View Transition over the screen (the mode reveal): the view is hidden with \`live\`, then shown again.
+	if (typeof document.startViewTransition==='function') {
+		mark('view-transition');
+		const before=calls.length;
+		const transition=document.startViewTransition(()=>wait(30));
+		check(await until(()=>calls.slice(before).some(c=>c.action==='bounds'&&c.rect===null&&c.live===true)),'a View Transition did not ask for live frames: '+JSON.stringify(calls.slice(before)));
+		await transition.finished.catch(()=>{});
+		check(await until(()=>{const last=lastBounds();return last&&last.rect&&!last.live}),'the view did not come back after the View Transition: '+JSON.stringify(lastBounds()));
+	}
+	peekSync.stop();
+
 	// 3. A box cut by a scrolling ancestor cannot be drawn natively: it is hidden instead of sticking out of the panel.
 	const scrollHost=document.createElement('div');
 	scrollHost.style.cssText='position:fixed;left:600px;top:60px;width:300px;height:200px;overflow:auto';
@@ -127,6 +171,14 @@ try {
 	check(await until(()=>{const last=lastBounds();return last&&last.rect&&last.rect.width>0&&last.rect.height>0}),'the mounted tab never sent a usable rectangle: '+JSON.stringify(lastBounds()));
 	const address=document.querySelector('.desktop-browser-panel input[aria-label="Address and search bar"]');
 	check(address&&address.value==='https://example.com/','the address bar does not show the tab URL: '+(address&&address.value));
+	// Moving frames of the hidden page go straight into the picture under the view, the same element each time.
+	const frameA='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+	const frameB='data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+	window.__emitStatus({tabId,type:'frame',frame:frameA,width:300,height:200});
+	check(await until(()=>document.querySelector('.desktop-browser-shot')?.getAttribute('src')===frameA),'a live frame was not drawn into the picture');
+	const shotImg=document.querySelector('.desktop-browser-shot');
+	window.__emitStatus({tabId,type:'frame',frame:frameB,width:320,height:210});
+	check(document.querySelector('.desktop-browser-shot')===shotImg&&shotImg.getAttribute('src')===frameB&&shotImg.style.width==='320px'&&shotImg.style.height==='210px','the next live frame did not replace the picture in place: '+shotImg.getAttribute('src').slice(-12)+' '+shotImg.style.width);
 	const back=document.querySelector('.desktop-browser-panel button[title="Back"]');
 	check(back,'the toolbar back button is missing');
 	back.click();

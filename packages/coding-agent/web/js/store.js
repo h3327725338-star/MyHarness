@@ -370,12 +370,41 @@ function applyPanel(sessionId) {
 	const staying = panel.panelOpen && panel.wsTabs.some((tab) => tab.id === leaving?.id);
 	if (state.view.panelOpen && leaving?.type === "browser" && !staying)
 		globalThis.myHarnessDesktop?.browser?.({ action: "hide" })?.catch?.(() => undefined);
-	// Collaboration mode is the window's layout. A chat with no workspace to fill pauses it (the sidebar is left as the
-	// user has it, and the sidebar to give back on exit is kept); the next chat with an open workspace, e.g. the one
-	// the user came from, shows it maximized again instead of the mode being lost on the way through.
+	// Collaboration mode is the layout of the mode on screen (swapModeLayout). A chat with no workspace to fill pauses it
+	// (the sidebar is left as the user has it, and the sidebar to give back on exit is kept); the next chat with an open
+	// workspace, e.g. the one the user came from, shows it maximized again instead of the mode being lost on the way.
 	const empty = !panel.panelOpen || panel.wsTabs.length === 0;
 	const layout = state.view.wsMax && empty ? { wsMax: false, wsMaxPaused: true } : state.view.wsMaxPaused && !empty ? { wsMax: true, wsMaxPaused: false } : {};
 	state.view = { ...state.view, ...panel, ...layout };
+}
+
+// Coding and General each keep their own layout: collaboration mode entered in one does not follow a mode switch into
+// the other, and comes back when the user returns. Kept for this page only, like collaboration mode itself.
+const modeLayouts = { coding: null, general: null }; // mode -> { sidebarOpen } while that mode is in collaboration mode
+let layoutMode = null; // the mode whose layout is on screen (null: the one the page opened in)
+
+/**
+ * Give the screen the layout of `mode`. The leaving mode keeps whether it was in collaboration mode (on screen or
+ * paused) and whether its sidebar was shown; the entering mode gets its own back, or the plain layout with the sidebar
+ * from before collaboration mode (the rule of actions.js `leaveWorkspaceMax`). `resume`: the panel on screen already
+ * belongs to the chat being shown, so a workspace with something open is maximized at once; otherwise the mode waits
+ * paused and applyPanel maximizes it when that chat's panel comes.
+ */
+function swapModeLayout(mode, resume) {
+	const leaving = layoutMode ?? state.view.chatMode;
+	layoutMode = mode;
+	if (leaving === mode) return;
+	const view = state.view;
+	const maxed = view.wsMax || view.wsMaxPaused;
+	modeLayouts[leaving] = maxed ? { sidebarOpen: view.sidebarOpen } : null;
+	const plainSidebar = maxed && view.wsMaxSidebar !== null && !view.sidebarOpen ? view.wsMaxSidebar : view.sidebarOpen;
+	const saved = modeLayouts[mode];
+	if (!saved) {
+		if (maxed) state.view = { ...view, wsMax: false, wsMaxPaused: false, wsMaxSidebar: null, sidebarOpen: plainSidebar };
+		return;
+	}
+	const now = resume && view.panelOpen && view.wsTabs.length > 0;
+	state.view = { ...view, wsMax: now, wsMaxPaused: !now, wsMaxSidebar: plainSidebar, sidebarOpen: saved.sidebarOpen };
 }
 
 /**
@@ -425,6 +454,26 @@ function withNewBrowserTabIds(panel) {
 
 /** The session whose panel is on screen: its tabs are the live `state.view` values. */
 export const panelSessionId = () => panelKey;
+
+/**
+ * The chats with a website tab that plays sound now, also chats not on screen, for the mark in the sidebar: one string
+ * of `sessionId=on` (a tab plays aloud) or `sessionId=muted` (only muted tabs play) entries joined by "|", so a store
+ * selector can compare it.
+ */
+export function playingChatsKey(s = state) {
+	const audio = s.view.browserAudio;
+	if (!Object.values(audio).some((sound) => sound?.audible)) return "";
+	const playing = new Map();
+	const scan = (sessionId, tabs) => {
+		for (const tab of tabs ?? []) {
+			const sound = tab?.type === "browser" ? audio[tab.id] : null;
+			if (sound?.audible) playing.set(sessionId, sound.muted && playing.get(sessionId) !== "on" ? "muted" : "on");
+		}
+	};
+	for (const [id, panel] of panelStates) if (id !== panelKey) scan(id, panel.wsTabs);
+	if (panelKey) scan(panelKey, s.view.wsTabs);
+	return [...playing].map(([id, sound]) => `${id}=${sound}`).sort().join("|");
+}
 
 /** A copy of the saved panel of a conversation that is not on screen (an empty one when it never opened a tab). */
 export function storedPanel(sessionId) {
@@ -1412,6 +1461,8 @@ export async function refreshAll({ full = true } = {}) {
 /** Put a mode on screen (its identity via `data-chat-mode`, its sidebar lists) and remember it in this browser. */
 function setChatMode(mode) {
 	const next = chatModeOf(mode);
+	// A switch that is still loading its chat (a pending slot) shows the panel it is leaving: no workspace to judge yet.
+	swapModeLayout(next, !String(activeSlot).startsWith("pending:"));
 	if (state.view.chatMode === next) return;
 	state.view = { ...state.view, chatMode: next };
 	persistView();
@@ -1661,10 +1712,15 @@ export async function activateSlot(slot, seq = nextSwitch(), pending = state.swi
 	if (state.landing && state.landing.slot !== slot) state.landing = null;
 	const bag = bagOf(slot);
 	const info = state.slots.find((item) => item.slot === slot);
-	// The right panel belongs to the chat: show that chat's own tabs (a chat that never opened one has an empty panel).
-	const leavingPanel = panelKey;
-	applyPanel(info?.sessionId ?? bag.snap?.session?.id ?? pending?.sessionId ?? null);
 	let mode = chatModeOf(bag.snap?.mode ?? info?.mode ?? pending?.mode ?? uiMode());
+	// The right panel belongs to the chat: show that chat's own tabs (a chat that never opened one has an empty panel),
+	// in the layout of the chat's mode. A loaded chat of the other mode takes both together with its mode, inside the
+	// reveal (show below): taken here, the page could draw them under the leaving mode's chat before the reveal starts.
+	const leavingPanel = panelKey;
+	if (!bag.loaded || mode === state.view.chatMode) {
+		swapModeLayout(mode, false);
+		applyPanel(info?.sessionId ?? bag.snap?.session?.id ?? pending?.sessionId ?? null);
+	}
 	if (!bag.loaded) {
 		if (pending?.seq !== seq) pending = beginSwitch({ mode, path: info?.sessionFile ?? bag.snap?.session?.file, name: info?.name ?? bag.snap?.session?.name, sessionId: info?.sessionId ?? bag.snap?.session?.id, retry: () => activateSlot(slot) }, seq);
 		// A confirmed slot can safely hold a draft, but sending remains locked until both reads finish.

@@ -8,7 +8,7 @@ import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/b
 
 const installed = detectInstalledBrowsers();
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
-	"mounts transcript turns in chunks: 20 on the first frame, all 60 within 4 frames",
+	"mounts transcript turns in batches: at most 20 on the first frame, then batches of at most 20 that wait while keys come",
 	async () => {
 		const root = mkdtempSync(join(tmpdir(), "myharness-chunk-"));
 		const server = new WebHttpServer();
@@ -41,17 +41,20 @@ const waitFor=async(cond,ms)=>{const t0=Date.now();while(Date.now()-t0<ms){if(co
 // Sample the mounted turn count on every DOM change: the first sample is what the first frame shows,
 // no matter how effects and animation frames interleave on mount vs update.
 const sampleMounts=()=>{const samples=[];const mo=new MutationObserver(()=>{const n=turns();if(!samples.length||samples[samples.length-1]!==n)samples.push(n);});mo.observe(document.getElementById('app'),{childList:true,subtree:true});return {samples,stop:()=>mo.disconnect()};};
+// Every later batch is at most 20 turns (it is sized by what batches cost, see transcript.js nextChunk).
+const batches=(samples)=>samples.slice(1).map((n,i)=>n-samples[i]);
 try {
  setView({lang:'en',motion:'off',processDefault:'collapsed'});
- // (1) First frame shows at most 20 turns, all 60 within 4 frames.
+ // (1) The first frame shows at most 20 turns; the rest mount in later batches of at most 20, all 80 in the end.
  set({items:seed(80),snap:snapOf('s1'),toolRuns:{},dialogs:[],runs:{},userBash:{},userBashOrder:[]});
  const tap1=sampleMounts();
  render(h(Transcript,{}),document.getElementById('app'));
- if(!await waitFor(()=>turns()===60,3000)) { tap1.stop(); throw Error('never settled at 60'); }
+ if(!await waitFor(()=>turns()===80,5000)) { tap1.stop(); throw Error('never mounted all 80, got '+turns()); }
  tap1.stop();
  if(!tap1.samples.length||tap1.samples[0]>20) throw Error('first frame shows '+tap1.samples[0]+' turns, want <= 20');
- if(tap1.samples.length>4) throw Error('took '+tap1.samples.length+' frames to reach 60: '+tap1.samples.join(','));
- // (5) The newest message does not move while older chunks mount above it.
+ if(tap1.samples.length<2) throw Error('did not mount in batches: '+tap1.samples.join(','));
+ if(batches(tap1.samples).some((n)=>n<1||n>20)) throw Error('a batch out of 1..20: '+tap1.samples.join(','));
+ // (2) The newest message does not move while older batches mount above it.
  // Pin to the bottom synchronously before reading: the session switch schedules its own
  // bottom scroll on a later frame, and the comparison must be bottom-against-bottom.
  const pin=()=>{const sc=document.querySelector('.transcript');sc.scrollTop=sc.scrollHeight;};
@@ -59,41 +62,38 @@ try {
  await frame(); await frame();
  pin();
  const firstTop=document.querySelectorAll('.transcript-inner > section.turn')[turns()-1].getBoundingClientRect().top;
- if(!await waitFor(()=>turns()===60,3000)) throw Error('second session never reached 60');
+ if(!await waitFor(()=>turns()===80,5000)) throw Error('second session never reached 80');
  pin();
- const lastTop=document.querySelectorAll('.transcript-inner > section.turn')[59].getBoundingClientRect().top;
+ const lastTop=document.querySelectorAll('.transcript-inner > section.turn')[79].getBoundingClientRect().top;
  if(Math.abs(lastTop-firstTop)>1) throw Error('newest message moved: '+firstTop+' -> '+lastTop);
- // (2) Hitting "Show earlier" mid-chunk mounts everything at once, without duplicates.
- set({items:seed(80),snap:snapOf('s3'),toolRuns:{},dialogs:[],runs:{},userBash:{},userBashOrder:[]});
- await frame();
- const earlier=document.querySelector('button.earlier');
- if(!earlier) throw Error('earlier button missing mid-chunk');
- earlier.click();
- if(!await waitFor(()=>turns()===80,3000)) throw Error('show-earlier did not mount all 80 turns, got '+turns());
- const finals=[...document.querySelectorAll('.transcript-inner > section.turn .final')].map((el)=>el.textContent);
- const uniq=new Set(finals);
- if(uniq.size!==80) throw Error('duplicate turns after show-earlier: '+finals.length+' rendered, '+uniq.size+' unique');
- // (3) A streamed message arriving mid-chunk lands at the bottom, not lost, not doubled.
- // The window stays capped at 60: the new turn slides in at the end and the oldest slides out.
+ // (3) A streamed message arriving mid-mount lands at the bottom, not lost, not doubled.
  set({items:seed(80),snap:snapOf('s4'),toolRuns:{},dialogs:[],runs:{},userBash:{},userBashOrder:[]});
  await frame();
  set({items:[...state.items,user('u-live','a live question at the end'),live(999,'a live answer at the end')]});
- if(!await waitFor(()=>turns()===60,5000)) throw Error('window did not settle at 60 after stream, got '+turns());
+ if(!await waitFor(()=>turns()===81,5000)) throw Error('did not settle at 81 after stream, got '+turns());
  await wait(300);
- const last=document.querySelectorAll('.transcript-inner > section.turn')[59];
+ const last=document.querySelectorAll('.transcript-inner > section.turn')[80];
  if(!last.textContent.includes('a live answer at the end')) throw Error('streamed turn is not last');
  const el=document.querySelector('.transcript');
- if(el.scrollHeight-el.clientHeight-el.scrollTop>2) throw Error('not at bottom after streamed chunk');
- // (4) Same chunking with motion off (data-motion is off; chunking is not an animation).
+ if(el.scrollHeight-el.clientHeight-el.scrollTop>2) throw Error('not at bottom after streamed batch');
+ // (4) Typing gets its frames to itself: while keys keep coming no batch mounts, and mounting goes on after.
+ const key=()=>document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'a',bubbles:true}));
+ key();
+ const typing=setInterval(key,30);
+ set({items:seed(80),snap:snapOf('s5'),toolRuns:{},dialogs:[],runs:{},userBash:{},userBashOrder:[]});
+ await wait(400);
+ const during=turns();
+ clearInterval(typing);
+ if(during>20) throw Error('turns mounted while keys kept coming: '+during);
+ if(!await waitFor(()=>turns()===80,5000)) throw Error('mounting did not go on after the typing, got '+turns());
+ // (5) Same batching with motion off (data-motion is off; batching is not an animation).
  if(document.documentElement.dataset.motion!=='off') throw Error('data-motion is not off: '+document.documentElement.dataset.motion);
  const tap5=sampleMounts();
- set({items:seed(80),snap:snapOf('s5'),toolRuns:{},dialogs:[],runs:{},userBash:{},userBashOrder:[]});
- // Wait for the first commit first: the old DOM still shows 60 until the switch renders.
+ set({items:seed(80),snap:snapOf('s6'),toolRuns:{},dialogs:[],runs:{},userBash:{},userBashOrder:[]});
  if(!await waitFor(()=>tap5.samples.length>0,3000)) { tap5.stop(); throw Error('motion=off never rendered'); }
- if(!await waitFor(()=>turns()===60,3000)) { tap5.stop(); throw Error('motion=off never reached 60'); }
+ if(!await waitFor(()=>turns()===80,5000)) { tap5.stop(); throw Error('motion=off never reached 80'); }
  tap5.stop();
  if(!tap5.samples.length||tap5.samples[0]>20) throw Error('motion=off first frame shows '+tap5.samples[0]+' turns, want <= 20');
- if(tap5.samples.length>4) throw Error('motion=off took '+tap5.samples.length+' frames: '+tap5.samples.join(','));
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) { document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.stack+'</p>'); }
 `,

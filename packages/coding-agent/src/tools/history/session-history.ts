@@ -301,7 +301,7 @@ export function createSessionGetToolDefinition(
 		name: "session_get",
 		label: "session_get",
 		description:
-			"Read one earlier saved chat by session id: its hand-off note (with how far it reaches) and either the messages around entry_id (along that message's own branch) or the newest messages of its current branch. Use it to check exact numbers, wording and later corrections before relying on an earlier chat. Read-only.",
+			"Read one earlier saved chat by session id: its hand-off note (with how far it reaches) and either the messages around entry_id (along that message's own branch) or the newest messages of its current branch. Use it to check exact numbers, wording and later corrections before relying on an earlier chat. This chat's own messages from before a context checkpoint are read the same way, with this chat's id and an entry_id the checkpoint lists. Read-only.",
 		promptSnippet: loadSystemPrompt("tools/session-get/snippet.md"),
 		parameters: sessionGetSchema,
 		executionMode: "parallel",
@@ -313,21 +313,25 @@ export function createSessionGetToolDefinition(
 					mode: "unavailable",
 				});
 			const id = input.session.trim();
+			const entryId = input.entry_id?.trim() || undefined;
 			try {
 				// A chat named by id is looked up in every workspace and mode: the id came from a search or from the
 				// chat the user chose to continue, so it is an explicit source, not a wider automatic search.
-				const path = id === scope.excludeSessionId ? undefined : findSessionFileById(id, scope.dataRoot);
+				// This chat itself is read only around an entry id: that is how messages from before a context
+				// checkpoint (listed by id in the checkpoint) are read back; its newest messages are already in context.
+				const current = id === scope.excludeSessionId;
+				const path = current && !entryId ? undefined : findSessionFileById(id, scope.dataRoot);
 				if (!path) {
 					return textResult(
-						id === scope.excludeSessionId
-							? "这是当前会话本身，不需要用 session_get 读取。"
+						current && !entryId
+							? "这是当前会话本身，不需要用 session_get 读取；要找回压缩检查点之前的内容，请带上检查点里列出的 entry_id。"
 							: `找不到会话 ${oneLine(id, 80)}：它可能已被删除，或从未保存。不要凭记忆或缓存补全它的内容。`,
 						{ mode: "get", sources: [] },
 					);
 				}
 				const result = readSessionHistory({
 					path,
-					entryId: input.entry_id?.trim() || undefined,
+					entryId,
 					before: input.before,
 					after: input.after,
 					tail: input.tail,

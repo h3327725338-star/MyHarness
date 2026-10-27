@@ -12,6 +12,7 @@ import {
 	estimateMemoryTokens,
 	findMemoryContradictions,
 	getAutoMemoryPaths,
+	isIncrementalRecall,
 	isMemoryProfile,
 	MEMORY_PROFILE_ID,
 	type MemoryEntry,
@@ -992,5 +993,90 @@ describe("memory v2: resident directory, contradictions, cross-scope access", ()
 			false,
 		);
 		expect(toolText(await run(get(), { id: newId }))).toContain("认领后属于当前项目");
+	});
+});
+
+describe("recall sends only what the context lacks", () => {
+	afterEach(() => {
+		rmSync(testRoot, { recursive: true, force: true });
+	});
+
+	// The recalls of earlier turns stay in the model's context (their bytes never change, so the provider's prompt
+	// cache keeps them); each new recall adds only what those lack.
+	it("adds rules, profile, directory rows and cards once, then only their changes", async () => {
+		writeMemory({
+			id: MEMORY_PROFILE_ID,
+			name: "用户画像",
+			type: "user",
+			importance: "high",
+			body: "## 沟通\n- 说人话。",
+		});
+		writeMemory({ id: "global/source-first", name: "Source First", body: "先检查真实源码再下结论。" });
+		writeMemory({ id: "global/old-note", name: "Old Note", body: "一条旧记忆。" });
+		const earlier: unknown[] = [];
+		const turn = async (query: string) => {
+			const recalled = await manager().recall(query, earlier);
+			if (recalled) earlier.push(recalled.details);
+			return recalled;
+		};
+
+		const first = await turn("检查真实源码");
+		const full = await manager().recall("检查真实源码");
+		// The first recall of a context is the whole recall, as before.
+		expect(first?.content).toBe(full?.content);
+		expect(String(first?.content)).toContain("# Recalled memory");
+		expect(isIncrementalRecall(first?.details)).toBe(true);
+
+		// Nothing new: no message at all.
+		expect(await turn("再检查一次真实源码")).toBeUndefined();
+
+		// A new memory: only its directory row (and its card, when it matches), without rules or profile again.
+		writeMemory({
+			id: "global/new-fact",
+			name: "New Fact",
+			body: "部署前跑完整测试。",
+			updatedAt: "2026-02-01T00:00:00.000Z",
+		});
+		const added = String((await turn("部署前要做什么"))?.content);
+		expect(added).not.toContain("# Recalled memory");
+		expect(added).not.toContain("说人话");
+		expect(added).toContain("记忆目录变化");
+		expect(added).toContain("global/new-fact | global | New Fact");
+		expect(added).not.toContain("global/source-first |");
+		expect(added).toContain("部署前跑完整测试");
+
+		// A card already in context with the same text is not sent again; a changed one is.
+		expect(await turn("部署前要做什么")).toBeUndefined();
+		writeMemory({
+			id: "global/new-fact",
+			name: "New Fact",
+			body: "部署前跑完整测试和构建。",
+			updatedAt: "2026-02-02T00:00:00.000Z",
+		});
+		const changed = String((await turn("部署前要做什么"))?.content);
+		expect(changed).toContain("部署前跑完整测试和构建");
+
+		// A removed memory is named as removed; a changed profile is sent again.
+		rmSync(join(directoryFor("global"), "old-note.md"));
+		writeMemory({
+			id: MEMORY_PROFILE_ID,
+			name: "用户画像",
+			type: "user",
+			importance: "high",
+			body: "## 沟通\n- 说人话，结论先行。",
+		});
+		const later = String((await turn("天气"))?.content);
+		expect(later).toContain("global/old-note | （已移除）");
+		expect(later).toContain("说人话，结论先行");
+		expect(later).not.toContain("# Recalled memory");
+
+		// Compaction cut away the recall with the whole directory and kept only later changes: the directory goes again.
+		const afterCompaction = String((await manager().recall("天气", earlier.slice(1)))?.content);
+		expect(afterCompaction).toContain("记忆目录（本轮可见范围");
+		expect(afterCompaction).toContain("# Recalled memory");
+
+		// Older recalls (no version in their details) do not count as being in context.
+		const legacy = await manager().recall("检查真实源码", [{ ids: [MEMORY_PROFILE_ID] }]);
+		expect(String(legacy?.content)).toContain("# Recalled memory");
 	});
 });

@@ -4,6 +4,8 @@ import { normPath } from "./util.js";
 import { h, render, Icon } from "./ui.js";
 import { t } from "./i18n.js";
 import { isLocalAutolinkBlocked, pathCandidates } from "./local-file-links.js";
+import { builtinBrowserAvailable } from "./link-target.js";
+import { isHtmlPath } from "./viewer-html.js";
 
 /**
  * `unbound/memory/...` is shorthand for `data/workspaces/unbound/memory/...`.
@@ -41,18 +43,31 @@ export function workspaceFilePath(absolute, cwd) {
 export const openWorkspaceFile = (absolute) => actions.openWorkspace({ type: "file", path: workspaceFilePath(absolute, state.snap?.cwd) });
 
 /**
+ * A local HTML page opens as a website tab of the built-in browser (desktop app only), served the way a file tab's
+ * preview is: the page's folder behind an unguessable token, sandboxed (src/modes/web/html-preview.ts). The address
+ * belongs to this run of the app: after a restart the tab's old address no longer answers and the link is clicked again.
+ * False when there is no built-in browser here, so the caller opens a file tab with its own preview instead.
+ */
+async function openHtmlInBrowser(absolute, slot) {
+	if (!builtinBrowserAvailable() || !isHtmlPath(absolute)) return false;
+	const { url } = await post("/api/files/site", { path: absolute }, slot);
+	if (activeSlotId() !== slot) return true;
+	return !!actions.openWorkspace({ type: "browser", url: new URL(url, location.origin).href });
+}
+
+/**
  * Left click on a file link in the chat: the file opens (or is focused) as a tab of the right-hand workspace, which
- * picks the viewer or editor for its type. A folder has no viewer there and still opens in the system file manager;
- * the other ways to open a file stay in the right-click menu. `resolve` remaps a path created on another computer
- * to the local copy (direct, workspace suffix, Drive-aware, unique basename); `open`/`reveal` then act on the
- * resolved absolute path, and a miss toasts the backend's precise reason.
+ * picks the viewer or editor for its type; an HTML page opens in the built-in browser where the app has one. A folder
+ * has no viewer there and still opens in the system file manager; the other ways to open a file stay in the right-click
+ * menu. `resolve` remaps a path created on another computer to the local copy (direct, workspace suffix, Drive-aware,
+ * unique basename); `open`/`reveal` then act on the resolved absolute path, and a miss toasts the backend's precise reason.
  */
 export async function openLocalFileInWorkspace(path, slot) {
 	try {
 		const target = await localFileAction(path, "resolve", undefined, slot);
 		if (activeSlotId() !== slot) return;
 		if (target.directory) await localFileAction(target.path, "open", undefined, slot);
-		else openWorkspaceFile(target.path);
+		else if (!(await openHtmlInBrowser(target.path, slot))) openWorkspaceFile(target.path);
 	} catch (error) {
 		toast(error.message, "error");
 	}

@@ -198,7 +198,7 @@ try {
 			pagingRoutes,
 		);
 		const first = calls.filter((call) => call.slot === "slot-a");
-		expect(first[0]?.url).toBe("/api/transcript?limit=120");
+		expect(first[0]?.url).toBe("/api/transcript?images=ref&limit=120");
 		expect(first[0]?.bytes).toBeLessThan(180_000);
 		expect(JSON.stringify({ items: fullItems }).length).toBeGreaterThan(500_000);
 	},
@@ -283,7 +283,7 @@ try {
 `,
 			pagingRoutes,
 		);
-		expect(calls.some((call) => call.url === "/api/transcript")).toBe(true);
+		expect(calls.some((call) => call.url === "/api/transcript?images=ref")).toBe(true);
 	},
 	120000,
 );
@@ -326,7 +326,7 @@ try {
 			},
 		);
 		expect(calls).toHaveLength(1);
-		expect(calls[0]?.url).toBe("/api/transcript?limit=120");
+		expect(calls[0]?.url).toBe("/api/transcript?images=ref&limit=120");
 	},
 	120000,
 );

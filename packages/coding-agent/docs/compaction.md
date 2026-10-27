@@ -60,19 +60,15 @@ You can also trigger manually with `/compact [instructions]`, where optional ins
 
 ### How It Works
 
-1. **Find cut point**: Keep the last turn, or the latest valid assistant/tool boundary in a single long turn. The `keepRecentTokens` cut is a bounded fallback for summarization-request overflow.
-2. **Extract messages**: Collect messages from the previous kept boundary (or session start) up to the cut point
-3. **Generate summary**: Call LLM to summarize with structured format, passing the previous summary as iterative context when present
-4. **Append entry**: Save `CompactionEntry` with summary and `firstKeptEntryId`
-5. **Reload**: Session reloads, using summary + messages from `firstKeptEntryId` onwards
-6. **Check the full next context**: The ideal target is 5% of the chat model's effective window, including system prompt, tools, retained messages and context transforms. A result up to 10% is accepted after one round. Above 10%, run one more round using the first checkpoint's actual rebuilt context, then keep the second result regardless of its size. There is no third round or target-miss error.
+1. **Summarize the whole active context**: `prepareCompaction()` takes every message the chat would send next. The summary request is the chat's own next request (the same system prompt, the same tools and the same context transforms) with the checkpoint instruction (`system-prompts/common/compaction/coding-agent/checkpoint.md`) added as the last user message, so a provider with prompt caching reads almost all of it from cache. This holds when the summary runs on the chat's own model; a separate Compact Model gets the messages without tools. If the model answers the instruction with a tool call, it is asked again without tools.
+2. **Ask for a detailed summary**: requests and intent, constraints and permissions, key facts and decisions, files and code (with short excerpts), errors and fixes, results and what is unverified, the current work, and the next step that follows from the latest request, written in the user's language with exact names, numbers and messages. `/compact <instructions>` adds a focus to this instruction instead of replacing it.
+3. **Write the checkpoint**: a `CompactionEntry` whose `replacementHistory` becomes the next context, in this order:
+   - the user's own earlier messages, newest first within the smaller of 20k tokens and 10% of the effective window (the oldest one that does not fit is shortened);
+   - the summary as one user message, followed by the task list from the last successful `todo_write` (when that call is not kept below), the files changed and read over the whole chat, and, where `session_get` can read this chat (a persisted chat in the default session store with that tool on), the user messages before the checkpoint by entry id (the newest 40, 60 characters each);
+   - the newest messages word for word: as far back as the smaller of `keepRecentTokens` and 15% of the effective window reaches, starting at a user or assistant message (a tool result always stays after its call) and never at or before an earlier checkpoint's summary.
+4. **Reload**: the chat continues from that context. Everything before the checkpoint stays in the session file; `session_get` with this chat's id and a listed entry id reads those messages back (user and assistant text, up to 4000 characters each), and files can be read again.
 
-A flow emits one start/end pair and saves each completed round. Generation retries
-consume the same two-round allowance. Cancellation or a failed second request leaves
-the first checkpoint available. At the same context window, automatic compaction is
-re-armed only after new messages since the checkpoint contribute at least 5% of the
-window; restoring a checkpoint or a changed usage report cannot immediately restart it.
-The independent provider hard limit still prevents sending an oversized request.
+A repeated compaction summarizes the previous checkpoint's context (its summary is ordinary input), keeps only messages after that summary word for word, and lists the user messages of the whole branch again. `tokensBefore` is the size of the active context measured right before the checkpoint. The independent provider hard limit still prevents sending an oversized request; a summary request that overflows drops its oldest messages and tries again.
 
 `/settings` provides **Compact Model**, with model and **Compact Thinking Effort**
 controls inside. They use the existing provider catalog and supported thinking levels.
@@ -88,39 +84,7 @@ written and the active context stays as it was. Provider-side (OpenAI Responses)
 checkpoint instead of a summary; the Web UI card for such a checkpoint, and for older checkpoints saved with an empty
 summary, says that no readable summary was saved.
 
-```
-Before compaction:
-
-  entry:  0     1     2     3      4     5     6      7      8     9
-        ┌─────┬─────┬─────┬─────┬──────┬─────┬─────┬──────┬──────┬─────┐
-        │ hdr │ usr │ ass │ tool │ usr │ ass │ tool │ tool │ ass │ tool│
-        └─────┴─────┴─────┴──────┴─────┴─────┴──────┴──────┴─────┴─────┘
-                └────────┬───────┘ └──────────────┬──────────────┘
-               messagesToSummarize            kept messages
-                                   ↑
-                          firstKeptEntryId (entry 4)
-
-After compaction (new entry appended):
-
-  entry:  0     1     2     3      4     5     6      7      8     9     10
-        ┌─────┬─────┬─────┬─────┬──────┬─────┬─────┬──────┬──────┬─────┬─────┐
-        │ hdr │ usr │ ass │ tool │ usr │ ass │ tool │ tool │ ass │ tool│ cmp │
-        └─────┴─────┴─────┴──────┴─────┴─────┴──────┴──────┴─────┴─────┴─────┘
-               └──────────┬──────┘ └──────────────────────┬───────────────────┘
-                 not sent to LLM                    sent to LLM
-                                                         ↑
-                                              starts from firstKeptEntryId
-
-What the LLM sees:
-
-  ┌────────┬─────────┬─────┬─────┬──────┬──────┬─────┬──────┐
-  │ system │ summary │ usr │ ass │ tool │ tool │ ass │ tool │
-  └────────┴─────────┴─────┴─────┴──────┴──────┴─────┴──────┘
-       ↑         ↑      └─────────────────┬────────────────┘
-    prompt   from cmp          messages from firstKeptEntryId
-```
-
-On repeated compactions, the summarized span starts at the previous compaction's kept boundary (`firstKeptEntryId`), not at the compaction entry itself, falling back to the entry after the previous compaction if that kept entry cannot be found in the path. This preserves messages that survived the earlier compaction by including them in the next summarization pass as well. MyHarness also recalculates `tokensBefore` from the rebuilt session context before writing the new `CompactionEntry`, so the token count reflects the actual pre-compaction context being replaced.
+Checkpoints written before `replacementHistory` existed (a summary plus `firstKeptEntryId`) are still read: the context is the summary followed by the entries from `firstKeptEntryId` on. The two sections below describe how those older checkpoints were cut.
 
 ### Split Turns
 
@@ -440,6 +404,6 @@ Configure compaction in `~/.myharness/agent/settings.json` or `<project-dir>/.my
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
 | `reserveTokens` | `16384` | Tokens to reserve for LLM response |
-| `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
+| `keepRecentTokens` | `20000` | Most tokens of the newest messages kept word for word after the summary (also capped at 15% of the effective window); they are summarized as well |
 
 Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.

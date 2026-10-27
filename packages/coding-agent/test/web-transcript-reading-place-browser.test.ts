@@ -154,9 +154,20 @@ try {
  if(!same(anchor(),left)) throw Error('new messages pulled A away: '+show(anchor())+' vs '+show(left));
  await wait(300);
  if(!jumpShown()) throw Error('jump button missing with new messages below');
- // (5) Sending a message goes to the bottom, wherever the reader was.
+ // (5) Sending a message while reading further up does not move the view (the Agent works while the reader reads on);
+ // the jump button leads down. Sent from the bottom, the view follows the sent message.
+ const reading=anchor();
  appendStreamedItem({kind:'user',text:'my new question',images:[],ts:Date.now(),pending:true,clientMessageId:'c-1'},'sa');
- if(!await waitFor(atBottom,3000)) throw Error('sending did not show the sent message at the bottom');
+ await frame(); await frame(); await wait(300);
+ if(!same(anchor(),reading)) throw Error('sending moved the reader: '+show(anchor())+' vs '+show(reading));
+ if(atBottom()) throw Error('sending from further up went to the bottom');
+ if(!jumpShown()) throw Error('jump button missing after sending from further up');
+ document.querySelector('.jump-btn').click();
+ if(!await waitFor(atBottom,3000)) throw Error('the jump button did not lead to the bottom');
+ await wait(200);
+ appendStreamedItem({kind:'user',text:'asked from the bottom',images:[],ts:Date.now(),pending:true,clientMessageId:'c-2'},'sa');
+ await frame(); await frame(); await wait(200);
+ if(!atBottom()) throw Error('sending from the bottom did not show the sent message');
  // (6) The chat's slot was released and the chat reopened in a new slot (same session): the place still comes back.
  await scrollBy(-(el().scrollHeight*0.4));
  const left2=anchor();

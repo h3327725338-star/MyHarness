@@ -372,6 +372,13 @@ export const actions = {
 		if (Object.keys(patch).length) setView(patch);
 	},
 
+	/** A website tab that was closed has no sound left to show. */
+	forgetBrowserAudio(id) {
+		if (!Object.hasOwn(state.view.browserAudio, id)) return;
+		const { [id]: _gone, ...rest } = state.view.browserAudio;
+		setView({ browserAudio: rest });
+	},
+
 	/** The speaker on a website tab: sound on or off for that tab. The host's answer is the state shown. */
 	async toggleBrowserMute(id) {
 		const desktop = window.myHarnessDesktop;

@@ -3,6 +3,8 @@ import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, autofocusO
 import { api, attempt, dismissToast, post, setView, state, useStore } from "./store.js";
 import { actions, confirmDialog, resolveConfirm } from "./actions.js";
 import { Sidebar } from "./sidebar.js";
+import { peekButtonEnter, peekButtonLeave } from "./sidebar-peek.js";
+import { modeRevealActive } from "./mode-transition.js";
 import { Transcript } from "./transcript.js";
 import { Composer } from "./composer.js";
 import { ExportHeaderDownload, exportReadOnly } from "./export-mode.js";
@@ -91,7 +93,7 @@ function Header() {
 	const tabBtn = (tab, icon, label, badge) => html`<button class=${`icon-btn ${panelOpen && wsActive === tab ? "active" : ""}`} aria-pressed=${panelOpen && wsActive === tab} data-export-offline=${["changes", "files", "terminal"].includes(tab) ? "true" : undefined} title=${label} aria-label=${label} onClick=${() => actions.togglePanel(tab)}><${Icon} name=${icon} size=${17} />${badge ? html`<span class="tab-badge">${badge}</span>` : null}</button>`;
 	const browserActive = panelOpen && wsTabs.some((tab) => tab.id === wsActive && tab.type === "browser");
 	return html`<header class="main-header">
-		${!sidebarOpen && !maxed ? html`<button class="icon-btn" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${17} /></button>` : null}
+		${!sidebarOpen && !maxed ? html`<button class="icon-btn" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })} onPointerEnter=${peekButtonEnter} onPointerLeave=${peekButtonLeave}><${Icon} name="sidebar" size=${17} /></button>` : null}
 		${editing
 			? html`<input class="field title-input" autofocus ref=${autofocusOnMount} value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onKeyDown=${(e) => (e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
 			: title ? html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { ended.current = false; setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>` : null}
@@ -171,7 +173,7 @@ function PanelContainer() {
 	return html`<aside class="panel" aria-label=${t("Details")} ref=${panelRef}>
 		${wsMax ? null : html`<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => panelRef.current?.offsetWidth || state.view.panelW} onChange=${onWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />`}
 		<div class="panel-head" ref=${headRef}>
-			${wsMax && !sidebarOpen ? html`<button class="icon-btn sm panel-sidebar" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })}><${Icon} name="sidebar" size=${16} /></button>` : null}
+			${wsMax && !sidebarOpen ? html`<button class="icon-btn sm panel-sidebar" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })} onPointerEnter=${peekButtonEnter} onPointerLeave=${peekButtonLeave}><${Icon} name="sidebar" size=${16} /></button>` : null}
 			<${PanelNav} section=${section} browser=${browserEntry} fold=${fold} onRestore=${closedCount > 0 ? () => actions.reopenWorkspaceTab() : null} onShow=${(value) => actions.showWorkspaceSection(value)}>${strip}<//>
 			<span class="grow" />
 			${closedCount > 0 && fold !== "tight" ? html`<button class="icon-btn sm" title=${t("Restore closed tab")} aria-label=${t("Restore closed tab")} onClick=${() => actions.reopenWorkspaceTab()}><${Icon} name="undo" size=${14} /></button>` : null}
@@ -489,7 +491,9 @@ export function App() {
 			${bootPhase === "error" ? html`<${Icon} name="alertCircle" size=${28} class="c-danger" /><h2>${t("MyHarness could not start")}</h2><div class="dim">${bootDetail}</div>` : html`<${Spinner} /><div>${bootPhase === "connecting" ? t("Connecting to the local MyHarness server…") : t("Starting MyHarness…")}</div>`}
 		</div><${BootDialogHost} /><${WindowControls} bare /></div>`;
 	}
-	const layoutClass = `app ${panel.shown ? "panel-open" : ""} ${wsMax && panel.mounted ? "ws-max" : ""}`;
+	// Inside a mode reveal the panel is drawn open at once: the reveal is the motion, the new mode appears as it stays.
+	const panelShown = panel.shown || (panelOpen && modeRevealActive());
+	const layoutClass = `app ${panelShown ? "panel-open" : ""} ${wsMax && panel.mounted ? "ws-max" : ""}`;
 	return html`<div class=${layoutClass} ref=${appRef}>
 		<${Sidebar} />
 		<main class="main" ref=${mainRef}>

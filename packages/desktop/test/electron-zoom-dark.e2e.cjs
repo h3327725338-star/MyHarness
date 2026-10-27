@@ -265,7 +265,8 @@ async function main() {
   // --- the app window's own zoom scales the box the page measured ------------------------------------------------------
   window.webContents.setZoomFactor(1.25);
   await browser.command({ action: 'bounds', tabId: id, rect: { x: 100, y: 80, width: 400, height: 300 } });
-  const box = browser.tabs[0].view.getBounds();
+  // The view's box on the window (its own bounds are relative to the container that cuts it).
+  const box = (await browser.command({ action: 'state', tabId: id })).bounds;
   check(box.x === 125 && box.y === 100 && box.width === 500 && box.height === 375, 'with the app at 125 % the view covers the measured box in window pixels', box);
 }
 

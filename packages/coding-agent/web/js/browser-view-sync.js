@@ -9,6 +9,11 @@
 //   low rate while it is still, so a stale rectangle can never be left behind;
 // - any doubt (animating panel, covered dialog, hidden page, tab unmount) hides the view at once instead of guessing.
 //
+// Two coverings keep the page live instead: the sidebar peek (sidebar-peek.js) covers only the left side of the box, so
+// the host cuts the view at the sidebar's edge (`clip`) without resizing it; and while a View Transition plays over the
+// screen (the mode reveal, a layout morph) the hidden view's place shows moving frames the host captures (`live`), so a
+// playing video never looks paused.
+//
 // `stop()` always reports a null rectangle, so a tab that is switched away from, closed or unmounted cannot keep the
 // native view visible over its successor. The host additionally ignores bounds for a tab that is no longer active.
 
@@ -22,20 +27,56 @@ const MOVING =
 const IDLE_CHECK_MS = 120;
 // The box must keep the same place and size for this many checks before the view appears after having been hidden.
 const STABLE_CHECKS = 2;
+// The sidebar the peek floats over the conversation, and the narrowest part of the box still shown beside it.
+const PEEK = ".app > .sidebar.is-collapsed";
+const MIN_SHOWN = 48;
 
-/** An animation (or the mode reveal) is moving, resizing or fading the box. */
+/**
+ * An animation is moving, resizing or fading the box: "screen" for a View Transition over the whole screen (the mode
+ * reveal, a layout morph), true for one of the box or an ancestor, false for none.
+ */
 function animating(element) {
 	const animations = typeof document.getAnimations === "function" ? document.getAnimations() : [];
-	return animations.some((animation) => {
-		if (animation.playState !== "running") return false;
+	let found = false;
+	for (const animation of animations) {
+		if (animation.playState !== "running") continue;
 		const effect = animation.effect;
-		if (effect?.pseudoElement?.startsWith("::view-transition")) return true;
+		if (effect?.pseudoElement?.startsWith("::view-transition")) return "screen";
+		if (found) continue;
 		const target = effect?.target;
-		if (!target || !(target === element || target.contains(element))) return false;
-		if (typeof CSSTransition === "function" && animation instanceof CSSTransition)
-			return MOVING.test(animation.transitionProperty);
-		return effect.getComputedTiming().endTime !== Infinity;
-	});
+		if (!target || !(target === element || target.contains(element))) continue;
+		if (typeof CSSTransition === "function" && animation instanceof CSSTransition) found = MOVING.test(animation.transitionProperty);
+		else found = effect.getComputedTiming().endTime !== Infinity;
+	}
+	return found;
+}
+
+/**
+ * The peeking sidebar's right edge and height, or null while none floats. Sliding in, the edge is where it slides to:
+ * the native view follows a frame late, and cut at the moving edge it would cover the sidebar's leading edge.
+ */
+function peekCard() {
+	const phase = document.documentElement.dataset.sidebarPeek;
+	if (phase !== "in" && phase !== "out") return null;
+	const sidebar = document.querySelector(PEEK);
+	if (!sidebar) return null;
+	const box = sidebar.getBoundingClientRect();
+	let right = box.right;
+	if (phase === "in") {
+		const transform = getComputedStyle(sidebar).transform;
+		if (transform && transform !== "none") right -= Math.min(0, new DOMMatrixReadOnly(transform).m41);
+	}
+	return { right, top: box.top, bottom: box.bottom };
+}
+
+/** The part of the box the peeking sidebar leaves uncovered: all of it, the part right of the sidebar, or null. */
+function uncovered(rect) {
+	const card = peekCard();
+	if (!card || card.bottom <= rect.y || card.top >= rect.y + rect.height) return rect;
+	const edge = Math.ceil(card.right);
+	if (edge <= rect.x) return rect;
+	const right = rect.x + rect.width;
+	return right - edge < MIN_SHOWN ? null : { x: edge, y: rect.y, width: right - edge, height: rect.height };
 }
 
 function overlaps(a, b) {
@@ -87,13 +128,6 @@ export function browserViewRect(element) {
 	return { x, y, width, height };
 }
 
-/** Whether the box is at rest and exposed; the caller hides the view until this is true for two consecutive checks. */
-function exposed(element) {
-	const rect = element.getBoundingClientRect();
-	if (rect.width < 1 || rect.height < 1 || document.hidden) return false;
-	return !animating(element) && !covered(element, rect);
-}
-
 /**
  * Keep one tab's native view in sync with its DOM box. `start()` is called after the host has created and activated the
  * tab; `stop()` stops measuring, reports a null rectangle and hides the view. Sends are coalesced: an unchanged
@@ -102,11 +136,13 @@ function exposed(element) {
 export function createBrowserViewSync({ host, tabId, element, onError }) {
 	let frame = 0;
 	let stopped = false;
-	let applied = "null";
+	// The host starts with the view hidden (activate sends no rectangle): a first plain hide is not repeated.
+	let applied = JSON.stringify([null, undefined]);
 	let still = 0;
 	let shown = false;
 	let lastCheck = 0;
 	let lastBox = "";
+	let lastPeek = "";
 	let stableKey = "";
 	let reported = "";
 	const fail = (error) => {
@@ -115,21 +151,26 @@ export function createBrowserViewSync({ host, tabId, element, onError }) {
 		reported = message;
 		onError?.(message);
 	};
-	const send = (rect) => {
-		const key = JSON.stringify(rect);
+	const send = (rect, extra) => {
+		const key = JSON.stringify([rect, extra]);
 		if (key === applied) return;
 		applied = key;
-		host.browser({ action: "bounds", tabId, rect }).catch(fail);
+		host.browser({ action: "bounds", tabId, rect, ...extra }).catch(fail);
+	};
+	const hide = (extra) => {
+		still = 0;
+		shown = false;
+		send(null, extra);
 	};
 	const evaluate = () => {
 		const node = element();
 		const rect = browserViewRect(node);
-		if (!rect || !exposed(node)) {
-			still = 0;
-			shown = false;
-			send(null);
-			return;
-		}
+		const motion = rect ? animating(node) : false;
+		// A View Transition over the screen: the hidden page's place shows the host's moving frames until it ends.
+		if (!rect || motion) return hide(motion === "screen" ? { live: true } : undefined);
+		const part = uncovered(rect);
+		if (!part || covered(node, { left: part.x, top: part.y, right: part.x + part.width, bottom: part.y + part.height, width: part.width, height: part.height }))
+			return hide();
 		const key = `${rect.x},${rect.y},${rect.width},${rect.height}`;
 		if (!shown) {
 			still = key === stableKey ? still + 1 : 1;
@@ -140,7 +181,7 @@ export function createBrowserViewSync({ host, tabId, element, onError }) {
 			}
 		}
 		shown = true;
-		send(rect);
+		send(rect, part === rect ? undefined : { clip: part });
 	};
 	const tick = (now) => {
 		if (stopped) return;
@@ -148,8 +189,12 @@ export function createBrowserViewSync({ host, tabId, element, onError }) {
 		const node = element();
 		const box = node?.getBoundingClientRect();
 		const key = box ? `${Math.round(box.left)},${Math.round(box.top)},${Math.round(box.right)},${Math.round(box.bottom)}` : "";
-		const moving = key !== lastBox;
+		// The peeking sidebar's edge moves the cut while it slides out.
+		const card = peekCard();
+		const peek = card ? `${Math.round(card.right)}` : "";
+		const moving = key !== lastBox || peek !== lastPeek;
 		lastBox = key;
+		lastPeek = peek;
 		// Follow a moving box every frame (and keep measuring until the view is first shown); re-check a still, shown box
 		// often enough to catch a dialog or toast that appears over it.
 		if (shown && !moving && now - lastCheck < IDLE_CHECK_MS) return;

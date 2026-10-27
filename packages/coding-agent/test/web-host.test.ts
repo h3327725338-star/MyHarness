@@ -285,6 +285,36 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(history).toHaveLength(3);
 	});
 
+	it("sends each turn's context as the start of the next turn's, so the provider's prompt cache keeps it", async () => {
+		const fx = await start();
+		const initial = await fx.get("/api/state");
+		const session = fx.hub.get(initial.slot)!.session;
+		const signal = new AbortController().signal;
+		// A recall that only adds what the context lacks (details version 2) stays in context.
+		const recall = (content: string) => ({
+			role: "custom" as const,
+			customType: "auto-memory-recall",
+			content,
+			display: false,
+			details: { ids: [], v: 2 },
+			timestamp: 1,
+		});
+		const turn1 = [{ role: "user" as const, content: "first question", timestamp: 1 }, recall("first recall")];
+		const first = await session.agent.transformContext!(turn1, signal);
+		const turn2 = [
+			...turn1,
+			fauxAssistantMessage(fauxText("first answer")),
+			{ role: "user" as const, content: "second question", timestamp: 3 },
+			recall("second recall"),
+		];
+		const second = await session.agent.transformContext!(turn2, signal);
+		expect(second.slice(0, first.length)).toEqual(first);
+		expect(second).toContainEqual(turn1[1]);
+		// The working-directory reminder is the first message, and still only in what is sent.
+		expect(JSON.stringify(first[0])).toContain("[system-reminder]");
+		expect(turn2).toHaveLength(5);
+	});
+
 	it("keeps cumulative usage settled instead of estimating unfinished streamed output", async () => {
 		const fx = await start();
 		const initial = await fx.get("/api/state");

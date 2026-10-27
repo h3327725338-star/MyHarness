@@ -1,4 +1,4 @@
-const { BrowserWindow, WebContentsView, session, Menu, shell, app, ipcMain, safeStorage, nativeImage } = require('electron');
+const { BrowserWindow, View, WebContentsView, session, Menu, shell, app, ipcMain, safeStorage, nativeImage } = require('electron');
 // Absolute paths: the tests compile this file outside the normal module loader, where a relative require would not
 // resolve against this folder.
 const { createBookmarkStore } = require(require('node:path').join(__dirname, 'browser-bookmarks.cjs'));
@@ -110,6 +110,9 @@ exports.createBrowser = (window, log, options = {}) => {
   const tabs = new Map();
   let activeTabId = null;
   let rectangle = null;
+  // The part of the active tab's box that the page leaves uncovered (a sidebar floated over its left side), or null when
+  // the whole box is. The view keeps its full size and is cut at the edge, so a playing video stays live beside it.
+  let clipRectangle = null;
   let lastViewport = DEFAULT_VIEWPORT;
   // What the pages did while the workspace watched: recent downloads and request metadata. Both stay small and are
   // only read by the workspace command surface (never persisted), so a page cannot grow them without bound.
@@ -130,6 +133,12 @@ exports.createBrowser = (window, log, options = {}) => {
     if (!window.isDestroyed()) window.webContents.send('desktop:status', value);
   };
   const emit = (tabId, value) => send({ tabId, ...value });
+  // Every tab's view lives in this container, which has the active view's box, or only the uncovered part of it
+  // (`clipRectangle`). What lies outside is cut away without resizing the view: the site is not laid out again on every
+  // frame of a sliding sidebar. View bounds are relative to the container, whose corner is `stageOrigin` in the window.
+  const stage = new View();
+  window.contentView.addChildView(stage);
+  let stageOrigin = { x: 0, y: 0 };
   const partition = session.fromPartition(PARTITION);
   // Bookmarks and saved logins belong to this desktop profile (`options.profileDir`, the host's user-data folder),
   // never to the Data root or any workspace; browser sync (browser-sync.cjs) carries them. A host without a profile has neither.
@@ -647,7 +656,7 @@ exports.createBrowser = (window, log, options = {}) => {
       canGoForward: !!history?.canGoForward?.(),
       visible: tab.view?.getVisible?.() ?? false,
       // The rectangle the native view actually occupies (null while hidden); lets the page and the Agent verify placement.
-      bounds: tab.view?.getVisible?.() ? (() => { try { return tab.view.getBounds(); } catch { return null; } })() : null,
+      bounds: tab.view?.getVisible?.() ? (() => { try { const box = tab.view.getBounds(); return { ...box, x: box.x + stageOrigin.x, y: box.y + stageOrigin.y }; } catch { return null; } })() : null,
       active: tab.id === activeTabId,
       // Site permission questions of this tab that nobody has answered yet (the Agent can answer them).
       pendingPermissions: [...pendingPermissions.entries()]
@@ -692,18 +701,75 @@ exports.createBrowser = (window, log, options = {}) => {
     }
   };
 
-  /** Clamp the page's rectangle to the current content area; a zero-sized window hides the view instead of drawing it. */
-  const boundsForRectangle = () => {
-    if (!rectangle) return null;
+  /**
+   * Moving frames of the hidden active view while the page plays an animation over its place (the mode reveal draws
+   * the new screen in a growing circle): the page shows them in the view's place, so a playing video keeps moving
+   * instead of standing still on the last picture. They are captured without showing the view or changing its
+   * visibility for the site (`stayHidden`), skipped while nothing changed, and end when the view is placed again, another
+   * tab becomes active, the page asks for a plain hide or after FRAMES_MAX_MS at the latest.
+   */
+  const FRAME_MS = 40;
+  const FRAMES_MAX_MS = 5000;
+  let frames = null;
+  const stopFrames = () => {
+    if (frames) clearTimeout(frames.timer);
+    frames = null;
+  };
+  const startFrames = (tab) => {
+    stopFrames();
+    if (!tab?.view || tab.destroyed) return;
+    const run = { timer: undefined, until: Date.now() + FRAMES_MAX_MS, last: null };
+    frames = run;
+    const step = async () => {
+      if (frames !== run) return;
+      const contents = tab.view.webContents;
+      if (Date.now() > run.until || tab.destroyed || tab.id !== activeTabId || contents.isDestroyed() || tab.view.getVisible()) {
+        stopFrames();
+        return;
+      }
+      const started = Date.now();
+      try {
+        const image = await contents.capturePage(undefined, { stayHidden: true });
+        if (frames === run && !image.isEmpty()) {
+          const jpeg = image.toJPEG(75);
+          if (!run.last || !jpeg.equals(run.last)) {
+            run.last = jpeg;
+            const box = tab.view.getBounds?.() || {};
+            const scale = appZoom();
+            emit(tab.id, { type: 'frame', frame: `data:image/jpeg;base64,${jpeg.toString('base64')}`, width: box.width / scale, height: box.height / scale });
+          }
+        }
+      } catch { /* the page is going away */ }
+      if (frames === run) run.timer = setTimeout(() => void step(), Math.max(0, FRAME_MS - (Date.now() - started)));
+    };
+    void step();
+  };
+
+  /** Clamp a page rectangle to the current content area; a zero-sized window hides the view instead of drawing it. */
+  const inWindow = (value) => {
+    if (!value) return null;
     const [width, height] = window.getContentSize();
     if (width < 1 || height < 1) return null;
     const scale = appZoom();
-    const x = Math.max(0, Math.min(width - 1, Math.round(rectangle.x * scale)));
-    const y = Math.max(0, Math.min(height - 1, Math.round(rectangle.y * scale)));
-    const w = Math.max(0, Math.min(width - x, Math.round(rectangle.width * scale)));
-    const h = Math.max(0, Math.min(height - y, Math.round(rectangle.height * scale)));
+    const x = Math.max(0, Math.min(width - 1, Math.round(value.x * scale)));
+    const y = Math.max(0, Math.min(height - 1, Math.round(value.y * scale)));
+    const w = Math.max(0, Math.min(width - x, Math.round(value.width * scale)));
+    const h = Math.max(0, Math.min(height - y, Math.round(value.height * scale)));
     if (w < 1 || h < 1) return null;
     return { x, y, width: w, height: h };
+  };
+  const boundsForRectangle = () => inWindow(rectangle);
+
+  /** The part of `bounds` that is shown: all of it, the clip inside it, or null when the clip leaves nothing. */
+  const shownPart = (bounds) => {
+    if (!bounds || !clipRectangle) return bounds;
+    const clip = inWindow(clipRectangle);
+    if (!clip) return null;
+    const x = Math.max(bounds.x, clip.x);
+    const y = Math.max(bounds.y, clip.y);
+    const right = Math.min(bounds.x + bounds.width, clip.x + clip.width);
+    const bottom = Math.min(bounds.y + bounds.height, clip.y + clip.height);
+    return right - x >= 1 && bottom - y >= 1 ? { x, y, width: right - x, height: bottom - y } : null;
   };
 
   /**
@@ -714,15 +780,20 @@ exports.createBrowser = (window, log, options = {}) => {
     // A popup's contents can be destroyed while the app window itself is closing; there is nothing left to place.
     if (window.isDestroyed()) return;
     const bounds = boundsForRectangle();
+    const shown = shownPart(bounds);
     if (bounds) lastViewport = { width: bounds.width, height: bounds.height };
     for (const tab of tabs.values()) {
       if (!tab.view || tab.destroyed) continue;
-      const visible = tab.id === activeTabId && !!bounds;
+      const visible = tab.id === activeTabId && !!shown;
       // The active tab hidden only because a menu or dialog of the page lies over it keeps its size: resizing it to the
       // background size and back made the site lay itself out twice, a visible jump each time a menu closed.
       if (!visible) conceal(tab, { keepSize: tab.id === activeTabId });
       else {
-        try { tab.view.setBounds(bounds); } catch { /* view is going away */ }
+        try {
+          stage.setBounds(shown);
+          stageOrigin = { x: shown.x, y: shown.y };
+          tab.view.setBounds({ x: bounds.x - shown.x, y: bounds.y - shown.y, width: bounds.width, height: bounds.height });
+        } catch { /* view is going away */ }
         try { tab.view.setVisible(true); } catch { /* view is going away */ }
       }
       updatePictureTimer(tab);
@@ -746,6 +817,8 @@ exports.createBrowser = (window, log, options = {}) => {
   /** Hide every view and forget the rectangle: the next activation always starts from a fresh measurement. */
   const hideAll = () => {
     rectangle = null;
+    clipRectangle = null;
+    stopFrames();
     for (const tab of tabs.values()) {
       if (!tab.view || tab.destroyed) continue;
       conceal(tab);
@@ -968,7 +1041,7 @@ exports.createBrowser = (window, log, options = {}) => {
     paintViewBackground(tab);
     // A tab opened for the Agent plays nothing aloud until the user turns its sound on (the speaker on its tab).
     if (options.muted === true) view.webContents.setAudioMuted(true);
-    window.contentView.addChildView(view);
+    stage.addChildView(view);
     wire(tab);
     if (adopted) {
       view.webContents.once('destroyed', () => {
@@ -1015,7 +1088,7 @@ exports.createBrowser = (window, log, options = {}) => {
     try {
       if (tab.view && !tab.view.webContents.isDestroyed()) tab.view.webContents.close({ waitForBeforeUnload: false });
     } catch (error) { log(`关闭网页失败：${error.message}`); }
-    try { window.contentView.removeChildView(tab.view); } catch { /* already detached */ }
+    try { stage.removeChildView(tab.view); } catch { /* already detached */ }
     emit(tab.id, { type: 'closed', tabId: tab.id, ...(tab.selfClosed ? { selfClosed: true, openerId: tab.openerId || null } : {}) });
     placeActive();
   };
@@ -1761,6 +1834,8 @@ exports.createBrowser = (window, log, options = {}) => {
         activeTabId = target.id;
         // Never reuse the previous tab's or the previous activation's rectangle: the page measures and sends a fresh one.
         rectangle = cleanRect(value.rect);
+        clipRectangle = null;
+        stopFrames();
         placeActive();
         return stateOf(target);
       }
@@ -1781,7 +1856,12 @@ exports.createBrowser = (window, log, options = {}) => {
           if (order !== boundsOrder) return { ok: true, superseded: true };
         }
         rectangle = next;
+        // `clip`: the part of the box the page leaves uncovered. `live`: the view is hidden for an animation over its
+        // place, and the page shows moving frames of it there until the next rectangle.
+        clipRectangle = next ? cleanRect(value.clip) : null;
         placeActive();
+        if (!next && value.live === true) startFrames(tabs.get(activeTabId));
+        else stopFrames();
         return { ok: true, visible: !!rectangle };
       }
       case 'hide': {
@@ -2068,6 +2148,7 @@ exports.createBrowser = (window, log, options = {}) => {
     },
     bounds: (rect) => {
       rectangle = cleanRect(rect);
+      clipRectangle = null;
       if (rectangle && !tabs.has(activeTabId || DEFAULT_TAB)) {
         const tab = createTab(undefined);
         activeTabId = tab.id;
@@ -2077,6 +2158,7 @@ exports.createBrowser = (window, log, options = {}) => {
     refresh: () => placeActive(),
     hide: () => hideAll(),
     destroy: () => {
+      stopFrames();
       browserSync?.dispose();
       for (const tab of [...tabs.values()]) destroyTab(tab);
       activeTabId = null;

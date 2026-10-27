@@ -2202,6 +2202,8 @@ export const zhCN = {
 	"Restore closed tab": "恢复关闭的标签",
 	"Mute tab": "将此标签静音",
 	"Unmute tab": "取消此标签的静音",
+	"A website tab here is playing sound": "这个对话里有网页正在播放声音",
+	"A website tab here is playing (muted)": "这个对话里有网页正在播放（已静音）",
 	"Edit text": "编辑文本",
 	"Reload from disk": "从磁盘重新读取",
 	"Open with the default application": "用默认应用打开",

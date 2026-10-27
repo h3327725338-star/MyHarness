@@ -154,6 +154,8 @@ button.summary-head:hover { background: var(--surface-hover); color: var(--text-
 /* Streaming container + plain-text tail: tail uses same size/line-height as body (1.72) so incoming chars do not shift metrics. */
 .final-stream { display: flex; flex-direction: column; min-width: 0; }
 .final-tail { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; line-height: var(--lh-read); font-size: var(--fs-read); color: inherit; margin: 0; }
+/* A code block still streaming in the tail keeps the gap it has once the answer is whole (below a paragraph). */
+.final-stream > .final-code:not(:first-child) { margin-top: 0.85em; }
 /* Monospace inside final keeps one fixed box so toggling between body and code text does not jump size. */
 .final .md code, .final .md pre { font-family: var(--font-mono); font-size: var(--fs-code); line-height: 1.55; font-variant-ligatures: none; }
 .final-actions { margin-top: 2px; }
@@ -279,9 +281,10 @@ a.web-link:hover { color: var(--accent); text-decoration: underline; }
 /* "Continued from …": the marker line names the earlier chat; its controls stay quiet links. */
 .continuation-marker .marker-text { max-width: min(100%, 720px); flex-wrap: wrap; justify-content: center; row-gap: 2px; }
 .continuation-text > .truncate { max-width: 320px; color: var(--text-2); }
-/* The earlier chats an answer read, under the answer. */
+/* The earlier chats an answer read, under the answer. A name chip keeps its own padding and no `.truncate` descender
+   margin: that -4px bottom margin set the chip 2px below the clock and the label it is centred with. */
 .history-sources { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; font-size: var(--fs-xs); color: var(--text-3); }
-.history-source { max-width: 240px; padding: 1px 8px; border: 1px solid var(--border); border-radius: var(--r-pill); color: var(--text-2); background: var(--bg-inset); font-size: var(--fs-xs); line-height: 18px; transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
+.history-source { max-width: 240px; padding: 1px 8px; margin-bottom: 0; border: 1px solid var(--border); border-radius: var(--r-pill); color: var(--text-2); background: var(--bg-inset); font-size: var(--fs-xs); line-height: 18px; transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
 .history-source:hover { color: var(--accent); border-color: var(--accent-line); background: var(--surface-hover); }
 .custom-card { border: 1px solid var(--border); border-radius: var(--r-md); padding: 8px 12px; background: var(--bg-inset); font-size: var(--fs-body); }
 .custom-type { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }

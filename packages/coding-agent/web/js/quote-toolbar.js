@@ -225,12 +225,25 @@ export function FloatingQuoteToolbar() {
 		}
 		anchor.current = range.cloneRange();
 		const width = quotable ? BAR_W_BOTH : BAR_W;
+		// An answer that is still streaming re-renders its text as it grows, which can take the selection away before the
+		// bubble is pressed: the bubble keeps what it offers (and, for a quote, where in the conversation it was).
+		const streaming = !!elementOf(sel.anchorNode)?.closest(".final.streaming");
+		const picked = { text, hint: streaming && quotable ? selectionHint(range) : null };
 		if (freshRelease()) {
-			setBar({ ...placeBubbleAtPoint(release.current.x, release.current.y, width), quotable });
+			setBar({ ...placeBubbleAtPoint(release.current.x, release.current.y, width), quotable, picked });
 		} else {
 			const end = endRectOf(range);
-			setBar({ ...placeBubbleAtPoint(end.right, end.bottom, width), quotable });
+			setBar({ ...placeBubbleAtPoint(end.right, end.bottom, width), quotable, picked });
 		}
+	};
+
+	/** The page's selection while it still holds text; else what the bubble kept when it appeared (see updateSelection). */
+	const selected = () => {
+		const sel = window.getSelection();
+		const text = sel?.toString().trim();
+		if (text && sel.rangeCount) return { text, range: sel.getRangeAt(0).cloneRange(), hint: null };
+		if (bar?.picked?.text) return { text: bar.picked.text, range: null, hint: bar.picked.hint };
+		return null;
 	};
 
 	useEffect(() => {
@@ -372,19 +385,18 @@ export function FloatingQuoteToolbar() {
 		e.preventDefault();
 		e.stopPropagation();
 		const sel = window.getSelection();
-		const text = sel?.toString().trim();
-		if (!text) return close();
-		const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : anchor.current;
-		if (!range) return close();
+		const picked = selected();
+		if (!picked) return close();
+		const { text, range } = picked;
 		if (freshRelease()) {
 			setPos(placeCardAtPoint(release.current.x, release.current.y));
-		} else {
+		} else if (range) {
 			const end = endRectOf(range);
 			setPos(placeCardAtPoint(end.right, end.bottom));
-		}
-		anchor.current = range;
+		} else setPos(placeCardAtPoint(bar.left, bar.top));
+		if (range) anchor.current = range;
 		// Remember where in the conversation it was picked: the same words can appear more than once.
-		const hint = selectionHint(range);
+		const hint = range ? selectionHint(range) : (picked.hint ?? 0);
 		setDraft({ text, hint });
 		setBar(null);
 		// Light the passage now: the native selection is about to go away when the box takes focus.
@@ -402,11 +414,11 @@ export function FloatingQuoteToolbar() {
 	const translate = (e, text, { target, remember = false } = {}) => {
 		e?.preventDefault?.();
 		e?.stopPropagation?.();
-		const sel = window.getSelection();
 		// A selection reported by a previewed page: its words and point come with the bubble (the page's own selection is
 		// out of reach here, and this page's selection may still hold an older passage).
 		const fromFrame = !text && bar?.frameText ? bar : null;
-		const wanted = text || fromFrame?.frameText || sel?.toString().trim();
+		const picked = !text && !fromFrame ? selected() : null;
+		const wanted = text || fromFrame?.frameText || picked?.text;
 		if (!wanted) return close();
 		if (fromFrame) {
 			anchor.current = null;
@@ -414,13 +426,12 @@ export function FloatingQuoteToolbar() {
 			setPos(placeCardAtPoint(fromFrame.point.x, fromFrame.point.y, TRANSLATE_W, CARD_H));
 		} else if (!text) {
 			cardFrame.current = null;
-			const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : anchor.current;
-			anchor.current = range;
+			anchor.current = picked.range || anchor.current;
 			if (freshRelease()) setPos(placeCardAtPoint(release.current.x, release.current.y, TRANSLATE_W, CARD_H));
-			else if (range) {
-				const end = endRectOf(range);
+			else if (picked.range) {
+				const end = endRectOf(picked.range);
 				setPos(placeCardAtPoint(end.right, end.bottom, TRANSLATE_W, CARD_H));
-			}
+			} else if (bar) setPos(placeCardAtPoint(bar.left, bar.top, TRANSLATE_W, CARD_H));
 		}
 		const seq = ++translationSeq.current;
 		clearTimeout(leaveTimer.current);

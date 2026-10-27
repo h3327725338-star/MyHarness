@@ -5,6 +5,12 @@ const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
 
+/** Where a view is on the window: its bounds are relative to the container the host keeps the tab views in. */
+function onWindow(view) {
+  const stage = view.parent?.bounds;
+  return view.bounds && stage ? { ...view.bounds, x: view.bounds.x + stage.x, y: view.bounds.y + stage.y } : view.bounds;
+}
+
 /** Load browser-view.cjs with a small Electron stand-in: real views cannot be created outside Electron. */
 function loadBrowser() {
   const file = path.join(__dirname, '../browser-view.cjs');
@@ -50,11 +56,14 @@ function loadBrowser() {
     webRequest,
   };
   const electron = {
+    // The container all tab views live in (it cuts the active view at the part the page leaves uncovered).
+    View: class { addChildView(child) { child.parent = this; } removeChildView(child) { if (child.parent === this) child.parent = null; } setBounds(bounds) { this.bounds = bounds; } },
     WebContentsView: class {
       constructor(options) { this.webContents = options?.webContents || makeContents(nextId++); this.visible = false; this.bounds = null; }
       setVisible(value) { this.visible = value; this.visibleCalls = (this.visibleCalls || 0) + 1; }
       getVisible() { return this.visible; }
       setBounds(bounds) { this.bounds = bounds; }
+      getBounds() { return this.bounds; }
     },
     session: { fromPartition: () => desktopSession },
     Menu: { buildFromTemplate: () => ({ popup() {} }) },
@@ -252,14 +261,14 @@ test('activating without fresh bounds hides every view and never reuses an old r
   const { browser } = loadBrowser();
   const first = await browser.command({ action: 'open', url: 'https://example.com/a', rect: { x: 10, y: 20, width: 400, height: 500 } });
   assert.equal(browser.tabs[0].view.getVisible(), true);
-  assert.deepEqual(browser.tabs[0].view.bounds, { x: 10, y: 20, width: 400, height: 500 });
+  assert.deepEqual(onWindow(browser.tabs[0].view), { x: 10, y: 20, width: 400, height: 500 });
   // Switching back to the same tab must not show it at the previous rectangle: only a fresh bounds after activation may.
   const second = await browser.command({ action: 'activate', tabId: first.tabId });
   assert.equal(second.visible, false);
   assert.equal(browser.tabs[0].view.getVisible(), false);
   await browser.command({ action: 'bounds', tabId: first.tabId, rect: { x: 50, y: 60, width: 300, height: 400 } });
   assert.equal(browser.tabs[0].view.getVisible(), true);
-  assert.deepEqual(browser.tabs[0].view.bounds, { x: 50, y: 60, width: 300, height: 400 });
+  assert.deepEqual(onWindow(browser.tabs[0].view), { x: 50, y: 60, width: 300, height: 400 });
   // A null rectangle (tab scrolled away, panel closing) hides immediately and forgets the box.
   await browser.command({ action: 'bounds', tabId: first.tabId, rect: null });
   assert.equal(browser.tabs[0].view.getVisible(), false);
@@ -330,15 +339,80 @@ test('window resize re-clamps the native view and a zero-sized window hides it',
   const { browser, window } = loadBrowser();
   await browser.command({ action: 'open', url: 'https://example.com/', rect: { x: 1000, y: 700, width: 400, height: 300 } });
   const view = browser.tabs[0].view;
-  assert.deepEqual(view.bounds, { x: 1000, y: 700, width: 200, height: 100 });
+  assert.deepEqual(onWindow(view), { x: 1000, y: 700, width: 200, height: 100 });
   window.size = [800, 600];
   browser.refresh();
   // The page's rectangle is still the old one; the host clamps it into the new content area instead of drawing outside.
-  assert.deepEqual(view.bounds, { x: 799, y: 599, width: 1, height: 1 });
+  assert.deepEqual(onWindow(view), { x: 799, y: 599, width: 1, height: 1 });
   assert.equal(view.getVisible(), true);
   window.size = [0, 0];
   browser.refresh();
   assert.equal(view.getVisible(), false);
+  browser.destroy();
+});
+
+test('a clip cuts the active view at the uncovered part without resizing it', async () => {
+  const { browser } = loadBrowser();
+  const rect = { x: 100, y: 50, width: 800, height: 600 };
+  const opened = await browser.command({ action: 'open', url: 'https://example.com/', rect });
+  const view = browser.tabs[0].view;
+  // A sidebar floats over the left 300px of the box: only the rest is shown, and the page keeps its full size.
+  await browser.command({ action: 'bounds', tabId: opened.tabId, rect, clip: { x: 400, y: 50, width: 500, height: 600 } });
+  assert.equal(view.getVisible(), true);
+  assert.deepEqual(view.parent.bounds, { x: 400, y: 50, width: 500, height: 600 });
+  assert.deepEqual(view.bounds, { x: -300, y: 0, width: 800, height: 600 });
+  assert.deepEqual(onWindow(view), rect);
+  // The state reports the view's box on the window, not inside its container.
+  assert.deepEqual((await browser.command({ action: 'state', tabId: opened.tabId })).bounds, rect);
+  // A clip that leaves nothing of the box hides the view, which keeps its size.
+  await browser.command({ action: 'bounds', tabId: opened.tabId, rect, clip: { x: 950, y: 50, width: 100, height: 600 } });
+  assert.equal(view.getVisible(), false);
+  assert.deepEqual(view.bounds, { x: -300, y: 0, width: 800, height: 600 });
+  // Without a clip the whole box is shown again.
+  await browser.command({ action: 'bounds', tabId: opened.tabId, rect });
+  assert.equal(view.getVisible(), true);
+  assert.deepEqual(view.parent.bounds, rect);
+  assert.deepEqual(view.bounds, { x: 0, y: 0, width: 800, height: 600 });
+  browser.destroy();
+});
+
+test('a view hidden for an animation sends moving frames until it is placed again', async () => {
+  const { browser, contents, events } = loadBrowser();
+  const rect = { x: 0, y: 0, width: 640, height: 480 };
+  const opened = await browser.command({ action: 'open', url: 'https://example.com/', rect });
+  const page = contents[0];
+  const captures = [];
+  let counter = 0;
+  page.capturePage = async (area, options) => {
+    captures.push({ visible: browser.tabs[0].view.getVisible(), options });
+    // Two captures in a row show the same picture: an unchanged frame is not sent again.
+    const picture = Buffer.from(`frame${Math.floor(counter++ / 2)}`);
+    return { isEmpty: () => false, toPNG: () => picture, toJPEG: () => picture };
+  };
+  const frames = () => events.filter((event) => event.value?.type === 'frame').map((event) => Buffer.from(event.value.frame.split(',')[1], 'base64').toString());
+  await browser.command({ action: 'bounds', tabId: opened.tabId, rect: null, live: true });
+  assert.equal(browser.tabs[0].view.getVisible(), false);
+  await new Promise((done) => setTimeout(done, 260));
+  const live = captures.filter((entry) => entry.options?.stayHidden === true);
+  assert.ok(live.length >= 3, `frames are captured while the view is hidden (${live.length})`);
+  assert.ok(live.every((entry) => !entry.visible), 'the view is never shown for a frame');
+  const sent = frames();
+  assert.ok(sent.length >= 2);
+  assert.equal(new Set(sent).size, sent.length, 'unchanged frames are not repeated');
+  assert.equal(events.filter((event) => event.value?.type === 'frame').at(-1).value.width, 640);
+  // The view is placed again: the frames end.
+  await browser.command({ action: 'bounds', tabId: opened.tabId, rect });
+  const count = captures.length;
+  await new Promise((done) => setTimeout(done, 150));
+  assert.ok(captures.filter((entry) => entry.options?.stayHidden === true).length <= live.length + 1 || captures.length === count);
+  const settled = captures.length;
+  await new Promise((done) => setTimeout(done, 150));
+  assert.equal(captures.filter((entry) => entry.options?.stayHidden === true && captures.indexOf(entry) >= settled).length, 0, 'no frames after the view is back');
+  // A plain hide (no animation) sends no frames either.
+  await browser.command({ action: 'bounds', tabId: opened.tabId, rect: null });
+  const before = captures.filter((entry) => entry.options?.stayHidden === true).length;
+  await new Promise((done) => setTimeout(done, 150));
+  assert.equal(captures.filter((entry) => entry.options?.stayHidden === true).length, before);
   browser.destroy();
 });
 

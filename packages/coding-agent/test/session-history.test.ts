@@ -401,6 +401,20 @@ describe("session_search / session_get tools", () => {
 
 		const self = await get.execute("3", { session: "s-now" }, undefined, undefined, undefined as never);
 		expect(self.content[0]!.type === "text" && self.content[0]!.text).toContain("当前会话本身");
+		// This chat's own messages from before a context checkpoint are read back by the entry id the checkpoint lists.
+		writeChat("s-now", [
+			{ role: "user", text: "先改登录页" },
+			{ role: "assistant", text: "改好了 login.ts 的校验" },
+		]);
+		const own = await get.execute(
+			"3b",
+			{ session: "s-now", entry_id: "s-now-1", before: 0, after: 1 },
+			undefined,
+			undefined,
+			undefined as never,
+		);
+		expect(own.details?.mode).toBe("get");
+		expect(own.content[0]!.type === "text" && own.content[0]!.text).toContain("改好了 login.ts 的校验");
 
 		settings.setSessionContinuitySettings({ autoSearch: false });
 		const off = await search.execute("4", { query: "喝水" }, undefined, undefined, undefined as never);

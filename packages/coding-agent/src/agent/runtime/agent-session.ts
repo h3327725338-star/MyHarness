@@ -141,7 +141,12 @@ import {
 	type VisionAssistantProgress,
 } from "../vision/assistant.ts";
 import { type MainModelRef, resolveAssistantModel } from "./assistant-model.ts";
-import { AUTO_MEMORY_SYSTEM_PROMPT, AutoMemoryManager, type MemoryMaintenanceStatus } from "./auto-memory.ts";
+import {
+	AUTO_MEMORY_SYSTEM_PROMPT,
+	AutoMemoryManager,
+	isIncrementalRecall,
+	type MemoryMaintenanceStatus,
+} from "./auto-memory.ts";
 import type { CustomMessage } from "./messages.ts";
 import { correlatePrompt } from "./prompt-correlation.ts";
 import {
@@ -817,7 +822,9 @@ export class AgentSession {
 		});
 		const previousTransformContext = this.agent.transformContext;
 		this.agent.transformContext = async (messages, signal) => {
-			// Keep persisted history intact, but only send the current turn's recall.
+			// Keep persisted history intact. A recall that only adds what the context lacks (details version, see
+			// AutoMemoryManager.recall) stays in context, so earlier turns keep the same bytes and stay cached; an older
+			// recall, which repeated everything every turn, is still sent only in its own turn.
 			let lastUser = -1;
 			for (let index = messages.length - 1; index >= 0; index--) {
 				if (messages[index].role === "user") {
@@ -827,27 +834,23 @@ export class AgentSession {
 			}
 			const current = messages.filter(
 				(message, index) =>
-					message.role !== "custom" || message.customType !== "auto-memory-recall" || index > lastUser,
+					message.role !== "custom" ||
+					message.customType !== "auto-memory-recall" ||
+					index > lastUser ||
+					isIncrementalRecall(message.details),
 			);
 			const transformed = previousTransformContext ? await previousTransformContext(current, signal) : current;
 			const withVision = await this._visionAssistant.transformContext(transformed, signal);
 			// P0-1 prefix-cache stability: the stable system prompt carries no dynamic
-			// segments, so re-attach them here as a transient reminder. It is inserted
-			// BEFORE the last user message so the real user query stays last (model
-			// capability unchanged) and usage-anchor timestamps are unaffected.
+			// segments, so re-attach them here as a transient reminder. It goes at the very
+			// start of the messages, where it never moves: placed before the last user
+			// message it moved every turn and broke the provider's prefix cache right before
+			// the previous turn, so that whole turn was sent again uncached.
 			// A fresh array is returned; persisted history is never mutated, and the
 			// reminder is never written to the session file (Session format unchanged).
 			const reminder = this._buildDynamicReminderMessage();
 			if (!reminder) return withVision;
-			let insertAt = withVision.length;
-			for (let index = withVision.length - 1; index >= 0; index--) {
-				if (withVision[index].role === "user") {
-					insertAt = index;
-					break;
-				}
-			}
-			if (insertAt >= withVision.length) return [...withVision, reminder];
-			return [...withVision.slice(0, insertAt), reminder, ...withVision.slice(insertAt)];
+			return [reminder, ...withVision];
 		};
 
 		// Always subscribe to agent events for internal handling
@@ -1845,7 +1848,7 @@ export class AgentSession {
 		return this._dynamicReminderText();
 	}
 
-	/** Transient reminder message (before last user); never persisted to the session file. */
+	/** Transient reminder message (first in the context); never persisted to the session file. */
 	private _buildDynamicReminderMessage(): AgentMessage | undefined {
 		const text = this._dynamicReminderText();
 		if (!text) return undefined;
@@ -2495,7 +2498,11 @@ export class AgentSession {
 			try {
 				const builtinPrompt = parseExpandedBuiltinPromptCommand(expandedText);
 				const memoryQuery = builtinPrompt?.task || expandedText;
-				const recalledMemory = await this._autoMemory.recall(memoryQuery);
+				// The recalls already in context: this turn's recall adds only what they lack.
+				const earlierRecalls = this.agent.state.messages
+					.filter((message) => message.role === "custom" && message.customType === "auto-memory-recall")
+					.map((message) => (message as CustomMessage).details);
+				const recalledMemory = await this._autoMemory.recall(memoryQuery, earlierRecalls);
 				if (recalledMemory) {
 					messages.push(recalledMemory);
 				}

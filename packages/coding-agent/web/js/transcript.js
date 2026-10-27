@@ -16,6 +16,7 @@ import { openImageLightbox } from "./lightbox.js";
 import { MessageRail } from "./message-rail.js";
 import { jumpToQuote, offsetInScroller, registerScroller, REVEAL_ENTRY_EVENT, revealEntryIn, scrollToNode, turnKeyForEntry } from "./message-nav.js";
 import { exportReadOnly } from "./export-mode.js";
+import { afterModeReveal, beforeModeCapture, modeRevealActive } from "./mode-transition.js";
 
 import { OUTCOME_ICON, processSummaryState } from "./process-summary.js";
 import { AttachmentList, splitAttachments } from "./attachments.js";
@@ -663,9 +664,37 @@ const FinalStable = memo(function FinalStable({ text }) {
 	return html`<${Markdown} text=${text} />`;
 });
 
-/** Streaming tail of the final answer, plain text only (no markdown parsing), so unclosed markers never flicker. Inline wrap style only, no height/max-height transition. */
+const TAIL_FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
+const TAIL_FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})\s*$/;
+
+/** The streaming tail split once more around a code fence that opened in it: `code` is that fenced block (closed for
+ *  display when its closing fence has not arrived yet), `before` and `after` the plain text around it. A tail without a
+ *  fence is all `before`. Pure function for unit tests. */
+export function splitTailCode(tail) {
+	const lines = (tail || "").split("\n");
+	const open = lines.findIndex((line) => TAIL_FENCE_OPEN.test(line));
+	if (open === -1) return { before: tail || "", code: "", after: "" };
+	const fence = TAIL_FENCE_OPEN.exec(lines[open])[1];
+	let close = -1;
+	for (let i = open + 1; i < lines.length && close === -1; i++) {
+		const match = TAIL_FENCE_CLOSE.exec(lines[i]);
+		if (match && match[1][0] === fence[0] && match[1].length >= fence.length) close = i;
+	}
+	return {
+		before: lines.slice(0, open).join("\n"),
+		code: close === -1 ? [...lines.slice(open), fence].join("\n") : lines.slice(open, close + 1).join("\n"),
+		after: close === -1 ? "" : lines.slice(close + 1).join("\n"),
+	};
+}
+
+/** Streaming tail of the final answer, plain text only (no markdown parsing), so unclosed markers never flicker. Inline
+ *  wrap style only, no height/max-height transition. A code block that is still streaming is the exception: it shows as
+ *  the code block it will be (its text is literal, so there is no marker to flicker) instead of as plain text until its
+ *  closing fence arrives. */
 function FinalTail({ text }) {
-	return html`<div class="final-tail" style=${{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word" }}>${text}</div>`;
+	const { before, code, after } = useMemo(() => splitTailCode(text), [text]);
+	const plain = (part) => html`<div class="final-tail" style=${{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word" }}>${part}</div>`;
+	return html`${before ? plain(before) : null}${code ? html`<${Markdown} text=${code} class="final-code" />` : null}${after ? plain(after) : null}`;
 }
 
 function FinalMessage({ final }) {
@@ -926,7 +955,33 @@ function Welcome({ snap, models, opening = false }) {
 // animation frame is appended above until every turn is mounted. The reader sees content sooner and no single
 // frame carries the full mount.
 const CHUNK_FIRST = 20;
+/** The most turns one later batch mounts. */
 const CHUNK_NEXT = 20;
+// Later batches are sized by what they cost: a fixed batch of rich turns (code, tables, lists) held a frame for 30-60 ms,
+// so typing, clicks and scrolling right after a long chat opened lagged. Each batch is steered to take about
+// CHUNK_BUDGET_MS of render and layout. Part of that cost does not shrink with the batch (older turns go in above, so
+// every turn below moves and is laid out and painted again: about 3 ms at 200 turns), so the size follows the measured
+// cost of the last batches rather than a cost per turn. One size for every chat: the next chat's turns cost about the same.
+const CHUNK_BUDGET_MS = 8;
+let chunkSize = 8;
+function nextChunk() {
+	return Math.max(1, Math.min(CHUNK_NEXT, Math.round(chunkSize)));
+}
+// A key press or click gets its frame to itself: batches wait while the reader types or clicks (the turns still to mount
+// are out of view above, nothing on screen waits for them) and go on in the pauses.
+const INPUT_QUIET_MS = 100;
+let lastInput = 0;
+if (typeof document !== "undefined") {
+	for (const type of ["keydown", "pointerdown"]) document.addEventListener(type, () => { lastInput = performance.now(); }, { capture: true, passive: true });
+}
+/** A batch of `turns` turns (`wanted` were asked for) took `ms` from being asked for to being laid out. */
+function noteChunkCost(ms, turns, wanted) {
+	if (turns < 1 || turns > CHUNK_NEXT * 2 || !(ms > 0)) return;
+	// The last turns of a chat come in a smaller batch: cheap because it was small, which says nothing about the size.
+	if (turns < wanted && ms <= CHUNK_BUDGET_MS) return;
+	const aim = Math.max(turns / 2, Math.min(turns * 2, (turns * CHUNK_BUDGET_MS) / ms));
+	chunkSize = Math.max(1, Math.min(CHUNK_NEXT, (chunkSize + aim) / 2));
+}
 /** How long the transcript waits before asking the server for one more older page (see the fill effect below). */
 const FILL_DELAY = 200;
 /** Whether a build published for `owner` describes the session on screen right now (same slot, same session id). */
@@ -966,6 +1021,37 @@ function readPlace(el, stuck) {
 	if (found < 0) return { stick: true };
 	const node = sections[found];
 	return { stick: false, key: node.dataset.turnKey, offset: Math.round(top - node.getBoundingClientRect().top) };
+}
+/**
+ * Right before a mode reveal captures the page (beforeModeCapture): the turns of `el` out of view skip their contents
+ * (content-visibility: hidden at their own height, so nothing moves). The capture restyles the whole document, and a
+ * long chat is most of it. Returns how to undo it for the turns still on the page after the switch.
+ */
+function skipTurnsOutOfView(el) {
+	const inner = el?.querySelector(":scope > .transcript-inner");
+	if (!inner) return null;
+	const view = el.getBoundingClientRect();
+	const skipped = [];
+	// All reads first, then all writes: one layout, which is up to date at a click anyway.
+	for (const node of inner.children) {
+		if (node.tagName !== "SECTION") continue;
+		const box = node.getBoundingClientRect();
+		if (box.bottom > view.top - 200 && box.top < view.bottom + 200) continue;
+		const style = getComputedStyle(node);
+		const edges = ["paddingTop", "paddingBottom", "borderTopWidth", "borderBottomWidth"].reduce((sum, key) => sum + (Number.parseFloat(style[key]) || 0), 0);
+		skipped.push([node, `${Math.max(0, box.height - edges)}px`]);
+	}
+	for (const [node, height] of skipped) {
+		node.style.containIntrinsicBlockSize = height;
+		node.style.contentVisibility = "hidden";
+	}
+	return () => {
+		for (const [node] of skipped) {
+			if (!node.isConnected) continue;
+			node.style.contentVisibility = "";
+			node.style.containIntrinsicBlockSize = "";
+		}
+	};
 }
 /** The mount window of a first open: the newest CHUNK_FIRST turns, none held back. */
 const OPEN_WINDOW = { count: CHUNK_FIRST, held: 0 };
@@ -1303,12 +1389,11 @@ export function Transcript() {
 		const sent = last?.kind === "user" && last.pending ? last.clientMessageId : null;
 		const seen = sentSeen.current;
 		sentSeen.current = { session, id: sent };
-		// The reader's own message was just sent in this chat: show it (and the answer that follows) wherever they were.
+		// The reader's own message was just sent in this chat. At the bottom the view follows it like any new output; a reader
+		// further up (reading earlier turns while the Agent works on the question) stays where they are, and the jump
+		// button leads down when they want it.
 		if (sent && seen.session === session && seen.id !== sent) {
-			restore.current = null;
-			holdPlace.current = false;
-			stick.current = true;
-			toBottom();
+			if (stick.current) toBottom();
 			return;
 		}
 		// Without a ResizeObserver (or before its first callback) the item signal still has to drive the follow.
@@ -1402,7 +1487,7 @@ export function Transcript() {
 	// cover messages the reader has not scrolled to yet.
 	const railTurns = useMemo(() => turns.filter((turn) => !turn.standalone && turn.user), [turns]);
 	// How many of `shown` are mounted so far: mounting starts with the newest CHUNK_FIRST turns and grows
-	// by CHUNK_NEXT per animation frame. When another session is shown (the new bag arrives with a new session
+	// by one batch (nextChunk) per animation frame. When another session is shown (the new bag arrives with a new session
 	// id in the same commit) chunking restarts from the first batch; while one session keeps streaming the
 	// batch count only grows, so the transcript never collapses back. Derived during render on purpose: the
 	// first commit after a switch already shows 20, never a stale full mount.
@@ -1434,6 +1519,8 @@ export function Transcript() {
 	const renderedStart = end - rendered.length;
 	const chunkFrame = useRef(0);
 	const chunkHeightBefore = useRef(0);
+	// When the batch in flight was asked for and how many turns were mounted then (see noteChunkCost).
+	const chunkCost = useRef(null);
 	const cancelChunks = () => {
 		cancelAnimationFrame(chunkFrame.current);
 		chunkFrame.current = 0;
@@ -1504,28 +1591,57 @@ export function Transcript() {
 	});
 	useEffect(() => {
 		if (rendered.length >= shown.length) return undefined;
-		chunkFrame.current = requestAnimationFrame(() => {
+		let unwait = null;
+		const grow = () => requestAnimationFrame(() => {
 			chunkFrame.current = 0;
 			if (winNow.current !== liveWin) return;
+			// While a mode reveal draws this chat, a side that already has a whole view's height mounted beyond the view waits
+			// for the reveal to end: mounting more there changes nothing on screen and only takes frames from the reveal.
+			const el = scroller.current;
+			if (el && modeRevealActive()) {
+				const beyond = liveWin.held > 0 ? el.scrollHeight - el.scrollTop - el.clientHeight : el.scrollTop;
+				if (beyond >= el.clientHeight) {
+					unwait = afterModeReveal(() => {
+						unwait = null;
+						chunkFrame.current = grow();
+					});
+					if (unwait) return;
+				}
+			}
+			if (performance.now() - lastInput < INPUT_QUIET_MS) {
+				chunkFrame.current = grow();
+				return;
+			}
+			const n = Math.min(nextChunk(), liveWin.held > 0 ? liveWin.held : Number.MAX_SAFE_INTEGER);
 			if (liveWin.held > 0) {
 				// A return mounted around the turn being read: the newer turns go in below it first, which moves nothing.
-				const n = Math.min(CHUNK_NEXT, liveWin.held);
+				chunkCost.current = { at: performance.now(), from: rendered.length, wanted: n };
 				setWin({ count: liveWin.count + n, held: liveWin.held - n });
 				return;
 			}
 			// Older turns mount above what is already on screen; the height taken before the commit lets the
 			// layout effect below shift the scroll by exactly the growth, so the newest message does not move.
-			chunkHeightBefore.current = scroller.current?.scrollHeight || 0;
-			setWin({ count: liveWin.count + CHUNK_NEXT, held: 0 });
+			chunkHeightBefore.current = el?.scrollHeight || 0;
+			chunkCost.current = { at: performance.now(), from: rendered.length, wanted: n };
+			setWin({ count: liveWin.count + n, held: 0 });
 		});
-		return cancelChunks;
+		chunkFrame.current = grow();
+		return () => {
+			cancelChunks();
+			unwait?.();
+		};
 	}, [rendered.length, shown.length, liveWin]);
 	useLayoutEffect(() => {
 		if (chunkHeightBefore.current && scroller.current) {
 			scroller.current.scrollTop += scroller.current.scrollHeight - chunkHeightBefore.current;
 			chunkHeightBefore.current = 0;
 		}
+		// The batch is in and laid out (the reads above and the messages' own measuring forced it): what it cost sizes the next.
+		const cost = chunkCost.current;
+		chunkCost.current = null;
+		if (cost) noteChunkCost(performance.now() - cost.at, rendered.length - cost.from, cost.wanted);
 	}, [rendered.length]);
+	useEffect(() => beforeModeCapture(() => skipTurnsOutOfView(scroller.current)), []);
 	// Older history that is still server-side fills in by itself: the reader never asks for it. One page per idle
 	// beat, so first paint, typing and streaming keep priority; a page lands above the reader and the build that
 	// publishes it already compensates that growth (the full→full prepend anchor in startBuild). Two failures in a

@@ -71,6 +71,8 @@ function loadHost() {
     webRequest: { onCompleted() {}, onErrorOccurred() {} },
   };
   const electron = {
+    // The container all tab views live in (it cuts the active view at the part the page leaves uncovered).
+    View: class { addChildView(child) { child.parent = this; } removeChildView(child) { if (child.parent === this) child.parent = null; } setBounds(bounds) { this.bounds = bounds; } },
     WebContentsView: class {
       constructor() { this.webContents = makeContents(); this.visible = false; this.bounds = null; }
       setVisible(value) { this.visible = value; }
@@ -258,7 +260,7 @@ test('the visible tab keeps exactly the panel size while the Agent drives it, an
     const metrics = () => cdp.filter((entry) => entry.method.startsWith('Emulation.'));
     await browser.command({ action: 'snapshot', tabId: tab.id }, { agent: true });
     assert.equal(metrics().length, 0, 'no device metrics override: the page is never a scaled-down picture');
-    assert.deepEqual(tab.view.bounds, rect);
+    assert.deepEqual({ ...tab.view.bounds, x: tab.view.bounds.x + tab.view.parent.bounds.x, y: tab.view.bounds.y + tab.view.parent.bounds.y }, rect);
     cdp.length = 0;
     await browser.command({ action: 'mouse', tabId: tab.id, kind: 'click', x: 200, y: 300 }, { agent: true });
     const pressed = cdp.find((entry) => entry.params?.type === 'mousePressed').params;
