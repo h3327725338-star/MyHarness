@@ -235,6 +235,14 @@ export class AgentSessionTraceCoordinator {
 		}
 	}
 
+	/**
+	 * Resolves once every trace write queued so far has finished; never rejects (finish() reports a failed write).
+	 * Session disposal waits for this, so a run's last records are not appended after the session is gone.
+	 */
+	whenWritten(): Promise<void> {
+		return this.runtimeTrace.settled();
+	}
+
 	recordProviderResponse(response: ProviderResponse, model: Model<any>): ProviderResponseMetadata {
 		const metadata = response.metadata
 			? { ...response.metadata, status: response.status }

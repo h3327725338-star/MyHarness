@@ -1180,6 +1180,12 @@ export class AgentSession {
 		});
 		this._isAgentRunActive = false;
 		this._setRunState("idle", "", { terminalReason: terminal.reason });
+		// The session counts as idle from here on. Queue the trace's closing records before the handlers run:
+		// disposal waits for the trace writes queued so far (disposeAsync), and must not wait for agent_settled handlers.
+		const traceFinished = this._finishRuntimeTrace().then(
+			() => undefined,
+			(error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+		);
 		let settledError: Error | undefined;
 		try {
 			await this._extensionRunner.emit({ type: "agent_settled" });
@@ -1187,11 +1193,7 @@ export class AgentSession {
 		} catch (error) {
 			settledError = error instanceof Error ? error : new Error(String(error));
 		}
-		try {
-			await this._finishRuntimeTrace();
-		} catch (error) {
-			settledError ??= error instanceof Error ? error : new Error(String(error));
-		}
+		settledError ??= await traceFinished;
 		if (settledError) throw settledError;
 	}
 
@@ -1569,9 +1571,9 @@ export class AgentSession {
 	}
 
 	/**
-	 * Request cancellation, then wait for the agent and any direct Bash task to
-	 * settle before detaching listeners. A stubborn provider or custom tool is
-	 * bounded so session replacement cannot hang forever.
+	 * Request cancellation, then wait for the agent, any direct Bash task and the
+	 * run trace's pending writes to settle before detaching listeners. A stubborn
+	 * provider or custom tool is bounded so session replacement cannot hang forever.
 	 */
 	async disposeAsync(timeoutMs = DISPOSE_WAIT_TIMEOUT_MS): Promise<void> {
 		if (this._disposePromise) return this._disposePromise;
@@ -1587,10 +1589,14 @@ export class AgentSession {
 				this._bash.activeCompletion ?? Promise.resolve(),
 				this._autoMemory.waitForMaintenancePersistence(),
 				this._backgroundWork.waitForExploreCleanup(),
-			]).then(
-				() => undefined,
-				() => undefined,
-			);
+			])
+				.then(
+					() => undefined,
+					() => undefined,
+				)
+				// A settled run's last trace records are still being appended: without this they landed after disposal,
+				// and recreated the trace directory when its owner had already removed it.
+				.then(() => this._traceCoordinator.whenWritten());
 			let timer: NodeJS.Timeout | undefined;
 			const timedOut = await Promise.race([
 				pending.then(() => false),

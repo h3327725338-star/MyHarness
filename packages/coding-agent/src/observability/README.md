@@ -29,4 +29,5 @@
 - Trace 与 Session JSONL 是两套数据：Trace 用于排查，不参与会话恢复，不要把业务状态塞进 Trace。
 - 任何写入磁盘或显示给用户的诊断文本都要先经过 `diagnostic-sanitizer.ts`；新增敏感模式时加测试。
 - `session-trace.ts` 不依赖界面；`test/phase3-architecture.test.ts` 会检查。
+- Trace 是异步追加写入的。一次运行在 `agent_settled` 时先排入收尾记录（`run-finished` 等），再交给扩展处理；`AgentSession.disposeAsync()` 等这些写入完成（`whenWritten()`）才算释放完，但不等 `agent_settled` 的扩展处理。否则收尾记录会在会话释放、目录被删之后才写，重新建出 trace 目录。
 - 相关测试：`runtime-trace.test.ts`、`agent-session-runtime-trace.test.ts`、`cache-stats.test.ts`、`cache-stability.test.ts`、`agent-session-stats.test.ts`。

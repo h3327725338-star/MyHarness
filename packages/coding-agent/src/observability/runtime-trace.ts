@@ -395,6 +395,11 @@ export class RuntimeTrace {
 		if (error) throw error;
 	}
 
+	/** Resolves once every write accepted so far has finished, whether it succeeded or not; never rejects. */
+	async settled(): Promise<void> {
+		await Promise.allSettled([...this.files.values()].map((state) => state.queue));
+	}
+
 	private ensureScope(scope: RuntimeTraceScope): TraceFileState {
 		let state = this.files.get(scope.runId);
 		if (!state) {

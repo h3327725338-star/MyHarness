@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +17,16 @@ afterEach(async () => {
 	vi.unstubAllEnvs();
 	await Promise.all(traceDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
+
+/** Event types in the session's only trace file, read synchronously: an append still in flight cannot land meanwhile. */
+function readTraceTypesNow(traceDirectory: string, sessionId: string): string[] {
+	const sessionTraceDirectory = join(traceDirectory, sessionId);
+	const [file] = readdirSync(sessionTraceDirectory);
+	return readFileSync(join(sessionTraceDirectory, file), "utf8")
+		.split("\n")
+		.filter((line) => line.trim())
+		.map((line) => (JSON.parse(line) as { type: string }).type);
+}
 
 describe("AgentSession runtime trace integration", () => {
 	// AgentSession 的 runtime trace 通过 getRuntimeTraceOptionsFromEnvironment 继承
@@ -124,5 +135,55 @@ describe("AgentSession runtime trace integration", () => {
 		expect(events.find((event) => event.type === "model-response")?.data).toMatchObject({ status: "cancelled" });
 		expect(events.find((event) => event.type === "agent-finished")?.data).toMatchObject({ status: "cancelled" });
 		expect(events.find((event) => event.type === "run-finished")?.data).toMatchObject({ status: "cancelled" });
+	});
+
+	// A host disposes the session once it sees agent_settled, and its owner may remove the directories right after. The
+	// run's last records used to be appended after disposal, recreating the removed trace directory.
+	it("finishes writing the run's trace before disposal completes", async () => {
+		const traceDirectory = await mkdtemp(join(tmpdir(), "myharness-agent-runtime-trace-dispose-"));
+		traceDirectories.push(traceDirectory);
+		vi.stubEnv("MYHARNESS_TRACE_DIR", traceDirectory);
+
+		const harness = await createHarness();
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("done")]);
+		const disposed = new Promise<void>((resolve, reject) => {
+			harness.session.subscribe((event) => {
+				if (event.type === "agent_settled") harness.session.disposeAsync().then(resolve, reject);
+			});
+		});
+
+		const run = harness.session.prompt("dispose trace test");
+		await disposed;
+
+		expect(readTraceTypesNow(traceDirectory, harness.sessionManager.getSessionId())).toContain("run-finished");
+		await run;
+	});
+
+	it("does not wait for agent_settled handlers to finish the trace when disposing", async () => {
+		const traceDirectory = await mkdtemp(join(tmpdir(), "myharness-agent-runtime-trace-dispose-handler-"));
+		traceDirectories.push(traceDirectory);
+		vi.stubEnv("MYHARNESS_TRACE_DIR", traceDirectory);
+
+		let session: Harness["session"] | undefined;
+		let typesAfterDisposal: string[] = [];
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("agent_settled", async () => {
+						// Disposal awaited inside the handler cannot wait for the handler to return.
+						await session?.disposeAsync();
+						typesAfterDisposal = readTraceTypesNow(traceDirectory, harness.sessionManager.getSessionId());
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		session = harness.session;
+		harness.setResponses([fauxAssistantMessage("done")]);
+
+		await harness.session.prompt("dispose from handler trace test");
+
+		expect(typesAfterDisposal).toContain("run-finished");
 	});
 });
