@@ -92,15 +92,38 @@ describe("settings write scheduling", () => {
 		}
 	});
 
-	it("lets every chat of one server save the same file at once without a save failing on the lock", async () => {
+	it("lets the chats of one server take turns on the settings file instead of contending for its lock", async () => {
 		const { root, agent, path } = settingsFolders({ theme: "dark" });
-		// One settings manager per chat, as in the Web UI server, all writing at the same moment.
-		const managers = Array.from({ length: 60 }, () => SettingsManager.create(root, agent));
-		for (const [index, manager] of managers.entries()) manager.setLastChangelogVersion(`1.0.${index}`);
-		const unsaved = await Promise.all(managers.map((manager) => manager.flush()));
-		expect(unsaved.flat()).toEqual([]);
-		expect(managers.flatMap((manager) => manager.getErrors())).toEqual([]);
-		expect(JSON.parse(readFileSync(path, "utf8")).theme).toBe("dark");
+		// How many of this process's writes are trying for or holding the file's lock at the same moment. Contending
+		// writes used to give up after 200 ms, so how many failed depended on how fast the disk was.
+		let trying = 0;
+		let mostAtOnce = 0;
+		const lock = lockfile.lock;
+		const spy = vi.spyOn(lockfile, "lock").mockImplementation(async (file, options) => {
+			mostAtOnce = Math.max(mostAtOnce, ++trying);
+			try {
+				const release = await lock(file, options);
+				return async () => {
+					await release();
+					trying--;
+				};
+			} catch (error) {
+				trying--;
+				throw error;
+			}
+		});
+		try {
+			// One settings manager per chat, as in the Web UI server, all writing at the same moment.
+			const managers = Array.from({ length: 8 }, () => SettingsManager.create(root, agent));
+			for (const [index, manager] of managers.entries()) manager.setLastChangelogVersion(`1.0.${index}`);
+			const unsaved = await Promise.all(managers.map((manager) => manager.flush()));
+			expect(unsaved.flat()).toEqual([]);
+			expect(managers.flatMap((manager) => manager.getErrors())).toEqual([]);
+			expect(mostAtOnce).toBe(1);
+			expect(JSON.parse(readFileSync(path, "utf8")).theme).toBe("dark");
+		} finally {
+			spy.mockRestore();
+		}
 	});
 
 	it("reads the settings while another process holds the lock instead of starting without them", async () => {
