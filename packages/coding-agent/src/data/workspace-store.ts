@@ -377,7 +377,24 @@ function requireDirectoryEntries(path: string): Array<{ name: string; isDirector
 
 function writeJsonAtomically(path: string, value: unknown): void {
 	mkdirSync(dirname(path), { recursive: true });
-	writeFileAtomicallySync(path, `${JSON.stringify(value, null, 2)}\n`);
+	writeFileAtomicallySync(path, jsonFileText(value));
+}
+
+/**
+ * writeJsonAtomically, skipped when the file already holds exactly this text (a read is far cheaper than a durable
+ * write).
+ */
+function writeJsonIfChanged(path: string, value: unknown): void {
+	try {
+		if (readFileSync(path, "utf8") === jsonFileText(value)) return;
+	} catch {
+		// Missing or unreadable: written below.
+	}
+	writeJsonAtomically(path, value);
+}
+
+function jsonFileText(value: unknown): string {
+	return `${JSON.stringify(value, null, 2)}\n`;
 }
 
 /**
@@ -934,8 +951,10 @@ export class WorkspaceStore {
 			version: WORKSPACES_FILE_VERSION,
 			workspaces: this.workspaces.map(serializeWorkspace),
 		} satisfies WorkspacesFile);
+		// Only the metadata that changed is written. Rewriting (and flushing) every Workspace's file on each change made
+		// adding or removing Workspaces one after another cost quadratic time: 2.5 s for 60 of them (2026-10-28).
 		for (const workspace of this.workspaces) {
-			writeJsonAtomically(getWorkspaceMetadataPath(this.dataRoot, workspace.workspaceId), {
+			writeJsonIfChanged(getWorkspaceMetadataPath(this.dataRoot, workspace.workspaceId), {
 				version: WORKSPACE_METADATA_VERSION,
 				workspace: serializeWorkspace(workspace),
 			} satisfies WorkspaceMetadataFile);

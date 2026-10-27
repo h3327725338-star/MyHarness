@@ -385,6 +385,9 @@ export function buildLocalFileScript(file: string, action: string, handler = "")
 		`[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(value).toString("base64")}'))`;
 	return [
 		"$ErrorActionPreference = 'Stop'",
+		// Loaded by name first: otherwise the first New-Object, Add-Type or ConvertTo-Json makes Windows PowerShell look
+		// through every installed module for it ("Preparing modules for first use."), however many there are.
+		"Import-Module Microsoft.PowerShell.Utility",
 		"[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)",
 		`Add-Type -TypeDefinition (${decode(DESKTOP_TYPE)})`,
 		`$file = ${decode(file)}`,
@@ -393,6 +396,8 @@ export function buildLocalFileScript(file: string, action: string, handler = "")
 			: `[MyHarnessLocalFiles]::Open($file, (${decode(action)}), (${decode(handler)})); '{}'`,
 	].join("\n");
 }
+
+const BRIDGE_TIMEOUT_MS = 15000;
 
 export async function runLocalFileAction(file: string, action: string, handler = ""): Promise<unknown> {
 	if (process.platform !== "win32") throw new HttpError(501, "Local desktop opening is only supported on Windows");
@@ -407,13 +412,42 @@ export async function runLocalFileAction(file: string, action: string, handler =
 				"-EncodedCommand",
 				Buffer.from(script, "utf16le").toString("base64"),
 			],
-			{ windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024, encoding: "utf8" },
+			{ windowsHide: true, timeout: BRIDGE_TIMEOUT_MS, maxBuffer: 1024 * 1024, encoding: "utf8" },
 		);
 		return JSON.parse(stdout.trim());
 	} catch (error) {
-		throw new HttpError(
-			500,
-			`Unable to perform local desktop action: ${typeof (error as { stderr?: unknown }).stderr === "string" ? (error as { stderr: string }).stderr.trim() : error instanceof Error ? error.name : "Desktop bridge failed"}`,
-		);
+		throw new HttpError(500, `Unable to perform local desktop action: ${bridgeFailure(error)}`);
 	}
+}
+
+/**
+ * Why powershell.exe failed, in words. It writes its errors (and its progress) to stderr as CLIXML, so the raw text
+ * read "#< CLIXML" followed by XML, and a run that did not finish in time ends in a kill with whatever it wrote so far.
+ */
+function bridgeFailure(error: unknown): string {
+	const { killed, code, stderr } = error as { killed?: boolean; code?: unknown; stderr?: unknown };
+	if (killed && code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
+		return `Windows did not answer within ${BRIDGE_TIMEOUT_MS / 1000} seconds`;
+	const text = typeof stderr === "string" ? stderr.trim() : "";
+	if (!text.startsWith("#< CLIXML")) return text || (error instanceof Error ? error.name : "Desktop bridge failed");
+	const message = [...text.matchAll(/<S S="Error">([^<]*)<\/S>/g)]
+		.map((match) => decodeClixml(match[1]!))
+		.join("")
+		.split(/\r?\n/)
+		.find((line) => line.trim())
+		?.trim();
+	if (!message) return "Desktop bridge failed";
+	// A .NET exception from the bridge's own code, wrapped by PowerShell: its message alone.
+	return message.match(/^Exception calling "[^"]*" with "\d+" argument\(s\): "(.*)"$/)?.[1] ?? message;
+}
+
+/** CLIXML string text: `_xHHHH_` stands for a character (line breaks, mostly) inside XML-escaped text. */
+function decodeClixml(value: string): string {
+	return value
+		.replace(/_x([0-9A-Fa-f]{4})_/g, (_, code: string) => String.fromCharCode(Number.parseInt(code, 16)))
+		.replace(/&lt;/g, "<")
+		.replace(/&gt;/g, ">")
+		.replace(/&quot;/g, '"')
+		.replace(/&apos;/g, "'")
+		.replace(/&amp;/g, "&");
 }

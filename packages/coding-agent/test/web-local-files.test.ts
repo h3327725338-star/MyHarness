@@ -81,8 +81,9 @@ describe("local desktop file links", () => {
 				expect(choice.id).toBeTruthy();
 				expect(choice.label).toBeTruthy();
 			}
+			// The bridge's own message, not PowerShell's CLIXML around it.
 			await expect(runLocalFileAction(file, "handler", "not-an-installed-handler")).rejects.toThrow(
-				"no longer available",
+				/^Unable to perform local desktop action: This opening method is no longer available$/,
 			);
 		},
 		60000,
