@@ -39,7 +39,7 @@
 
 | 范围 | 功能说明 | 维护文档 | 后续开发文档 | 事实范围 |
 | --- | --- | --- | --- | --- |
-| 整个仓库 | [README](README.md)、[中文 README](README.zh-CN.md)、[架构与开发维护手册](ARCHITECTURE_AND_DEVELOPMENT.md)、[存储与数据边界](docs/STORAGE.md) | [根维护手册](MAINTENANCE.md) | [开发路线与边界](DEVELOPMENT_ROADMAP.md)、[项目状态](PROJECT_STATUS.md)、[ADR](docs/decisions/) | monorepo、脚本、CI、发布、数据生命周期 |
+| 整个仓库 | [README](README.md)、[中文 README](README.zh-CN.md)、[架构与开发维护手册](ARCHITECTURE_AND_DEVELOPMENT.md)、[存储与数据边界](docs/STORAGE.md)、[隐私政策](docs/PRIVACY.md) | [根维护手册](MAINTENANCE.md) | [开发路线与边界](DEVELOPMENT_ROADMAP.md)、[项目状态](PROJECT_STATUS.md)、[ADR](docs/decisions/) | monorepo、脚本、CI、发布、数据生命周期 |
 | Coding Agent 产品层 | [产品文档索引](packages/coding-agent/docs/index.md)、[中文索引](packages/coding-agent/docs/index.zh-CN.md)、[Web UI](packages/coding-agent/docs/web-ui.md) | [产品维护手册](packages/coding-agent/docs/maintenance.md) | [产品后续开发](packages/coding-agent/docs/roadmap.md) | Web UI、AgentSession、Session、Provider runtime |
 | Coding Agent 源码模块 | [源码模块地图](packages/coding-agent/docs/source-modules.md)；每个一级目录的 `packages/coding-agent/src/<目录>/README.md`（“说明”一节） | 同一份 `README.md` 的“维护”一节 | 同左 | `packages/coding-agent/src` 的 25 个一级目录（含各自子目录）和顶层入口 |
 | 其他包的源码目录 | [agent](packages/agent/src/README.md)、[ai](packages/ai/src/README.md)、[sqlite-node](packages/storage/sqlite-node/src/README.md) 的 `src/README.md` | 同一份 `README.md` 的“维护”一节 | 各包 `docs/roadmap.md` | 各包 `src` 下的每个子目录 |
