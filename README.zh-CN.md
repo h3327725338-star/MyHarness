@@ -135,6 +135,10 @@ npm.cmd run audit:release
 
 `npm.cmd run check` 会以可写模式运行 Biome，可能改写格式化文件。检查范围、发布/隐私边界和 Pull Request 要求见[贡献指南](CONTRIBUTING.zh-CN.md)。
 
+## 致谢
+
+MyHarness 最初 fork 自 Mario Zechner 的 [pi-mono](https://github.com/badlogic/pi-mono)（MIT 协议），之后经过大量重写和扩展。原项目许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
 ## License
 
 MyHarness 自有代码使用 [Apache License 2.0](LICENSE)。继承代码和第三方组件继续保留各自的 license、copyright 和 attribution，详见 [NOTICE](NOTICE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
