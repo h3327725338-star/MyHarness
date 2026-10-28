@@ -381,7 +381,7 @@ exports.createBrowser = (window, log, options = {}) => {
   // puts it in before the first paint (`mh-browser:dark-early`), and the host puts the same rules in once the page has
   // committed if the preload did not (browser-dark.cjs putCanvas / dropCanvas). `body` too, since most pages paint a white body over the html background; `color-scheme` makes the
   // default text and form controls light meanwhile. The native view itself starts in that color, not white.
-  const canvasColor = () => (typeof appColors?.background === 'string' && /^#[0-9a-f]{6}$/iu.test(appColors.background) ? appColors.background : '#1e1f1f');
+  const canvasColor = () => dark.pageBackground(appColors);
   const darkCanvas = () => `html, body { background-color: ${canvasColor()} !important; } html { color-scheme: dark !important; }`;
   /** The color a tab's view shows before its page paints: the dark canvas when the page will be dark. */
   const paintViewBackground = (tab, url = tab.url) => {
@@ -432,6 +432,8 @@ exports.createBrowser = (window, log, options = {}) => {
     if (engine || tab.darkEngine || tab.darkTried) {
       tab.darkTried = engine;
       tab.darkEngine = await dark.applyDark(contents, engine, appColors);
+      // Frames of the same site follow the page (browser-dark.cjs applyDarkToFrames).
+      await dark.applyDarkToFrames(contents, engine && tab.darkEngine, appColors);
     }
     tab.dark = engine ? tab.darkEngine : wanted && tab.nativeDark === true;
     // The loading canvas goes: the engine or the site's own theme colors the page now (or it stays in its own colors).
@@ -441,6 +443,17 @@ exports.createBrowser = (window, log, options = {}) => {
     if (!tab.destroyed) emit(tab.id, { type: 'dark', ...darkState(tab) });
   };
   const syncDarkAll = () => { for (const tab of tabs.values()) void syncDark(tab); };
+  /**
+   * A frame that commits or loads after the page was recolored (a menu or dialog the site opens later) is recolored
+   * too. Frames come in bursts, so one pass a moment later covers all of them; a frame already dark is skipped.
+   */
+  const darkFramesSoon = (tab) => {
+    if (!tab.darkEngine || tab.darkFramesTimer) return;
+    tab.darkFramesTimer = later(tab, () => {
+      tab.darkFramesTimer = undefined;
+      if (tab.darkEngine && tab.view && !tab.view.webContents.isDestroyed()) void dark.applyDarkToFrames(tab.view.webContents, true, appColors);
+    }, 50);
+  };
 
   // ---- Sync between the user's computers (browser-sync.cjs) ----------------------------------------------------------
   // Drive sync writes a store's file: the store reads it again and the open tabs and the page follow.
@@ -922,6 +935,9 @@ exports.createBrowser = (window, log, options = {}) => {
     contents.on('dom-ready', () => learnClientHints(contents));
     // Each new document starts in its own colors: the engine runs again once its DOM is there.
     contents.on('dom-ready', () => { if (live()) void syncDark(tab); });
+    // So does a frame of the same site that commits or loads later (darkFramesSoon).
+    contents.on('did-frame-navigate', (_event, _url, _code, _text, isMainFrame) => { if (!isMainFrame && live()) darkFramesSoon(tab); });
+    contents.on('did-frame-finish-load', (_event, isMainFrame) => { if (!isMainFrame && live()) darkFramesSoon(tab); });
     contents.on('did-start-loading', () => {
       if (!live()) return;
       tab.error = '';

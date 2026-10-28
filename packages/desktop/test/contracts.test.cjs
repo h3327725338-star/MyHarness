@@ -158,6 +158,13 @@ test('website dark mode: auto follows the app, a site choice wins, settings surv
     const again = createDarkStore(file);
     assert.deepEqual(again.get(), { mode: 'on', sites: { 'example.com': 'off' } });
     assert.equal(themeFor({ background: '#101010', text: 'red' }).darkSchemeTextColor, '#e3e3e3', 'only #rrggbb colors are taken');
+    // A page is never lighter than Dark Reader's own default, so its light surfaces keep their distance; the tint stays.
+    const forest = themeFor({ background: '#292e2b', text: '#e3e4df' });
+    assert.deepEqual([forest.contrast, forest.darkSchemeBackgroundColor, forest.darkSchemeTextColor], [100, '#181b19', '#e3e4df']);
+    assert.equal(themeFor({ background: '#101010' }).darkSchemeBackgroundColor, '#101010', 'a darker app color is kept');
+    // "Always dark" while the interface is light: its light background and dark text are not taken.
+    const light = themeFor({ background: '#fbfbfa', text: '#1d2020' });
+    assert.deepEqual([light.darkSchemeBackgroundColor, light.darkSchemeTextColor], ['#191a1a', '#e3e3e3']);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 test('browser language: header and navigator list follow the choice, which survives a restart', () => {

@@ -3,7 +3,9 @@
 // of inverting the picture. The isolated world (999) is the one of browser-tab-preload.cjs: the site's own scripts can
 // neither see the engine nor call the fetch bridge the preload gives it. Cross-origin stylesheets and images, which the
 // engine must read to recolor them, are fetched by the host through the tab's own session, so CORS does not leave half
-// of a page white. Only the top document is recolored; an embedded frame keeps its own colors.
+// of a page white. Frames of the page's own site (the Google account menu over Gmail, for one) share its renderer and
+// are recolored too, each in its own isolated world (applyDarkToFrames); a frame of another site runs in another process
+// and keeps its own colors.
 // A site with a dark theme of its own is shown in that theme instead: the host tells the tab the reader prefers dark
 // (`prefers-color-scheme`), and the engine runs only when the page stays light (detectNativeDark).
 const { readFileSync, writeFileSync, renameSync, existsSync } = require('node:fs');
@@ -13,6 +15,9 @@ const WORLD = 999;
 const MODES = ['auto', 'on', 'off'];
 const MAX_FETCH_BYTES = 12 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
+const HEX_COLOR = /^#[0-9a-f]{6}$/iu;
+/** Dark Reader's own default page darkness (#181a1b); see pageBackground. */
+const MAX_PAGE_LIGHTNESS = 0.1;
 
 let source;
 /** The engine's script text (read once). The packaged app carries it in its runtime folder (see build.mjs). */
@@ -83,24 +88,59 @@ function createDarkStore(file, log) {
   };
 }
 
-/** Dark Reader's theme, in the app's own colors when the page gave them. */
+function toHsl(hex) {
+  const [r, g, b] = [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16) / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const chroma = max - min;
+  if (chroma === 0) return { h: 0, s: 0, l };
+  let h = (max === r ? ((g - b) / chroma) % 6 : max === g ? (b - r) / chroma + 2 : (r - g) / chroma + 4) * 60;
+  if (h < 0) h += 360;
+  return { h, s: chroma / (1 - Math.abs(2 * l - 1)), l };
+}
+
+function fromHsl({ h, s, l }) {
+  const chroma = (1 - Math.abs(2 * l - 1)) * s;
+  const x = chroma * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - chroma / 2;
+  const [r, g, b] = h < 60 ? [chroma, x, 0] : h < 120 ? [x, chroma, 0] : h < 180 ? [0, chroma, x] : h < 240 ? [0, x, chroma] : h < 300 ? [x, 0, chroma] : [chroma, 0, x];
+  return `#${[r, g, b].map((value) => Math.round((value + m) * 255).toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * The color a dark page is painted in: the app's background in its own tint, but no lighter than Dark Reader's
+ * default. The engine maps every light surface of a page between this color and a fixed lightness (0.4), so a lighter
+ * background squeezes them together: in the app's panel color a white list, the page around it, a search box and a
+ * selected row kept about half of their difference and read as one gray. A light interface's color is not taken.
+ */
+function pageBackground(colors) {
+  const app = typeof colors?.background === 'string' && HEX_COLOR.test(colors.background) ? colors.background : '';
+  const value = app && toHsl(app).l < 0.5 ? app : '#1e1f1f';
+  const color = toHsl(value);
+  return color.l <= MAX_PAGE_LIGHTNESS ? value : fromHsl({ ...color, l: MAX_PAGE_LIGHTNESS });
+}
+
+/** The text color of a dark page: the app's while it is light (a light interface reports dark text). */
+function pageText(colors) {
+  const app = typeof colors?.text === 'string' && HEX_COLOR.test(colors.text) ? colors.text : '';
+  return app && toHsl(app).l > 0.5 ? app : '#e3e3e3';
+}
+
+/** Dark Reader's theme at the engine's own contrast: a lower one moved a page's surfaces closer still. */
 function themeFor(colors) {
-  const color = (value, fallback) => (typeof value === 'string' && /^#[0-9a-f]{6}$/iu.test(value) ? value : fallback);
   return {
     mode: 1,
     brightness: 100,
-    contrast: 95,
+    contrast: 100,
     sepia: 0,
-    darkSchemeBackgroundColor: color(colors?.background, '#1e1f1f'),
-    darkSchemeTextColor: color(colors?.text, '#e3e3e3'),
+    darkSchemeBackgroundColor: pageBackground(colors),
+    darkSchemeTextColor: pageText(colors),
   };
 }
 
-/** Recolor (or restore) one page. Resolves true when the engine is running afterwards. */
-async function applyDark(contents, enabled, colors) {
-  if (!contents || contents.isDestroyed()) return false;
-  const code = engineSource();
-  if (!code) return false;
+/** The script that turns the engine on (in these colors) or off in one document, the top one or a frame. */
+function darkScript(enabled, colors) {
   const theme = JSON.stringify(themeFor(colors));
   const run = enabled
     ? `(() => {
@@ -127,18 +167,57 @@ async function applyDark(contents, enabled, colors) {
           });
         }
         DarkReader.enable(${theme});
+        globalThis.__myharnessDarkTheme = ${JSON.stringify(theme)};
         return DarkReader.isEnabled();
       })()`
-    : `(() => { if (globalThis.DarkReader) DarkReader.disable(); return false; })()`;
+    : `(() => { if (globalThis.DarkReader) DarkReader.disable(); globalThis.__myharnessDarkTheme = null; return false; })()`;
   // One script: the engine is defined once per document, then turned on or off; its value is the script's result.
-  const script = enabled ? `if (!globalThis.DarkReader) {
-${code}
+  return enabled ? `if (!globalThis.DarkReader) {
+${engineSource()}
 }
 ${run}` : run;
+}
+
+/** Recolor (or restore) one page. Resolves true when the engine is running afterwards. */
+async function applyDark(contents, enabled, colors) {
+  if (!contents || contents.isDestroyed() || !engineSource()) return false;
   try {
-    return (await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: script }])) === true;
+    return (await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: darkScript(enabled, colors) }])) === true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * The same in the page's frames that share its renderer, which are the frames of its own site: the Google account menu
+ * over Gmail is one. Left alone, such a frame stayed white over the dark page, in an opaque box besides: the engine
+ * gives `<iframe>` elements `color-scheme: dark`, and a frame whose document does not match it gets a solid canvas. The
+ * preload reaches each frame by its token (browser-tab-preload.cjs `__myharnessDarkFrames`) and skips one that already
+ * shows this state, so the engine is not sent again for every frame that loads. A frame has no fetch bridge, so its
+ * cross-origin stylesheets keep their colors; a frame of another site runs in another process and keeps all of them.
+ * Resolves with the number of frames the engine was turned on in.
+ */
+async function applyDarkToFrames(contents, enabled, colors) {
+  if (!contents || contents.isDestroyed() || !engineSource()) return 0;
+  let tokens;
+  try {
+    const top = contents.mainFrame;
+    tokens = top.framesInSubtree
+      .filter((frame) => frame !== top && !frame.detached && frame.processId === top.processId)
+      .map((frame) => frame.frameToken);
+  } catch {
+    return 0;
+  }
+  if (!tokens.length) return 0;
+  const theme = JSON.stringify(JSON.stringify(themeFor(colors)));
+  const settled = enabled
+    ? `globalThis.DarkReader?.isEnabled() === true && globalThis.__myharnessDarkTheme === ${theme} && !!document.querySelector('.darkreader')`
+    : '!globalThis.DarkReader?.isEnabled()';
+  const code = `globalThis.__myharnessDarkFrames ? globalThis.__myharnessDarkFrames(${JSON.stringify(tokens)}, ${JSON.stringify(darkScript(enabled, colors))}, ${JSON.stringify(settled)}) : 0`;
+  try {
+    return Number(await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code }])) || 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -261,4 +340,4 @@ async function darkFetch(session, url) {
   }
 }
 
-module.exports = { MODES, createDarkStore, applyDark, detectNativeDark, putCanvas, dropCanvas, darkFetch, engineSource, themeFor };
+module.exports = { MODES, createDarkStore, applyDark, applyDarkToFrames, detectNativeDark, putCanvas, dropCanvas, darkFetch, engineSource, pageBackground, themeFor };

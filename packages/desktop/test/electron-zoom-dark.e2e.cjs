@@ -5,7 +5,8 @@
  *   packages/desktop/node_modules/electron/dist/electron.exe <absolute path of this file> --profile=<dir>
  *
  * It serves a white page whose colors partly come from a stylesheet on another origin without CORS headers, turns dark
- * mode on (Dark Reader's engine in the tab's isolated world, cross-origin CSS through the host), turns it off for the
+ * mode on (Dark Reader's engine in the tab's isolated world, cross-origin CSS through the host; frames of the same site,
+ * also one added later, follow the page), turns it off for the
  * site, zooms the tab (remembered per site), clicks by selector at 150 % and checks that the app window's own zoom
  * scales the view's box. It also selects text on the page and translates it through the in-page "译" button and the
  * context-menu path (the host's translate function is a stub here). The window stays off screen and never takes the
@@ -63,6 +64,15 @@ const pages = http.createServer((request, response) => {
   if (request.url === '/slow') {
     response.write('<!doctype html><html><head><meta charset="utf-8"><title>Slow</title><style>body { background: #ffffff; color: #111111; }</style></head><body><p>first part</p>');
     setTimeout(() => response.end('<p>rest</p></body></html>'), 2500);
+    return;
+  }
+  // A page with a frame of its own site, the way Gmail shows its account menu in a frame of google.com.
+  if (request.url === '/frames') {
+    response.end('<!doctype html><html><head><meta charset="utf-8"><title>Frames</title><style>body { background: #ffffff; color: #111111; }</style></head><body><h1>Frames</h1><iframe id="menu" src="/frame-doc" style="width: 320px; height: 120px; border: 0"></iframe></body></html>');
+    return;
+  }
+  if (request.url === '/frame-doc') {
+    response.end('<!doctype html><html><head><meta charset="utf-8"><style>body { margin: 0; color: #111111; } #card { background: #e9eef6; padding: 8px; }</style></head><body><div id="card">Account</div></body></html>');
     return;
   }
   // A site with a dark theme of its own (prefers-color-scheme): it is shown in that theme, Dark Reader stays off.
@@ -137,6 +147,27 @@ async function main() {
   check(isolated === 'function', 'the engine world has the host fetch bridge of the preload', isolated);
   const pageWorld = await browser.command({ action: 'exec', tabId: id, code: '({ engine: typeof window.DarkReader, bridge: typeof window.__myharnessDarkFetch })' });
   check(pageWorld.result.engine === 'undefined' && pageWorld.result.bridge === 'undefined', "the site's own scripts see neither the engine nor the fetch bridge", pageWorld.result);
+
+  // A frame of the same site is recolored with the page, and so is one the page adds later; turning dark off restores it.
+  await browser.command({ action: 'navigate', tabId: id, url: `${origin}/frames` });
+  await until(async () => {
+    const state = await browser.command({ action: 'state', tabId: id });
+    return state.title === 'Frames' && !state.loading && state.dark;
+  }, 20000);
+  const frameLook = async (frameId) => (await browser.command({
+    action: 'exec', tabId: id,
+    code: `(() => { const doc = document.getElementById(${JSON.stringify(frameId)})?.contentDocument; const card = doc?.getElementById('card'); return card ? { card: getComputedStyle(card).backgroundColor, text: getComputedStyle(card).color, scheme: getComputedStyle(doc.documentElement).colorScheme, engine: typeof doc.defaultView.DarkReader } : null; })()`,
+  })).result;
+  const framed = await until(async () => { const value = await frameLook('menu'); return value && luminance(value.card) < 0.1 ? value : undefined; }, 15000);
+  check(!!framed && luminance(framed.text) > 0.5 && framed.scheme === 'dark', 'a frame of the same site is recolored with the page', framed || (await frameLook('menu')));
+  check(framed?.engine === 'undefined', "the frame's own scripts do not see the engine", framed?.engine);
+  await browser.command({ action: 'exec', tabId: id, code: '(() => { const frame = document.createElement("iframe"); frame.id = "added"; frame.src = "/frame-doc"; document.body.append(frame); return true; })()' });
+  const added = await until(async () => { const value = await frameLook('added'); return value && luminance(value.card) < 0.1 ? value : undefined; }, 15000);
+  check(!!added, 'a frame added after the page turned dark follows it', added || (await frameLook('added')));
+  await browser.command({ action: 'darkSite', tabId: id, value: 'off' });
+  const frameRestored = await until(async () => { const value = await frameLook('menu'); return value && luminance(value.card) > 0.8 ? value : undefined; });
+  check(!!frameRestored, 'turning dark off gives the frame its own colors back', frameRestored || (await frameLook('menu')));
+  await browser.command({ action: 'darkSite', tabId: id, value: null });
 
   // A dark site never shows white while it loads: before the engine runs, the body and the canvas are already dark.
   const slowLoad = browser.command({ action: 'navigate', tabId: id, url: `${origin}/slow` }).catch(() => undefined);

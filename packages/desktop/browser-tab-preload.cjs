@@ -108,6 +108,23 @@ if (chromeBrand) {
 // site's scripts live in another world and cannot reach this function.
 globalThis.__myharnessDarkFetch = (url) => ipcRenderer.invoke('mh-browser:dark-fetch', String(url));
 
+// Frames of the page's own site share this renderer; the host recolors them through this (browser-dark.cjs
+// applyDarkToFrames). The script runs in the frame's own isolated world, unless the small `settled` check finds the
+// frame already in the wanted state. Resolves with the number of frames the script reported success in.
+globalThis.__myharnessDarkFrames = async (tokens, code, settled) => {
+  let count = 0;
+  for (const token of Array.isArray(tokens) ? tokens : []) {
+    let frame = null;
+    try { frame = webFrame.findFrameByToken(String(token)); } catch { frame = null; }
+    if (!frame) continue;
+    try {
+      if (settled && (await frame.executeJavaScriptInIsolatedWorld(999, [{ code: settled }])) === true) continue;
+      if ((await frame.executeJavaScriptInIsolatedWorld(999, [{ code }])) === true) count += 1;
+    } catch { /* the frame went away */ }
+  }
+  return count;
+};
+
 // A page that will be shown dark gets a dark canvas before its first paint, so it never flashes white while it loads;
 // the host says when the engine has taken over (or the page stays in its own colors) and the canvas goes.
 (() => {
