@@ -890,10 +890,16 @@ describe("Web host (real runtime with a faux provider)", () => {
 					"-Command",
 					`$f=[System.IO.File]::Open('${report.replace(/'/g, "''")}','Open','Read','None'); [Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); Start-Sleep -Seconds 60; $f.Close()`,
 				],
-				{ windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
+				// Not in the test's data folder (the current folder here): a folder some process works in cannot be removed.
+				{ cwd: tmpdir(), windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
 			);
-			cleanups.push(() => {
+			// The holder keeps a file of the data folder open, so the folder can be removed only once the process has
+			// really ended, not as soon as it was told to.
+			cleanups.push(async () => {
+				if (holder.exitCode !== null || holder.signalCode !== null) return;
+				const ended = new Promise<void>((resolve) => holder.once("exit", () => resolve()));
 				holder.kill();
+				await ended;
 			});
 			await new Promise<void>((resolve) =>
 				holder.stdout?.on("data", (chunk: Buffer) => chunk.toString().includes("ready") && resolve()),

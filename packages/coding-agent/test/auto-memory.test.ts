@@ -511,7 +511,9 @@ describe("auto memory", () => {
 			const resumedManager = new AutoMemoryManager(options);
 			resumed = resumedManager;
 			await vi.advanceTimersByTimeAsync(1500);
-			await vi.waitFor(() => expect(existsSync(job)).toBe(false));
+			// The job's reads and writes are real file work: on a slow runner they outlast vi.waitFor's default second.
+			// A failed job is only tried again after 30 seconds, which this wait never reaches.
+			await vi.waitFor(() => expect(existsSync(job)).toBe(false), { timeout: 15000, interval: 10 });
 			expect(modelRunner).toHaveBeenCalledOnce();
 			// The manager only marks the queue idle after the job file unlink has
 			// finished, so wait for that state change instead of reading it inline:

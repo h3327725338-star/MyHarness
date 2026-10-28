@@ -180,16 +180,34 @@ describe.skipIf(process.platform !== "win32")("Windows child-process close handl
 
 	it("terminates an inherited background process when the Bash timeout wins", async () => {
 		const pidFile = join(testDir, "streaming-timeout-grandchild.pid");
-		const command = createStreamingInheritedStdioCommand(pidFile);
+		const goFile = join(testDir, "streaming-timeout.go");
+		// The shell exits once goFile appears, which is created shortly before the timeout: the timeout then lands while
+		// the tool still waits (up to a second) for the background writer's output, however slowly node started. A fixed
+		// 0.3 s timeout was sometimes over before node had even written the pid file.
+		const command = `${createStreamingInheritedStdioCommand(pidFile)} && node -e "while (!require('fs').existsSync(process.argv[1])) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)" ${toBashSingleQuotedArg(goFile)}`;
 		const controller = new AbortController();
 		const bashTool = createBashTool(testDir);
+		const timeoutMs = 5_000;
+		const started = Date.now();
 
 		try {
-			await expect(
-				bashTool.execute("test-call-streaming-timeout", { command, timeout: 0.3 }, controller.signal),
-			).rejects.toMatchObject({ code: "BASH_TIMEOUT" });
+			const running = bashTool.execute(
+				"test-call-streaming-timeout",
+				{ command, timeout: timeoutMs / 1000 },
+				controller.signal,
+			);
+			running.catch(() => undefined);
+			while (!existsSync(pidFile) && Date.now() < started + timeoutMs) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			expect(existsSync(pidFile), "the background writer never started").toBe(true);
+			// The tool's timer started before the shell, so before the pid file appeared: ending the shell at least 4 s
+			// after that keeps the timeout inside the second the tool waits for the writer's output.
+			const goAt = Math.max(started + timeoutMs - 200, Date.now() + timeoutMs - 1000);
+			await new Promise((resolve) => setTimeout(resolve, Math.max(0, goAt - Date.now())));
+			writeFileSync(goFile, "");
 
-			expect(existsSync(pidFile)).toBe(true);
+			await expect(running).rejects.toMatchObject({ code: "BASH_TIMEOUT" });
 			const pid = Number.parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
 			expect(Number.isFinite(pid)).toBe(true);
 			if (Number.isFinite(pid)) {
@@ -199,7 +217,7 @@ describe.skipIf(process.platform !== "win32")("Windows child-process close handl
 			controller.abort();
 			await cleanupDetachedChild(pidFile);
 		}
-	});
+	}, 20_000);
 
 	// taskkill's tree walk goes from parent to child and cannot reach a descendant whose parent already exited; the
 	// command's job object still holds it.
