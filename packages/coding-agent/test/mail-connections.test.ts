@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { restrictToolNamesForRole } from "../src/agent/runtime/role.ts";
 import { InMemoryAuthStorageBackend } from "../src/providers/credentials/auth-storage.ts";
 import { MailConnections, type MailProvider } from "../src/providers/credentials/mail-connections.ts";
+import { builtInOAuthApp } from "../src/providers/credentials/oauth-apps.ts";
 import { encodeHeaderWord } from "../src/tools/mail/message.ts";
 import { createMailToolDefinition } from "../src/tools/mail/tool.ts";
 import { allToolNames, createToolDefinition } from "../src/tools/registry.ts";
@@ -14,7 +15,7 @@ const tempRoot = process.env.MYHARNESS_TEMP_DIR ?? tmpdir();
 let dir: string;
 
 beforeEach(() => {
-	for (const name of ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "MICROSOFT_CLIENT_ID", "MICROSOFT_CHINA_CLIENT_ID"])
+	for (const name of ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "MICROSOFT_CLIENT_ID"])
 		vi.stubEnv(`MYHARNESS_${name}`, "");
 	dir = mkdtempSync(join(tempRoot, "mail-test-"));
 });
@@ -23,12 +24,17 @@ afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
 });
 
-function service(responses: Response[] = [], saved?: Record<string, unknown>) {
+/** `builtIn` stands for the apps MyHarness ships; none by default, so a test never depends on this build's. */
+function service(
+	responses: Response[] = [],
+	saved?: Record<string, unknown>,
+	builtIn: ConstructorParameters<typeof MailConnections>[2] = () => undefined,
+) {
 	const storage = new InMemoryAuthStorageBackend();
 	if (saved) storage.withLock(() => ({ result: undefined, next: JSON.stringify(saved) }));
 	const request = vi.fn<typeof fetch>();
 	for (const response of responses) request.mockResolvedValueOnce(response);
-	const connections = new MailConnections(storage, request);
+	const connections = new MailConnections(storage, request, builtIn);
 	const data = () => JSON.parse(storage.withLock((text) => ({ result: text ?? "{}" })));
 	return { storage, request, connections, data };
 }
@@ -126,6 +132,46 @@ describe("mail sign-in", () => {
 		expect(exchange.client_secret).toBeUndefined();
 		expect(exchange.scope).toContain("Mail.ReadWrite");
 		expect(String(request.mock.calls[1][0])).toMatch(/^https:\/\/graph\.microsoft\.com\/v1\.0\/me\?/);
+	});
+
+	it("signs in with MyHarness's own app until the user or the environment sets another one", async () => {
+		const builtInId = "00000000-0000-0000-0000-00000000000b";
+		const { connections, request } = service(
+			[
+				Response.json({ access_token: "m-access", refresh_token: "m-refresh", expires_in: 3600 }),
+				Response.json({ displayName: "Someone", mail: "someone@example.com" }),
+			],
+			undefined,
+			(provider) => (provider === "microsoft" ? { clientId: builtInId } : undefined),
+		);
+		expect(connections.getAppStatus("microsoft")).toEqual({
+			configured: true,
+			clientSecretSet: false,
+			fromEnvironment: false,
+			source: "built-in",
+		});
+		expect(connections.getAppStatus("google")).toMatchObject({ configured: false, source: null });
+		const { authorize, result } = await signIn(connections, "microsoft", (url) => ({
+			code: "auth-code",
+			state: url.searchParams.get("state")!,
+		}));
+		expect(await result).toEqual({ provider: "microsoft", email: "someone@example.com", name: "Someone" });
+		expect(authorize.searchParams.get("client_id")).toBe(builtInId);
+		const exchange = Object.fromEntries(request.mock.calls[0][1]?.body as URLSearchParams);
+		expect(exchange.client_id).toBe(builtInId);
+		expect(exchange.client_secret).toBeUndefined();
+
+		connections.setApp("microsoft", "00000000-0000-0000-0000-000000000001");
+		expect(connections.getAppStatus("microsoft")).toMatchObject({ configured: true, source: "own" });
+		vi.stubEnv("MYHARNESS_MICROSOFT_CLIENT_ID", "00000000-0000-0000-0000-000000000002");
+		expect(connections.getAppStatus("microsoft")).toMatchObject({ source: "environment", fromEnvironment: true });
+	});
+
+	it("keeps Gmail off MyHarness's own Google app until Google verified it for the Gmail scope", () => {
+		expect(builtInOAuthApp("google", "sync")?.clientId).toMatch(/\.apps\.googleusercontent\.com$/);
+		expect(builtInOAuthApp("google", "mail")).toBeUndefined();
+		const connections = new MailConnections(new InMemoryAuthStorageBackend(), vi.fn<typeof fetch>());
+		expect(connections.getAppStatus("google")).toMatchObject({ configured: false, source: null });
 	});
 
 	it("ignores callbacks with another state and reports a refusal", async () => {

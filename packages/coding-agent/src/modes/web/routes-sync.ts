@@ -188,4 +188,20 @@ export function registerSyncRoutes(server: WebHttpServer, sync: SyncService): vo
 			throw new HttpError(409, error instanceof Error ? error.message : String(error));
 		}
 	});
+
+	// A restored Workspace whose folder is held by a listed one is merged into it, never bound beside it.
+	server.route("POST", "/api/sync/merge-workspace", async ({ body }) => {
+		const input = object(body);
+		const workspaceId = optionalString(input.workspaceId, "workspaceId", 120)?.trim();
+		const targetWorkspaceId = optionalString(input.targetWorkspaceId, "targetWorkspaceId", 120)?.trim();
+		const confirmed = optionalBoolean(input.confirmed, "confirmed") === true;
+		if (!workspaceId || !targetWorkspaceId)
+			throw new HttpError(400, "workspaceId and targetWorkspaceId are required");
+		if (!confirmed) throw new HttpError(400, "Merging the workspaces needs an explicit confirmation.");
+		try {
+			return await sync.mergeWorkspace(workspaceId, targetWorkspaceId, confirmed);
+		} catch (error) {
+			throw new HttpError(409, error instanceof Error ? error.message : String(error));
+		}
+	});
 }

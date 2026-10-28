@@ -30,10 +30,11 @@ export const quotePreview = (quote) => clipLine(quoteNote(quote) || quote?.text 
 
 /**
  * One saved quote from a selection: the passage, what the reader wrote about it, and where in the conversation it was
- * picked (so the same words elsewhere are not the one painted). Null for an empty selection.
+ * picked (so the same words elsewhere are not the one painted, nor the one a click on the sent quote leads to: `origin`,
+ * see selectionOrigin). Null for an empty selection.
  */
-export function quoteFromSelection(text, { note = "", hint = 0 } = {}) {
+export function quoteFromSelection(text, { note = "", hint = 0, origin = null } = {}) {
 	const passage = String(text || "").trim();
 	if (!passage) return null;
-	return { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text: passage, note: String(note || "").trim(), hint: Number(hint) || 0 };
+	return { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text: passage, note: String(note || "").trim(), hint: Number(hint) || 0, ...(origin ? { origin } : {}) };
 }

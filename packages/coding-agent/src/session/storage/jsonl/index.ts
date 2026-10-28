@@ -25,7 +25,13 @@ import {
 import { lstat as lstatAsync, opendir, readdir, rmdir as rmdirAsync, stat } from "fs/promises";
 import { basename, dirname, join, resolve } from "path";
 import { StringDecoder } from "string_decoder";
-import { getDataDir, getWorkspaceSessionsDir, parseSessionDataPath } from "../../../config/paths/index.ts";
+import {
+	getDataDir,
+	getSessionDir,
+	getSessionMetadataPath,
+	getWorkspaceSessionsDir,
+	parseSessionDataPath,
+} from "../../../config/paths/index.ts";
 import { getAgentDir } from "../../../config.ts";
 import {
 	findWorkspaceDataContext,
@@ -1751,4 +1757,78 @@ export function relocateSessionFile(options: RelocateSessionFileOptions): { flus
 	}
 	if (attachmentWarnings.length > 0) return { flushed: true, warning: attachmentWarnings.join("；") };
 	return { flushed: true };
+}
+
+/**
+ * Move one structured session, with everything in its folder (attachments, artifacts, notes, images, markers), from one
+ * Workspace of a Data root to another. The folder is renamed after pending writes are flushed; each conversation's
+ * header and the session metadata then name the new Workspace, the attachment manifests point at the moved
+ * conversation and the listing index carries the row over. Undefined when the target Workspace already has a session
+ * of that id: nothing is moved then. The caller makes sure no runtime still writes to the session.
+ */
+export function moveSessionToWorkspace(
+	dataRoot: string,
+	sessionId: string,
+	fromWorkspaceId: string,
+	toWorkspaceId: string,
+): { moved: { from: string; to: string }[]; warnings: string[] } | undefined {
+	const sourceDir = getSessionDir(dataRoot, fromWorkspaceId, sessionId);
+	const targetDir = getSessionDir(dataRoot, toWorkspaceId, sessionId);
+	if (existsSync(targetDir)) return undefined;
+	const conversations = (sessionDir: string): string[] => {
+		try {
+			return readdirSync(join(sessionDir, "conversation"), { withFileTypes: true })
+				.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+				.map((entry) => join(sessionDir, "conversation", entry.name))
+				.sort();
+		} catch {
+			return [];
+		}
+	};
+	const before = conversations(sourceDir);
+	for (const file of before) flushSessionWrites(file);
+	mkdirSync(dirname(targetDir), { recursive: true });
+	renameSync(sourceDir, targetDir);
+	const moved: { from: string; to: string }[] = [];
+	const warnings: string[] = [];
+	for (const from of before) {
+		const to = join(targetDir, "conversation", basename(from));
+		dropPendingSessionWrites(from);
+		invalidateParseCache(from);
+		try {
+			const text = readFileSync(to, "utf8");
+			const end = text.indexOf("\n");
+			const first = end === -1 ? text : text.slice(0, end);
+			const header = JSON.parse(first) as { type?: unknown; workspaceId?: unknown };
+			if (header.type === "session" && header.workspaceId === fromWorkspaceId) {
+				header.workspaceId = toWorkspaceId;
+				const lineEnd = first.endsWith("\r") ? "\r" : "";
+				writeFileAtomicallySync(to, `${JSON.stringify(header)}${lineEnd}${end === -1 ? "" : text.slice(end)}`);
+			}
+		} catch (error) {
+			warnings.push(`会话头未改写：${to}：${error instanceof Error ? error.message : String(error)}`);
+		}
+		invalidateParseCache(to);
+		relocateIndexEntry(from, to);
+		moved.push({ from, to });
+	}
+	const latest = moved.at(-1)?.to;
+	if (latest) {
+		const metadataPath = getSessionMetadataPath(dataRoot, toWorkspaceId, sessionId);
+		try {
+			if (existsSync(metadataPath)) {
+				const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as SessionMetadata;
+				if (metadata.version === 1)
+					writeSessionMetadata(metadataPath, {
+						...metadata,
+						workspaceId: toWorkspaceId,
+						conversationPath: latest,
+					});
+			}
+		} catch (error) {
+			warnings.push(`会话元数据未改写：${metadataPath}：${error instanceof Error ? error.message : String(error)}`);
+		}
+		warnings.push(...rewriteSessionManifestPaths(targetDir, latest));
+	}
+	return { moved, warnings };
 }

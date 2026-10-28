@@ -176,8 +176,16 @@ export function progressText(status, stage) {
 /** A kept-for-review entry is keyed `${kind}:${id}`: show what it is and why it was kept, not the bare key. */
 export function reviewTitle(conflict) {
 	const kind =
-		{ memory: t("Memories"), session: t("Session"), file: t("Files"), workspace: t("Workspace"), browser: t("Built-in browser") }[conflict.kind] ||
-		conflict.kind;
+		{
+			memory: t("Memories"),
+			session: t("Session"),
+			file: t("Files"),
+			workspace: t("Workspace"),
+			browser: t("Built-in browser"),
+			prompt: t("Personal prompt"),
+			draft: t("Draft"),
+			"saved-prompts": t("My prompts"),
+		}[conflict.kind] || conflict.kind;
 	const reason =
 		conflict.reason === "deleted-locally"
 			? t("Deleted here, re-created elsewhere")

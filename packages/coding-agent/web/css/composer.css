@@ -30,8 +30,6 @@ html[data-export-readonly="1"] .transcript img[src^="http"] {
 .main[data-w="s"] .env-status, .main[data-w="xs"] .env-status { display: none; }
 .main[data-w="s"] .composer-env > .env-chip, .main[data-w="s"] .branch-anchor { max-width: 45%; }
 .main[data-w="s"] .branch-chip { max-width: 100%; }
-.main[data-w="s"] .chip { max-width: 150px; }
-.main[data-w="xs"] .chip .chip-text { display: none; }
 .main[data-w="xs"] .composer-env > .env-chip { max-width: calc(100% - 28px); }
 .main[data-w="xs"] .branch-anchor { flex: none; max-width: none; }
 .main[data-w="xs"] .branch-chip { width: 22px; min-width: 22px; padding: 0; justify-content: center; }
@@ -95,15 +93,22 @@ html[data-export-readonly="1"] .transcript img[src^="http"] {
 @keyframes composer-open { from { opacity: 0; transform: scale(0.94) translateY(12px); } to { opacity: 1; transform: none; } }
 @keyframes composer-close { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(0.96) translateY(10px); } }
 @keyframes fade-only-out { from { opacity: 1; } to { opacity: 0; } }
-.composer-bar { display: flex; align-items: center; gap: 4px; }
+.composer-bar { display: flex; align-items: center; gap: 4px; container: composer-bar / inline-size; }
 .composer-bar .icon-btn { width: var(--h-control-sm); height: var(--h-control-sm); }
 
-/* Model and thinking effort: plain text with a small chevron, no decoration in front. */
+/* Model and thinking effort: plain text with a small chevron, no decoration in front. The text never goes away: short of
+   room, the model name gives way first (it ends in an ellipsis, the tooltip has it whole) while the effort level stays
+   whole, and in a very narrow bar the chevrons step aside so the name keeps a few more letters. */
 .chip { display: inline-flex; align-items: center; gap: 4px; height: var(--h-control-sm); padding: 0 6px 0 8px; border-radius: var(--r-md); color: var(--text-2); font-size: var(--fs-md); line-height: 20px; max-width: 320px; transition: background var(--t-fast), color var(--t-fast); }
 .chip:hover, .chip[aria-expanded="true"] { background: var(--surface-hover); color: var(--text); }
 .chip:hover .chev, .chip[aria-expanded="true"] .chev { color: var(--text-2); }
 .chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; }
 .picker-anchor { display: inline-flex; }
+.composer-bar > .model-anchor, .model-anchor > .chip { min-width: 0; }
+@container composer-bar (max-width: 300px) {
+	.composer-bar .chip { padding: 0 6px; }
+	.composer-bar .chip .chev { display: none; }
+}
 
 .send { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--surface-active); color: var(--text-3); transition: background var(--t-fast), color var(--t-fast), transform var(--t-fast); }
 .send.ready { background: var(--accent); color: var(--on-accent); }

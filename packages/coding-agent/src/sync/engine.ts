@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import lockfile from "proper-lockfile";
-import { getSessionConversationDir } from "../config/paths/index.ts";
+import { getSessionConversationDir, getWorkspaceMetadataPath } from "../config/paths/index.ts";
 import { WEB_PREFS_FILE } from "../config/web-prefs.ts";
 import { WorkspaceStore } from "../data/workspace-store.ts";
 import { listMemoryFilesAsync } from "../session/memory/store.ts";
@@ -25,13 +25,32 @@ import {
 	DeferredSessionError,
 	readMemoryText,
 	refreshMemoryCatalog,
+	resolveInsideRoot,
 	writeMergedMemory,
+	writeMergedSessionMetadata,
 } from "./apply.ts";
 import { browserFileOf, browserIdOf, browserProfileDir, mergeBrowserText, readBrowserText } from "./browser-data.ts";
 import { hashFileStream } from "./files/scan.ts";
 import { MemoryBaseStore, memoryBaseDir } from "./memory-bases.ts";
 import { mergeMemoryText } from "./memory-merge.ts";
-import { type HeaderCacheEntry, isLocalOnlyPath, scanLocalEntitiesAsync } from "./scope.ts";
+import {
+	conflictedCopyId,
+	isHandoffId,
+	isSessionMetadataId,
+	mergeDraft,
+	mergeSavedPrompts,
+	mergeText,
+	mergeTextFile,
+	newerFileVersion,
+	pickHandoff,
+	portableSessionMetadata,
+} from "./record-merge.ts";
+import {
+	type HeaderCacheEntry,
+	isLocalOnlyPath,
+	type SessionMetadataCacheEntry,
+	scanLocalEntitiesAsync,
+} from "./scope.ts";
 import type { HashCacheEntry, SyncLocalStore } from "./store.ts";
 import type {
 	DrivePort,
@@ -44,6 +63,7 @@ import type {
 	SyncIssue,
 	SyncManualRun,
 	SyncOperation,
+	SyncPendingBinding,
 	SyncProgress,
 	SyncRecord,
 	SyncSnapshot,
@@ -258,11 +278,15 @@ export class SyncEngine {
 	private readonly options: SyncEngineOptions;
 	private readonly store: SyncLocalStore;
 	private readonly modeState: ModeStateStore;
-	/** Last common content per memory, so a three-way merge does not have to guess the ancestor. */
+	/**
+	 * Last common content per memory, personal prompt, draft and saved prompts list, so a three-way merge does not have
+	 * to guess the ancestor.
+	 */
 	private readonly bases: MemoryBaseStore;
 	/** A merge produced local content the other device has not seen; publish it even though its hash equals the record. */
 	private readonly forceUpload = new Set<string>();
 	private legacyMemoryConflictsMerged = false;
+	private legacyRecordConflictsMerged = false;
 	private config: SyncConfig;
 	private state: SyncState;
 	private drive: DrivePort | null = null;
@@ -278,6 +302,7 @@ export class SyncEngine {
 	private browserWatcher: FSWatcher | undefined;
 	private lockRelease: (() => Promise<void>) | undefined;
 	private headerCache = new Map<string, HeaderCacheEntry>();
+	private sessionMetadataCache = new Map<string, SessionMetadataCacheEntry>();
 	private lastPassEndedAt = 0;
 	private memoryMetadataCache = new Map<string, { signature: string; id: string; name: string }>();
 	private currentScan = new Map<string, ScannedEntity>();
@@ -438,7 +463,7 @@ export class SyncEngine {
 			pendingDownloads: this.pendingDownloads,
 			pendingBytes: this.pendingBytes,
 			conflicts: [...this.state.conflicts].reverse(),
-			pendingBindings: [...this.state.pendingBindings],
+			pendingBindings: this.waitingBindings(),
 			issues: Object.values(this.state.issues ?? {})
 				.sort((a, b) => a.at.localeCompare(b.at))
 				.slice(-MAX_ISSUES),
@@ -532,6 +557,11 @@ export class SyncEngine {
 		await this.runPass("auto");
 	}
 
+	/** Resolves once no pass is in flight, for a local change that must not land in the middle of a scan. */
+	async whenIdle(): Promise<void> {
+		while (this.activeRun) await this.activeRun.catch(() => undefined);
+	}
+
 	/**
 	 * Manual "Download now" (pull only) or "Sync now" (pull + push). Waits for a pass already in flight instead of
 	 * being dropped, then keeps listing Drive until nothing new is left, and retries batches that were skipped while
@@ -589,6 +619,7 @@ export class SyncEngine {
 			const space = await this.drive.ensureSpace();
 			this.adoptSpace(space);
 			await this.resolveMemoryConflictsFromCopies();
+			await this.resolveRecordConflictsFromCopies();
 			await this.resolvePendingPublish();
 			this.phase = mode === "auto" ? "scanning" : "downloading";
 			this.emitStatus();
@@ -985,18 +1016,24 @@ export class SyncEngine {
 		this.saveState();
 	}
 
+	/** Everything of this computer that belongs to the sync scope, as it is on disk now (scope.ts). */
+	private async scanLocal(): Promise<Map<string, ScannedEntity>> {
+		return scanLocalEntitiesAsync({
+			dataRoot: this.options.dataRoot,
+			agentDir: this.options.agentDir,
+			modeState: this.modeState,
+			headerCache: this.headerCache,
+			sessionMetadataCache: this.sessionMetadataCache,
+			memories: await listMemoryFilesAsync(this.options.dataRoot, { metadataCache: this.memoryMetadataCache }),
+		});
+	}
+
 	/**
 	 * The upload queue: everything on disk that differs from the last committed state. Needs no network, so the
 	 * count stays visible while offline and is rebuilt the same way after a restart.
 	 */
 	private async planUploads(): Promise<SyncOperation[]> {
-		const scan = await scanLocalEntitiesAsync({
-			dataRoot: this.options.dataRoot,
-			agentDir: this.options.agentDir,
-			modeState: this.modeState,
-			headerCache: this.headerCache,
-			memories: await listMemoryFilesAsync(this.options.dataRoot, { metadataCache: this.memoryMetadataCache }),
-		});
+		const scan = await this.scanLocal();
 		this.currentScan = scan;
 		const operations: SyncOperation[] = [];
 		let sliceStart = performance.now();
@@ -1163,13 +1200,14 @@ export class SyncEngine {
 				};
 				this.forgetHash(operation.key);
 				this.clearForceUpload(operation.key);
-				if (operation.kind === "memory") this.bases.remove(operation.key);
+				if (tracksBase(operation.kind)) this.bases.remove(operation.key);
 				continue;
 			}
 			this.state.entities[operation.key] = recordFrom(operation);
 			this.clearForceUpload(operation.key);
 			delete this.state.tombstones[operation.key];
 			if (operation.kind === "memory") this.rememberMemoryBase(operation.key, operation.id);
+			else this.rememberScannedBase(operation);
 		}
 		delete this.state.publishing;
 	}
@@ -1248,13 +1286,7 @@ export class SyncEngine {
 		const drive = this.drive;
 		if (!drive) return 0;
 		this.missingObjects.clear();
-		this.currentScan = await scanLocalEntitiesAsync({
-			dataRoot: this.options.dataRoot,
-			agentDir: this.options.agentDir,
-			modeState: this.modeState,
-			headerCache: this.headerCache,
-			memories: await listMemoryFilesAsync(this.options.dataRoot, { metadataCache: this.memoryMetadataCache }),
-		});
+		this.currentScan = await this.scanLocal();
 		const names = await this.listBatches(drive, fullListing);
 		this.listedBatches = names;
 		this.foldApplied();
@@ -2004,6 +2036,7 @@ export class SyncEngine {
 			delete this.state.tombstones[operation.key];
 			this.clearForceUpload(operation.key);
 			if (operation.kind === "memory") this.rememberMemoryBase(operation.key, operation.id);
+			else this.rememberScannedBase(operation);
 			this.hadChanges = true;
 			this.saveState();
 			return undefined;
@@ -2018,7 +2051,8 @@ export class SyncEngine {
 		const concurrent =
 			operation.hash !== local?.hash && Boolean(local) && (drifted || !covers(operation.vector, local!.vector));
 		if (concurrent) {
-			// Concurrent edits: sessions merge, memories merge, every other kind keeps both versions.
+			// Concurrent edits: sessions merge entry by entry, memories, prompts, drafts and files merge (or, for a file
+			// that cannot be merged, keep both versions as files). Only a Workspace identity still keeps a review entry.
 			if (operation.kind === "memory" && data) {
 				if (await this.mergeRemoteMemory(operation, data, local)) return undefined;
 				this.recordConflict(operation, batch, "both-modified", data);
@@ -2027,6 +2061,7 @@ export class SyncEngine {
 			if (operation.kind === "browser" && data && (await this.mergeRemoteBrowser(operation, data, local)))
 				return undefined;
 			if (operation.kind !== "session") {
+				if (data && (await this.mergeRemoteRecord(operation, data, local))) return undefined;
 				this.recordConflict(operation, batch, "both-modified", data);
 				return undefined;
 			}
@@ -2039,6 +2074,7 @@ export class SyncEngine {
 			// Bookmarks and settings both computers had before they first synced are combined, not kept apart.
 			if (operation.kind === "browser" && data && (await this.mergeRemoteBrowser(operation, data, undefined)))
 				return undefined;
+			if (data && (await this.mergeRemoteRecord(operation, data, undefined))) return undefined;
 			this.recordConflict(operation, batch, "both-modified", data);
 			return undefined;
 		}
@@ -2066,7 +2102,7 @@ export class SyncEngine {
 		});
 		delete this.state.tombstones[operation.key];
 		this.currentScan.delete(operation.key);
-		if (operation.kind === "memory" && data) this.bases.set(operation.key, fromUtf8(data));
+		if (tracksBase(operation.kind) && data) this.bases.set(operation.key, fromUtf8(data));
 		this.clearForceUpload(operation.key);
 		if (operation.kind === "workspace") {
 			const binding = outcome.binding;
@@ -2284,7 +2320,7 @@ export class SyncEngine {
 		this.forgetHash(operation.key);
 		this.currentScan.delete(operation.key);
 		this.clearForceUpload(operation.key);
-		if (operation.kind === "memory") this.bases.remove(operation.key);
+		if (tracksBase(operation.kind)) this.bases.remove(operation.key);
 		this.hadChanges = true;
 		this.saveState();
 		return outcome;
@@ -2389,6 +2425,193 @@ export class SyncEngine {
 		if (text !== undefined) this.bases.set(key, text);
 	}
 
+	/** The same for the personal prompt, a draft or the saved prompts, from the scan that produced the version. */
+	private rememberScannedBase(operation: SyncOperation): void {
+		if (!tracksBase(operation.kind)) return;
+		const inline = this.currentScan.get(operation.key)?.inline;
+		if (inline !== undefined && sha256(inline) === operation.hash) this.bases.set(operation.key, inline);
+	}
+
+	/**
+	 * Merge a remote version of the personal prompt, a draft, the saved prompts or a file into the local one
+	 * (record-merge.ts) and publish the result back, as mergeRemoteMemory does. False when this record cannot be merged
+	 * (a Workspace identity, content that is not what its kind expects): the caller keeps a review entry instead.
+	 */
+	private async mergeRemoteRecord(
+		operation: SyncOperation,
+		data: Uint8Array,
+		local: SyncRecord | undefined,
+	): Promise<boolean> {
+		switch (operation.kind) {
+			case "prompt":
+				return this.mergeRemoteInline(operation, data, local, mergeText);
+			case "draft":
+				return this.mergeRemoteInline(operation, data, local, mergeDraft);
+			case "saved-prompts":
+				return this.mergeRemoteInline(operation, data, local, mergeSavedPrompts);
+			case "file":
+				return this.mergeRemoteFile(operation, data, local);
+			default:
+				return false;
+		}
+	}
+
+	private async mergeRemoteInline(
+		operation: SyncOperation,
+		data: Uint8Array,
+		local: SyncRecord | undefined,
+		merge: (base: string | undefined, here: string, there: string) => string | undefined,
+	): Promise<boolean> {
+		const remoteText = fromUtf8(data);
+		const here = this.currentScan.get(operation.key)?.inline;
+		// Nothing here any more (cleared, and that not published yet): the other computer's edit is all that is left.
+		const merged = here === undefined ? remoteText : merge(this.bases.get(operation.key)?.text, here, remoteText);
+		if (merged === undefined) return false;
+		if (merged === remoteText) return this.acceptRemote(operation, data, local);
+		if (merged !== here) {
+			const outcome = await this.applyPut(operation, utf8(merged));
+			if (!outcome.applied) return false;
+			this.currentScan.delete(operation.key);
+		}
+		this.publishMerged(operation, local);
+		return true;
+	}
+
+	/**
+	 * Two versions of one file (record-merge.ts): a chat's session.json merges field by field, a handoff summary keeps
+	 * the one that covers more of the chat, plain text merges line by line, and any other file keeps both versions.
+	 */
+	private async mergeRemoteFile(
+		operation: SyncOperation,
+		data: Uint8Array,
+		local: SyncRecord | undefined,
+	): Promise<boolean> {
+		if (isSessionMetadataId(operation.id)) {
+			const merged = await writeMergedSessionMetadata(this.context(), operation, data);
+			if (!merged) return false;
+			if (merged.portable === portableSessionMetadata(fromUtf8(data))) {
+				// The remote fields won everywhere: that version is in place here, with this computer's paths.
+				this.recordAccepted(operation, local);
+			} else {
+				this.forgetHash(operation.key);
+				this.currentScan.delete(operation.key);
+				this.publishMerged(operation, local);
+			}
+			return true;
+		}
+		const scanned = this.currentScan.get(operation.key);
+		let here: Uint8Array | undefined;
+		try {
+			here = scanned ? await this.readEntityAsync(scanned) : undefined;
+		} catch {
+			here = undefined;
+		}
+		// The file is gone here (deleted, and that not published yet): the other computer's edit is all that is left.
+		if (!here || !scanned) return this.acceptRemote(operation, data, local);
+		if (isHandoffId(operation.id)) {
+			const kept = pickHandoff(fromUtf8(here), fromUtf8(data));
+			if (kept === undefined) return false;
+			if (kept !== fromUtf8(here)) return this.acceptRemote(operation, data, local);
+			this.publishMerged(operation, local);
+			return true;
+		}
+		const text = mergeTextFile(operation.id, here, data);
+		if (text) {
+			const merged = sha256(text);
+			if (merged === operation.hash) return this.acceptRemote(operation, data, local);
+			if (merged !== sha256(here)) {
+				const outcome = await applyFile(this.context(), operation, text);
+				if (!outcome.applied) return false;
+				this.forgetHash(operation.key);
+				this.currentScan.delete(operation.key);
+			}
+			this.publishMerged(operation, local);
+			return true;
+		}
+		return this.keepBothFiles(operation, data, local, here, scanned);
+	}
+
+	/**
+	 * A file that cannot be merged (an image, a PDF, JSON, code): both versions stay. The newer keeps the name, the other
+	 * is written beside it as a conflicted copy; both computers choose alike, so they end up with the same two files.
+	 */
+	private async keepBothFiles(
+		operation: SyncOperation,
+		data: Uint8Array,
+		local: SyncRecord | undefined,
+		here: Uint8Array,
+		scanned: ScannedEntity,
+	): Promise<boolean> {
+		const hereHash = sha256(here);
+		// What the other computer knows of this version: the published record, unless the file changed here since.
+		const hereAt = local?.hash === hereHash ? local.updatedAt : scanned.updatedAt;
+		const newer = newerFileVersion(
+			{ updatedAt: hereAt, hash: hereHash },
+			{ updatedAt: operation.updatedAt, hash: operation.hash },
+		);
+		const copied =
+			newer === "local"
+				? await this.writeConflictedCopy(operation, data, operation.hash)
+				: await this.writeConflictedCopy(operation, here, hereHash);
+		if (!copied) return false;
+		if (newer === "remote") return this.acceptRemote(operation, data, local);
+		this.publishMerged(operation, local);
+		return true;
+	}
+
+	/** Write one version of a file beside it as `<name> (conflicted copy <hash>)`; true once that copy is in place. */
+	private async writeConflictedCopy(operation: SyncOperation, data: Uint8Array, hash: string): Promise<boolean> {
+		const id = conflictedCopyId(operation.id, hash);
+		const target = resolveInsideRoot(this.options.dataRoot, id);
+		if (!target) return false;
+		if (existsSync(target)) {
+			// Written by an earlier pass or received from the other computer; a different file under that name stays.
+			try {
+				return sha256(new Uint8Array(readFileSync(target))) === hash;
+			} catch {
+				return false;
+			}
+		}
+		const copy: SyncOperation = { ...operation, key: `file:${id}`, id, hash, size: data.byteLength };
+		return (await applyFile(this.context(), copy, data)).applied;
+	}
+
+	/** The merge came out as the remote version: apply it like any newer version. */
+	private async acceptRemote(
+		operation: SyncOperation,
+		data: Uint8Array,
+		local: SyncRecord | undefined,
+	): Promise<boolean> {
+		const outcome = await this.applyPut(operation, data);
+		if (!outcome.applied) return false;
+		if (tracksBase(operation.kind)) this.bases.set(operation.key, fromUtf8(data));
+		this.recordAccepted(operation, local);
+		return true;
+	}
+
+	private recordAccepted(operation: SyncOperation, local: SyncRecord | undefined): void {
+		this.state.entities[operation.key] = recordFrom({
+			...operation,
+			vector: mergeVectors(operation.vector, local?.vector ?? {}),
+		});
+		delete this.state.tombstones[operation.key];
+		this.forgetHash(operation.key);
+		this.currentScan.delete(operation.key);
+		this.clearForceUpload(operation.key);
+		this.hadChanges = true;
+		this.saveState();
+	}
+
+	/** This computer holds both versions merged: publish it past both, even when its hash equals the local record's. */
+	private publishMerged(operation: SyncOperation, local: SyncRecord | undefined): void {
+		this.markForceUpload(operation.key);
+		this.state.entities[operation.key] = local
+			? { ...local, vector: mergeVectors(local.vector, operation.vector) }
+			: recordFrom({ ...operation, vector: mergeVectors(operation.vector, {}) });
+		this.hadChanges = true;
+		this.saveState();
+	}
+
 	/** An automatic merge supersedes any older review entry for the same memory. */
 	private clearMemoryConflicts(key: string): void {
 		const remaining = this.state.conflicts.filter(
@@ -2468,14 +2691,133 @@ export class SyncEngine {
 						: "Another device deleted this item, but it changed here. The local version was kept.",
 		};
 		if (remoteCopyPath) conflict.remoteCopyPath = remoteCopyPath;
-		const localPath =
-			conversationPath(this.options.dataRoot, operation) ??
-			(operation.kind === "memory" ? join(this.options.dataRoot, operation.id) : undefined) ??
-			(operation.kind === "browser" && browserFileOf(operation.id)
-				? join(browserProfileDir(this.options.agentDir), browserFileOf(operation.id)!)
-				: undefined);
+		const localPath = this.localPathOf(operation);
 		if (localPath) conflict.localPath = localPath;
 		return conflict;
+	}
+
+	/** Where the local version of a record is, so a review entry names it next to the copy. */
+	private localPathOf(operation: SyncOperation): string | undefined {
+		switch (operation.kind) {
+			case "session":
+				return conversationPath(this.options.dataRoot, operation);
+			case "memory":
+			case "file":
+				return resolveInsideRoot(this.options.dataRoot, operation.id);
+			case "browser": {
+				const file = browserFileOf(operation.id);
+				return file ? join(browserProfileDir(this.options.agentDir), file) : undefined;
+			}
+			case "workspace":
+				return getWorkspaceMetadataPath(this.options.dataRoot, operation.id);
+			case "prompt":
+			case "draft":
+				// The personal prompt and the drafts live in the chat mode state of the agent directory.
+				return join(this.options.agentDir, "chat-mode-state.json");
+			case "saved-prompts":
+				return join(this.options.agentDir, WEB_PREFS_FILE);
+			default:
+				return undefined;
+		}
+	}
+
+	/**
+	 * Older versions kept concurrent edits of the personal prompt, drafts, the saved prompts and files as review entries
+	 * with a recovered copy. Merge each copy into what is here once per start, the way such an edit is merged now, so the
+	 * entries do not stay forever and neither version is lost. An item that is gone here keeps its entry: an old copy
+	 * does not bring back what was deleted since.
+	 */
+	private async resolveRecordConflictsFromCopies(): Promise<void> {
+		if (this.legacyRecordConflictsMerged) return;
+		this.legacyRecordConflictsMerged = true;
+		const conflicts = this.state.conflicts.filter(
+			(conflict) =>
+				conflict.reason === "both-modified" && MERGED_KINDS.has(conflict.kind) && Boolean(conflict.remoteCopyPath),
+		);
+		if (conflicts.length === 0) return;
+		this.currentScan = await this.scanLocal();
+		let changed = false;
+		for (const conflict of conflicts) {
+			let copy: Uint8Array | undefined;
+			try {
+				copy = new Uint8Array(readFileSync(conflict.remoteCopyPath!));
+			} catch {
+				copy = undefined;
+			}
+			// A copy that is gone has nothing left to merge.
+			if (copy && !(await this.mergeCopy(conflict, copy))) continue;
+			this.state.conflicts = this.state.conflicts.filter((item) => item !== conflict);
+			changed = true;
+		}
+		if (changed) {
+			this.hadChanges = true;
+			this.saveState();
+		}
+	}
+
+	/** Merge one recovered copy into the item here; a changed item is published like any local edit. */
+	private async mergeCopy(conflict: SyncConflict, copy: Uint8Array): Promise<boolean> {
+		const id = conflict.key.slice(conflict.kind.length + 1);
+		const record: SyncOperation = {
+			op: "put",
+			key: conflict.key,
+			kind: conflict.kind,
+			id,
+			hash: sha256(copy),
+			size: copy.byteLength,
+			vector: {},
+			updatedAt: conflict.at,
+		};
+		if (!isSafeRecordIdentity(record)) return false;
+		const context = this.context();
+		const scanned = this.currentScan.get(conflict.key);
+		let written = false;
+		if (conflict.kind === "file") {
+			if (isSessionMetadataId(id)) {
+				if (!scanned) return false;
+				const merged = await writeMergedSessionMetadata(context, record, copy);
+				if (!merged) return false;
+				written = merged.changed;
+			} else {
+				let here: Uint8Array | undefined;
+				try {
+					here = scanned ? await this.readEntityAsync(scanned) : undefined;
+				} catch {
+					here = undefined;
+				}
+				if (!here) return false;
+				if (isHandoffId(id)) {
+					const kept = pickHandoff(fromUtf8(here), fromUtf8(copy));
+					if (kept === undefined) return false;
+					if (kept !== fromUtf8(here)) written = (await applyFile(context, record, copy)).applied;
+				} else {
+					const text = mergeTextFile(id, here, copy);
+					if (text) {
+						if (sha256(text) !== sha256(here)) written = (await applyFile(context, record, text)).applied;
+					} else if (
+						sha256(here) !== record.hash &&
+						!(await this.writeConflictedCopy(record, copy, record.hash))
+					) {
+						// Any other file stays as it is here; the copy is written beside it.
+						return false;
+					}
+				}
+			}
+		} else {
+			const here = scanned?.inline;
+			if (here === undefined) return false;
+			const merge =
+				conflict.kind === "prompt" ? mergeText : conflict.kind === "draft" ? mergeDraft : mergeSavedPrompts;
+			const merged = merge(this.bases.get(conflict.key)?.text, here, fromUtf8(copy));
+			if (merged === undefined) return false;
+			if (merged !== here) written = (await this.applyPut(record, utf8(merged))).applied;
+		}
+		if (written) {
+			this.forgetHash(conflict.key);
+			this.currentScan.delete(conflict.key);
+			this.markForceUpload(conflict.key);
+		}
+		return true;
 	}
 
 	/** Bind a restored Workspace to the folder the user picks on this device. */
@@ -2502,6 +2844,25 @@ export class SyncEngine {
 		this.state.pendingBindings = this.state.pendingBindings.filter((item) => item.workspaceId !== workspaceId);
 		this.saveState();
 		this.hadChanges = true;
+	}
+
+	/**
+	 * Restored Workspaces this device still waits on. One removed from every list here, by the user or by its deletion
+	 * on another device, waits for nothing: picking a folder for it would only collide with the Workspace that took its
+	 * place. Its entry stays recorded and is listed again once the Workspace is added back.
+	 */
+	private waitingBindings(): SyncPendingBinding[] {
+		if (this.state.pendingBindings.length === 0) return [];
+		let store: WorkspaceStore;
+		try {
+			store = WorkspaceStore.create(this.options.agentDir, this.options.dataRoot);
+		} catch {
+			return [...this.state.pendingBindings];
+		}
+		return this.state.pendingBindings.filter((item) => {
+			const workspace = store.getById(item.workspaceId);
+			return workspace !== undefined && (workspace.modes ?? ["coding"]).length > 0;
+		});
 	}
 }
 
@@ -2605,6 +2966,14 @@ function parseBatch(data: Uint8Array): SyncBatch | undefined {
 function isLocalOnlyOperation(record: { kind: SyncEntityKind; id: string }): boolean {
 	return record.kind === "file" && isLocalOnlyPath(record.id);
 }
+
+/** Kinds whose last common content is kept for a three-way merge (memory-bases.ts); files merge without one. */
+function tracksBase(kind: SyncEntityKind): boolean {
+	return kind === "memory" || kind === "prompt" || kind === "draft" || kind === "saved-prompts";
+}
+
+/** Kinds that merge in mergeRemoteRecord, so an older version's review entry for them is merged from its copy. */
+const MERGED_KINDS = new Set<SyncEntityKind>(["prompt", "draft", "saved-prompts", "file"]);
 
 function vectorSum(vector: VersionVector | undefined): number {
 	let sum = 0;

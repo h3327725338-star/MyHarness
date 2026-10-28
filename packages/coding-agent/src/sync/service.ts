@@ -1,4 +1,5 @@
 import { WorkspaceStore } from "../data/workspace-store.ts";
+import { builtInOAuthApp, type OAuthAppIdentity } from "../providers/credentials/oauth-apps.ts";
 import { openBrowser } from "../utils/open-browser.ts";
 import { pathIdentityKey } from "../utils/paths.ts";
 import { SyncEngine } from "./engine.ts";
@@ -17,6 +18,7 @@ import {
 	releaseWorkspaceRoot,
 	sourceForOwner,
 } from "./workspace-location.ts";
+import { mergeWorkspaceInto, type WorkspaceMergeResult, workspaceConversations } from "./workspace-merge.ts";
 
 export interface SyncServiceOptions {
 	agentDir: string;
@@ -24,7 +26,14 @@ export interface SyncServiceOptions {
 	isSessionActive?: (workspaceId: string, sessionId: string) => boolean;
 	onStatus?: (status: SyncStatusSnapshot) => void;
 	onApplied?: (info: { workspacesChanged: boolean; sessionsChanged: boolean }) => void;
+	/**
+	 * Close every open chat on these conversation files before they move (a Workspace merge). Throws when one of them
+	 * is running; the merge then does not start.
+	 */
+	releaseSessions?: (files: string[]) => Promise<void>;
 	openExternal?: (url: string) => void;
+	/** MyHarness's own Google OAuth app; tests replace it. Defaults to the one this build ships, if any. */
+	builtInApp?: () => OAuthAppIdentity | undefined;
 }
 
 /**
@@ -62,6 +71,20 @@ export class SyncService {
 		// their protocol state and pending work never share a file.
 		if (credentials?.refreshToken) return `token-${sha256(credentials.refreshToken).slice(0, 16)}`;
 		return "disconnected";
+	}
+
+	private builtInApp(): OAuthAppIdentity | undefined {
+		return this.options.builtInApp ? this.options.builtInApp() : builtInOAuthApp("google", "sync");
+	}
+
+	/** The app the browser sign-in uses: a client set on this device (or by the environment), else MyHarness's own. */
+	private signInApp(): OAuthAppIdentity | undefined {
+		const config = this.store.config();
+		if (config.clientId) {
+			const clientSecret = config.clientSecret || process.env.MYHARNESS_GOOGLE_CLIENT_SECRET;
+			return { clientId: config.clientId, ...(clientSecret ? { clientSecret } : {}) };
+		}
+		return this.builtInApp();
 	}
 
 	private build(credentials: StoredGoogleCredentials | undefined): {
@@ -117,6 +140,7 @@ export class SyncService {
 			phase: this.phase ?? base.phase,
 			lastError: this.phase === "authorizing" ? this.authError : base.lastError,
 			clientConfigured: Boolean(this.store.config().clientId),
+			builtInClient: Boolean(this.builtInApp()),
 			files: this.fileSync.status(),
 		};
 	}
@@ -167,18 +191,17 @@ export class SyncService {
 	/** Start the browser authorization; resolves as soon as the URL exists, completion continues in the background. */
 	async connect(): Promise<{ authUrl: string }> {
 		if (this.connecting) throw new Error("Google authorization is already open in the browser.");
-		const config = this.store.config();
-		if (!config.clientId) throw new Error("Add a Google OAuth desktop client id first.");
+		const app = this.signInApp();
+		if (!app) throw new Error("Add a Google OAuth desktop client id first.");
 		this.connecting = true;
 		const attempt = ++this.authAttempt;
 		this.phase = "authorizing";
 		this.authError = null;
 		this.emit();
 		try {
-			const clientSecret = config.clientSecret || process.env.MYHARNESS_GOOGLE_CLIENT_SECRET;
 			const flow = await beginGoogleAuthorization({
-				clientId: config.clientId,
-				...(clientSecret ? { clientSecret } : {}),
+				clientId: app.clientId,
+				...(app.clientSecret ? { clientSecret: app.clientSecret } : {}),
 				onStatus: (message) => {
 					this.authError = message;
 					this.emit();
@@ -417,6 +440,31 @@ export class SyncService {
 		this.options.onApplied?.({ workspacesChanged: true, sessionsChanged: false });
 		this.emit();
 		return this.status();
+	}
+
+	/**
+	 * Merge a restored Workspace into the Workspace that holds the folder it wants (`workspace-merge.ts`). Only runs
+	 * with the explicit confirmation the dialog collected, and never while one of its chats runs: its open chats are
+	 * released first and the sync pass in flight finishes before anything moves.
+	 */
+	async mergeWorkspace(
+		workspaceId: string,
+		targetWorkspaceId: string,
+		confirmed: boolean,
+	): Promise<{ status: SyncStatusSnapshot; merged: WorkspaceMergeResult }> {
+		if (!confirmed) throw new Error("Merging the workspaces needs an explicit confirmation.");
+		const sessions = workspaceConversations(this.options.dataRoot, workspaceId);
+		if (sessions.some((item) => this.options.isSessionActive?.(workspaceId, item.sessionId))) {
+			throw new Error("A chat of this workspace is still running. Wait for it to finish, then merge.");
+		}
+		await this.options.releaseSessions?.(sessions.flatMap((item) => item.files));
+		await this.engine.whenIdle();
+		const store = WorkspaceStore.create(this.options.agentDir, this.options.dataRoot);
+		const merged = await mergeWorkspaceInto(store, this.options.dataRoot, workspaceId, targetWorkspaceId);
+		this.engine.clearPendingBinding(workspaceId);
+		this.options.onApplied?.({ workspacesChanged: true, sessionsChanged: true });
+		this.emit();
+		return { status: this.status(), merged };
 	}
 
 	async dispose(): Promise<void> {

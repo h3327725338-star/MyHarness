@@ -58,7 +58,7 @@ try{
 
 const switchPage = `
 import {actions} from '/js/actions.js';
-import {activateSlot,loadSlots,loadSnapshot,panelSessionId,refreshSlot,set,setView,state,storedPanel,switchChatMode} from '/js/store.js';
+import {activateSlot,loadSlots,loadSnapshot,panelInstance,panelSessionId,refreshSlot,set,setView,state,storedPanel,switchChatMode} from '/js/store.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const must=(x,m)=>{if(!x)throw Error(m)};
 window.addEventListener('error',event=>{document.body.insertAdjacentHTML('beforeend','<p id="ready">'+event.message+'</p>')});
@@ -133,9 +133,11 @@ try{
  actions.closeWorkspaceTab(two);
  actions.activateWorkspaceTab(one);
  must(state.view.wsClosed.some(t=>t.id===two),'(3) setup: the closed website is not in the closed-tab history');
+ const mounted=panelInstance();
  sessions.A='a-2';
  await refreshSlot('A');
  must(panelSessionId()==='a-2','(3) the panel stayed with the replaced session: '+panelSessionId());
+ must(panelInstance()===mounted,'(3) the panel on screen was mounted again when the new session took it over');
  must(ids(state.view).includes(one)&&state.view.wsActive===one,'(3) the new session lost the live website tab: '+show(ids(state.view)));
  const original=storedPanel('a-1');
  const copy=original.wsTabs.find(t=>t.type==='browser');

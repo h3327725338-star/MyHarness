@@ -61,6 +61,19 @@ synthetic 值（如 `test-secret`、`example.invalid`、`/home/user`）不会被
 真实凭据；新 fixture 也应保持这种可识别的占位形式。审计不是完整的商业
 Secret Scanner，未知的个人信息、第三方 attribution 和新类型凭据仍需人工复核。
 
+## 复核过的公开值
+
+少数看起来像凭据的值是有意公开的。`scripts/release-audit.mjs` 的 `REVIEWED_PUBLIC_VALUES`
+按“文件路径 + 值的 SHA-256”逐个豁免：只豁免这个文件里的这一个值，同一文件里别的值、
+或者值换了，仍会被报出。每加一条都要在下表写明理由；值轮换时同步更新 SHA-256。
+
+| 文件 | 值 | 为什么可以公开 |
+| --- | --- | --- |
+| `packages/coding-agent/src/providers/credentials/oauth-apps.ts` | MyHarness 自己的 Google OAuth 桌面客户端（“MyHarness Desktop”）的 client secret | Google 把安装在用户电脑上的应用的 client secret 视为非机密（应用无法保密），但换取令牌时仍要求提供；没有它，用户就不能只登录 Google 就开始同步。它不能单独访问任何用户的数据：访问还需要该用户授权后保存在其本机的令牌。 |
+
+GitHub 的 secret scanning 也识别 Google OAuth 客户端 ID 和 secret。推送含这个值的提交
+被 push protection 拦下时，维护者确认是上表这条复核过的值后，在 GitHub 给出的页面放行。
+
 ## 匿名隐私事故登记
 
 这里记录类别、影响和检测方法，不记录真实用户名、邮箱、token 或完整路径。

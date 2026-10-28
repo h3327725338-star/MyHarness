@@ -12,6 +12,9 @@
  * - without a base, the common lines act as anchors and each differing block is kept, ordered by its content hash;
  * - a block that is already contained in the other side is not repeated, so "the more detailed version" wins;
  * - nothing is ever dropped silently: when both sides changed the same region, both regions survive.
+ *
+ * The plain-text part (`mergePlainText`) also merges the personal prompt, drafts, saved prompts and text files
+ * (record-merge.ts).
  */
 
 /** Above this many line pairs the LCS table is skipped; a huge memory falls back to the anchored union below. */
@@ -65,10 +68,35 @@ function sameLines(left: string[], right: string[]): boolean {
 	return left.length === right.length && left.every((line, index) => line === right[index]);
 }
 
+/** Whether every line of `part` with content is somewhere in `container`; blank or whitespace-only lines do not count. */
 function containsLines(container: string[], part: string[]): boolean {
 	if (part.length === 0) return true;
 	const available = new Set(container);
-	return part.every((line) => line === "" || available.has(line));
+	return part.every((line) => line.trim() === "" || available.has(line));
+}
+
+/** The two sides in one fixed order (content hash, then text), so both devices treat them alike. */
+function ordered(left: string[], right: string[]): [string[], string[]] {
+	const leftKey = orderKey(left);
+	const rightKey = orderKey(right);
+	if (leftKey !== rightKey) return leftKey < rightKey ? [left, right] : [right, left];
+	return left.join("\n") <= right.join("\n") ? [left, right] : [right, left];
+}
+
+/**
+ * The side that already holds every line of the other one, if any. When each holds the other (the same lines in
+ * another order or spacing), the longer one wins, then the first in order, never "whichever is local".
+ */
+function wider(local: string[], remote: string[]): string[] | undefined {
+	const localHasRemote = containsLines(local, remote);
+	const remoteHasLocal = containsLines(remote, local);
+	if (localHasRemote && remoteHasLocal) {
+		if (local.length !== remote.length) return local.length > remote.length ? local : remote;
+		return ordered(local, remote)[0];
+	}
+	if (localHasRemote) return local;
+	if (remoteHasLocal) return remote;
+	return undefined;
 }
 
 /**
@@ -137,11 +165,10 @@ function resolveConflict(base: string[], local: string[], remote: string[]): str
 	if (sameLines(local, remote)) return local;
 	if (sameLines(local, base)) return remote;
 	if (sameLines(remote, base)) return local;
-	if (containsLines(local, remote)) return local;
-	if (containsLines(remote, local)) return remote;
-	const localKey = orderKey(local);
-	const remoteKey = orderKey(remote);
-	return localKey <= remoteKey ? [...local, ...remote] : [...remote, ...local];
+	const kept = wider(local, remote);
+	if (kept) return kept;
+	const [first, second] = ordered(local, remote);
+	return [...first, ...second];
 }
 
 /** Three-way merge over the common base. */
@@ -202,16 +229,18 @@ function mergeWithBase(base: string[], local: string[], remote: string[]): strin
  * No common base: use the longest common subsequence as anchors, keep each differing block from both sides, and order
  * the two blocks of one gap by hash. The result is symmetric in the two inputs, so both devices converge.
  */
-function mergeWithoutBase(local: string[], remote: string[]): string[] {
-	if (sameLines(local, remote)) return local;
-	if (containsLines(local, remote)) return local;
-	if (containsLines(remote, local)) return remote;
-	// A diff of local -> remote gives both the common anchors and the blocks that differ; walking it in order keeps
-	// the document structure and treats the two sides symmetrically.
+function mergeWithoutBase(left: string[], right: string[]): string[] {
+	if (sameLines(left, right)) return left;
+	const kept = wider(left, right);
+	if (kept) return kept;
+	// A diff of one side to the other gives both the common anchors and the blocks that differ; walking it in order
+	// keeps the document structure. Both devices diff in the same fixed order: where several alignments are equally
+	// long, the one picked must not depend on which side is local.
+	const [local, remote] = ordered(left, right);
 	const hunks = diffHunks(local, remote);
 	if (!hunks) {
 		// Too large for a table: keep both documents, ordered deterministically.
-		return orderKey(local) <= orderKey(remote) ? [...local, ...remote] : [...remote, ...local];
+		return [...local, ...remote];
 	}
 	const result: string[] = [];
 	let localIndex = 0;
@@ -350,14 +379,23 @@ function mergeFrontmatter(base: string[] | undefined, local: string[], remote: s
 	return result;
 }
 
-function mergePlainText(baseText: string | undefined, localText: string, remoteText: string): MemoryMergeResult {
+/** Line merge of plain text: three-way over `baseText` when there is one, otherwise the anchored union. */
+export function mergePlainText(baseText: string | undefined, localText: string, remoteText: string): MemoryMergeResult {
 	const local = splitLines(localText);
 	const remote = splitLines(remoteText);
 	const base = baseText === undefined ? undefined : splitLines(baseText);
-	const trailing = local.trailing || remote.trailing;
 	const lines = base
 		? mergeWithBase(base.lines, local.lines, remote.lines)
 		: mergeWithoutBase(local.lines, remote.lines);
+	// A side that already held everything keeps its own last line break, so that alone is no change to write.
+	const asLocal = sameLines(lines, local.lines);
+	const asRemote = sameLines(lines, remote.lines);
+	const trailing =
+		asLocal && !asRemote
+			? local.trailing
+			: asRemote && !asLocal
+				? remote.trailing
+				: local.trailing || remote.trailing;
 	const text = joinLines(lines, trailing);
 	return { text, changed: text !== localText };
 }

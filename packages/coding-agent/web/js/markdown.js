@@ -166,6 +166,28 @@ export function renderMarkdown(text, { breaks = false } = {}) {
 /** Text at or above this length is parsed asynchronously so a long answer or reasoning never blocks a frame. */
 const LARGE_TEXT = 16000;
 
+const cacheKey = (text, breaks) => `${breaks ? "breaks" : "normal"}\0${text}`;
+/**
+ * Parsed HTML of large texts, apart from the cache above: every short message rendered after it (another chat, a
+ * streaming answer) pushed a long answer out of that one, and a chat that came back showed its long answers as plain
+ * text again until they were parsed once more, with another height, moving the reader's place. Least recently used
+ * goes first.
+ */
+const largeCache = new Map();
+const LARGE_CACHE_MAX = 32;
+function parsedLarge(key) {
+	const html = largeCache.get(key);
+	if (html === undefined) return undefined;
+	largeCache.delete(key);
+	largeCache.set(key, html);
+	return html;
+}
+function keepLarge(key, html) {
+	largeCache.delete(key);
+	largeCache.set(key, html);
+	if (largeCache.size > LARGE_CACHE_MAX) largeCache.delete(largeCache.keys().next().value);
+}
+
 /** Plain-text HTML for the part of a large text that has no parsed HTML yet: same font, size and wrapping as the
  *  parsed blocks, only the Markdown markers are still literal. Never a monospace, non-wrapping placeholder. Each
  *  blank-line-separated block is its own paragraph with the parsed paragraphs' spacing: one wrapped block drew every
@@ -187,8 +209,8 @@ const isDefinition = (token) => token.type === "def";
  * per token, or null when this pass was superseded before it finished.
  */
 export async function renderMarkdownAsync(text, { breaks = false, previous = null } = {}, cancelled = () => false) {
-	const key = `${breaks ? "breaks" : "normal"}\0${text}`;
-	const cached = cache.get(key);
+	const key = cacheKey(text, breaks);
+	const cached = parsedLarge(key) ?? cache.get(key);
 	if (cached !== undefined) return { text, breaks, html: cached, tokens: null, chunks: null };
 	await yieldToMain();
 	const md = getEngine();
@@ -219,8 +241,11 @@ export async function renderMarkdownAsync(text, { breaks = false, previous = nul
 		}
 	} catch { return { text, breaks, html: pendingHtml(text), tokens: null, chunks: null }; }
 	const html = chunks.join("");
-	cache.set(key, html);
-	if (cache.size > 300) cache.delete(cache.keys().next().value);
+	if (text.length >= LARGE_TEXT) keepLarge(key, html);
+	else {
+		cache.set(key, html);
+		if (cache.size > 300) cache.delete(cache.keys().next().value);
+	}
 	return { text, breaks, html, tokens, chunks };
 }
 
@@ -288,8 +313,10 @@ export class Markdown extends Component {
 			content = renderMarkdown(source, { breaks });
 			this.small = { text: source, breaks, html: content };
 		} else {
-			const base = this.reusable(source, breaks);
-			content = base ? base.html + pendingHtml(source.slice(base.text.length)) : pendingHtml(source);
+			// Parsed before (the chat came back, the turn mounted again): the finished blocks at once, not the plain text.
+			const parsed = parsedLarge(cacheKey(source, breaks));
+			const base = parsed === undefined ? this.reusable(source, breaks) : null;
+			content = parsed ?? (base ? base.html + pendingHtml(source.slice(base.text.length)) : pendingHtml(source));
 		}
 		return h("div", { class: `md ${cls || ""}`, dangerouslySetInnerHTML: { __html: content }, onClick: this.onClick, onContextMenu: this.onContextMenu, ref: (node) => { this.root = node; } });
 	}

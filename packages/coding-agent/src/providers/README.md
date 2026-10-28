@@ -48,6 +48,7 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 | `value-resolution.ts` | 配置值解析：字面量、环境变量、`!命令` |
 | `account-connections.ts` | `AccountConnections`：GitHub Connect（设备码登录），存 `account-connections.json` |
 | `mail-connections.ts` | `MailConnections`：Mail Connect（Gmail、Outlook；授权码 + PKCE + 本机回环重定向），存 `mail-connections.json` |
+| `oauth-apps.ts` | `builtInOAuthApp(provider, use)`：MyHarness 自带的 OAuth 应用及其用途（`sync` / `mail`），用户没有配置自己的应用时使用；当前只有 Google 应用，只用于 Google 云端硬盘同步（`sync/service.ts`），Gmail 和 Outlook 不使用自带应用 |
 | `index.ts` | credentials/ 出口 |
 | `web-search-keys.ts` | `WebSearchApiKeys`：搜索引擎 API Key 的独立私有文件 |
 

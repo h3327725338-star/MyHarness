@@ -10,7 +10,7 @@
 // The page could post such reports itself, so their bubble stays inside the frame and needs the user's input there.
 import { html, useEffect, useMemo, useRef, useState, Icon } from "./ui.js";
 import { actions } from "./actions.js";
-import { clearDraftPreview, selectionHint, setDraftPreview } from "./quote-highlight.js";
+import { clearDraftPreview, selectionHint, selectionOrigin, setDraftPreview } from "./quote-highlight.js";
 import { api, post, state } from "./store.js";
 import { t } from "./i18n.js";
 import { TranslateCard, TRANSLATE_LEAVE_MS, animateLeave } from "./translate-card.js";
@@ -228,7 +228,8 @@ export function FloatingQuoteToolbar() {
 		// An answer that is still streaming re-renders its text as it grows, which can take the selection away before the
 		// bubble is pressed: the bubble keeps what it offers (and, for a quote, where in the conversation it was).
 		const streaming = !!elementOf(sel.anchorNode)?.closest(".final.streaming");
-		const picked = { text, hint: streaming && quotable ? selectionHint(range) : null };
+		const keep = streaming && quotable;
+		const picked = { text, hint: keep ? selectionHint(range) : null, origin: keep ? selectionOrigin(range, text) : null };
 		if (freshRelease()) {
 			setBar({ ...placeBubbleAtPoint(release.current.x, release.current.y, width), quotable, picked });
 		} else {
@@ -241,8 +242,8 @@ export function FloatingQuoteToolbar() {
 	const selected = () => {
 		const sel = window.getSelection();
 		const text = sel?.toString().trim();
-		if (text && sel.rangeCount) return { text, range: sel.getRangeAt(0).cloneRange(), hint: null };
-		if (bar?.picked?.text) return { text: bar.picked.text, range: null, hint: bar.picked.hint };
+		if (text && sel.rangeCount) return { text, range: sel.getRangeAt(0).cloneRange(), hint: null, origin: null };
+		if (bar?.picked?.text) return { text: bar.picked.text, range: null, hint: bar.picked.hint, origin: bar.picked.origin };
 		return null;
 	};
 
@@ -397,7 +398,8 @@ export function FloatingQuoteToolbar() {
 		if (range) anchor.current = range;
 		// Remember where in the conversation it was picked: the same words can appear more than once.
 		const hint = range ? selectionHint(range) : (picked.hint ?? 0);
-		setDraft({ text, hint });
+		const origin = range ? selectionOrigin(range, text) : (picked.origin ?? null);
+		setDraft({ text, hint, origin });
 		setBar(null);
 		// Light the passage now: the native selection is about to go away when the box takes focus.
 		setDraftPreview(text, hint);
@@ -466,7 +468,7 @@ export function FloatingQuoteToolbar() {
 
 	const save = () => {
 		if (!draft) return;
-		actions.addQuote(draft.text, { note: note.trim(), files, hint: draft.hint });
+		actions.addQuote(draft.text, { note: note.trim(), files, hint: draft.hint, origin: draft.origin });
 		// Swap the draft light for the saved card's light without a gap: the composer paints
 		// the saved quote on the next tick, so the preview stays a moment longer.
 		setBar(null);

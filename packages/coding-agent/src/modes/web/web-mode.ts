@@ -236,6 +236,17 @@ export async function runWebMode(
 						slot.session.sessionManager.getDataRoot() === runtimeHost.session.sessionManager.getDataRoot() &&
 						(!slot.session.isIdle || slot.completionActive),
 				),
+		// A Workspace merge moves chat files on disk: no slot may keep one of them open and go on writing to the old path.
+		releaseSessions: async (files) => {
+			const slots = files.flatMap((file) => hub.slotsShowing(file));
+			if (slots.some((slot) => !slot.session.isIdle || slot.completionActive || slot.gitTask)) {
+				throw new Error("A chat of this workspace is still running. Stop it first.");
+			}
+			for (const slot of slots) {
+				if (hub.all().length > 1) await hub.closeSlot(slot);
+				else if ((await slot.runtimeHost.newSession()).cancelled) throw new Error("Cancelled.");
+			}
+		},
 		onStatus: (status) => server.broadcast("sync_status", status),
 		onApplied: () => {
 			// Sync writes the Workspace registry through its own store; the hub must re-read it before anyone saves

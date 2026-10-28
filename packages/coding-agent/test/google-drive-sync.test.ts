@@ -11,16 +11,27 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { basename, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readWebPrefs, writeWebPrefs } from "../src/config/web-prefs.ts";
 import { WorkspaceStore } from "../src/data/workspace-store.ts";
 import { ModeStateStore } from "../src/session/mode-state.ts";
+import { readSessionHeader } from "../src/session/storage/jsonl/index.ts";
 import { mergeBrowserText } from "../src/sync/browser-data.ts";
 import { detectExternalSyncRisk, SyncEngine } from "../src/sync/engine.ts";
+import {
+	mergeDraft,
+	mergeSavedPrompts,
+	mergeText,
+	mergeTextFile,
+	newerFileVersion,
+	pickHandoff,
+	sessionMetadataFile,
+} from "../src/sync/record-merge.ts";
 import { SyncService } from "../src/sync/service.ts";
 import { SyncLocalStore } from "../src/sync/store.ts";
 import type { DrivePort, RemoteFile, RemoteFolder } from "../src/sync/types.ts";
+import { mergeWorkspaceInto } from "../src/sync/workspace-merge.ts";
 import { resolveCanonicalPath } from "../src/utils/paths.ts";
 
 class FakeDrive implements DrivePort {
@@ -158,6 +169,35 @@ function writeSession(root: string, workspaceId = "ws1", sessionId = "s1"): stri
 		message: { role: "user", content: [{ type: "text", text: "hello" }] },
 	};
 	writeFileSync(file, `${JSON.stringify(header)}\n${JSON.stringify(entry)}\n`);
+	return file;
+}
+
+function writeWorkspaceMemory(root: string, workspaceId: string, name: string, text: string): string {
+	const folder = join(root, "workspaces", workspaceId, "memory");
+	mkdirSync(folder, { recursive: true });
+	const file = join(folder, name);
+	writeFileSync(
+		file,
+		`---\nid: workspace/${name.replace(/\.md$/u, "")}\nname: ${name}\ndescription: shared\ntype: project\nscope: workspace\ncreatedAt: 2026-01-01T00:00:00.000Z\nupdatedAt: 2026-01-01T00:00:00.000Z\n---\n\n${text}\n`,
+	);
+	return file;
+}
+
+/** A chat's metadata/session.json as the app writes it (`writeSessionMetadata`), with this computer's paths. */
+function writeChatMetadata(root: string, cwd: string, updatedAt: string, conversationPath: string): string {
+	const folder = join(root, "workspaces", "ws1", "sessions", "s1", "metadata");
+	mkdirSync(folder, { recursive: true });
+	const file = join(folder, "session.json");
+	const metadata = {
+		version: 1,
+		sessionId: "s1",
+		workspaceId: "ws1",
+		cwd,
+		createdAt: "2026-01-01T00:00:00.000Z",
+		updatedAt,
+		conversationPath,
+	};
+	writeFileSync(file, `${JSON.stringify(metadata, null, 2)}\n`);
 	return file;
 }
 
@@ -465,6 +505,100 @@ describe("Google Drive sync engine", () => {
 		// The binding is remembered locally, so a later pass keeps the chosen folder.
 		await b.engine.runOnce();
 		expect(WorkspaceStore.create(b.agentDir, b.dataRoot).getById("ws1")!.rootPath).toBe(chosen);
+	});
+
+	it("stops asking for a folder once the restored Workspace is removed from every list, here or on the other device", async () => {
+		const drive = new FakeDrive();
+		const a = device(drive, "desktop", "device-a");
+		const b = device(drive, "laptop", "device-b");
+		writeWorkspace(a.dataRoot);
+		await sync(a, b);
+		const placeholder = WorkspaceStore.create(b.agentDir, b.dataRoot).getById("ws1")!.rootPath;
+		expect(b.engine.status().pendingBindings.map((item) => item.workspaceId)).toEqual(["ws1"]);
+
+		expect(WorkspaceStore.create(b.agentDir, b.dataRoot).remove("ws1", "general")).toBe(true);
+		expect(b.engine.status().pendingBindings).toHaveLength(0);
+		// Added back, it waits for its folder again.
+		expect(WorkspaceStore.create(b.agentDir, b.dataRoot).add(placeholder, b.root, true, "general").ok).toBe(true);
+		expect(b.engine.status().pendingBindings.map((item) => item.workspaceId)).toEqual(["ws1"]);
+
+		// Removed on the device that created it: the removal reaches this device and the request goes with it.
+		expect(WorkspaceStore.create(a.agentDir, a.dataRoot).remove("ws1", "general")).toBe(true);
+		await sync(a, b);
+		expect(WorkspaceStore.create(b.agentDir, b.dataRoot).getById("ws1")?.modes).toEqual([]);
+		expect(b.engine.status().pendingBindings).toHaveLength(0);
+	});
+
+	it("merges a restored Workspace into the one that holds its folder, and the other device follows", async () => {
+		const drive = new FakeDrive();
+		const a = device(drive, "desktop", "device-a");
+		const b = device(drive, "laptop", "device-b");
+		const chat = writeSession(a.dataRoot, "ws-a", "s1");
+		const memory = writeWorkspaceMemory(a.dataRoot, "ws-a", "course-plan.md", "planned on the desktop");
+		writeSession(b.dataRoot, "ws-b", "s2");
+		await sync(a, b, a);
+
+		const merged = await mergeWorkspaceInto(
+			WorkspaceStore.create(b.agentDir, b.dataRoot),
+			b.dataRoot,
+			"ws-a",
+			"ws-b",
+		);
+		expect(merged).toMatchObject({ chats: 1, memories: 1, kept: [] });
+		const moved = join(b.dataRoot, "workspaces", "ws-b", "sessions", "s1", "conversation", basename(chat));
+		expect(readSessionHeader(moved)?.workspaceId).toBe("ws-b");
+		expect(readFileSync(moved, "utf8")).toContain("hello");
+		expect(existsSync(join(b.dataRoot, "workspaces", "ws-a", "sessions", "s1"))).toBe(false);
+		expect(existsSync(join(b.dataRoot, "workspaces", "ws-b", "memory", "course-plan.md"))).toBe(true);
+		expect(WorkspaceStore.create(b.agentDir, b.dataRoot).getById("ws-a")?.modes).toEqual([]);
+
+		await sync(b, a);
+		// The desktop ends up with the same single Workspace: the chat and the memory moved, the merged one left its lists.
+		const arrived = join(a.dataRoot, "workspaces", "ws-b", "sessions", "s1", "conversation", basename(chat));
+		expect(readFileSync(arrived, "utf8")).toBe(readFileSync(moved, "utf8"));
+		expect(existsSync(chat)).toBe(false);
+		expect(existsSync(join(a.dataRoot, "workspaces", "ws-b", "memory", "course-plan.md"))).toBe(true);
+		expect(existsSync(memory)).toBe(false);
+		expect(WorkspaceStore.create(a.agentDir, a.dataRoot).getById("ws-a")?.modes).toEqual([]);
+		expect(a.engine.status().conflicts).toHaveLength(0);
+		expect(b.engine.status().conflicts).toHaveLength(0);
+	});
+
+	it("merges only with the confirmation and never while a chat of the merged Workspace runs", async () => {
+		const root = mkdtempSync(join(tmpdir(), "myharness-merge-"));
+		roots.push(root);
+		const agentDir = join(root, "agent");
+		const dataRoot = join(root, "data");
+		mkdirSync(agentDir, { recursive: true });
+		const chat = writeSession(dataRoot, "ws-a", "s1");
+		writeWorkspace(dataRoot, "ws-b", join(root, "folder-b"));
+		const released: string[][] = [];
+		const service = (running: boolean) =>
+			SyncService.create({
+				agentDir,
+				dataRoot,
+				isSessionActive: (workspaceId, sessionId) => running && workspaceId === "ws-a" && sessionId === "s1",
+				releaseSessions: async (files) => {
+					released.push(files);
+				},
+			});
+
+		const busy = service(true);
+		await expect(busy.mergeWorkspace("ws-a", "ws-b", false)).rejects.toThrow("confirmation");
+		await expect(busy.mergeWorkspace("ws-a", "ws-b", true)).rejects.toThrow("still running");
+		await busy.dispose();
+		expect(released).toEqual([]);
+		expect(existsSync(chat)).toBe(true);
+
+		const idle = service(false);
+		const { merged } = await idle.mergeWorkspace("ws-a", "ws-b", true);
+		await idle.dispose();
+		// The open chat on the old file is released before the file moves.
+		expect(released).toEqual([[chat]]);
+		expect(merged.chats).toBe(1);
+		expect(existsSync(join(dataRoot, "workspaces", "ws-b", "sessions", "s1", "conversation", basename(chat)))).toBe(
+			true,
+		);
 	});
 
 	it("merges a memory conflict left by an older version instead of keeping the warning forever", async () => {
@@ -864,6 +998,264 @@ describe("Google Drive sync engine", () => {
 		expect(prefsOf(b.agentDir).prefs.theme).toBe("light");
 	});
 
+	describe("edits made on both computers", () => {
+		const converged = async (drive: FakeDrive, a: Device, b: Device) => {
+			expect(a.engine.status().conflicts).toHaveLength(0);
+			expect(b.engine.status().conflicts).toHaveLength(0);
+			// Nothing left to publish: two computers that kept rewriting each other's version would add batches here.
+			const batches = drive.batchNames().length;
+			await sync(a, b);
+			await sync(a, b);
+			expect(drive.batchNames()).toHaveLength(batches);
+		};
+
+		it("merges both edits of the personal prompt, so both computers end with the same text", async () => {
+			const drive = new FakeDrive();
+			const a = device(drive, "desktop", "device-a");
+			const b = device(drive, "laptop", "device-b");
+			const prompt = (second: string, fourth: string) => `Answer in Chinese.\n${second}\nUse lists.\n${fourth}`;
+			new ModeStateStore(a.agentDir).setPersonalPrompt("general", prompt("Be brief.", "Cite sources."));
+			await sync(a, b);
+			new ModeStateStore(a.agentDir).setPersonalPrompt("general", prompt("Be brief and direct.", "Cite sources."));
+			new ModeStateStore(b.agentDir).setPersonalPrompt("general", prompt("Be brief.", "Cite sources with links."));
+
+			await sync(a, b);
+			await sync(a, b);
+
+			// Each computer changed another line of the version both had: both changes are in the result.
+			const desktop = new ModeStateStore(a.agentDir).getPersonalPrompt("general");
+			expect(desktop).toBe(prompt("Be brief and direct.", "Cite sources with links."));
+			expect(new ModeStateStore(b.agentDir).getPersonalPrompt("general")).toBe(desktop);
+			await converged(drive, a, b);
+
+			// Both changed the same line: neither version of it is dropped.
+			new ModeStateStore(a.agentDir).setPersonalPrompt("general", prompt("Be brief and direct.", "Cite: desktop"));
+			new ModeStateStore(b.agentDir).setPersonalPrompt("general", prompt("Be brief and direct.", "Cite: laptop"));
+			await sync(a, b);
+			await sync(a, b);
+			const both = new ModeStateStore(a.agentDir).getPersonalPrompt("general");
+			expect(both).toContain("Cite: desktop");
+			expect(both).toContain("Cite: laptop");
+			expect(new ModeStateStore(b.agentDir).getPersonalPrompt("general")).toBe(both);
+			await converged(drive, a, b);
+		});
+
+		it("merges a draft and the saved prompts both computers changed instead of keeping one", async () => {
+			const drive = new FakeDrive();
+			const a = device(drive, "desktop", "device-a");
+			const b = device(drive, "laptop", "device-b");
+			writeSession(a.dataRoot);
+			new ModeStateStore(a.agentDir).setDraft("general", "s1", { text: "Plan:", attachments: [] });
+			writeWebPrefs(a.agentDir, {
+				prefs: { savedPrompts: [{ title: "Review", text: "Review this" }] },
+				updatedAt: 1,
+			});
+			await sync(a, b);
+
+			new ModeStateStore(a.agentDir).setDraft("general", "s1", {
+				text: "Plan:\n- desktop step",
+				attachments: [{ id: "f1", name: "desk.png" }],
+			});
+			new ModeStateStore(b.agentDir).setDraft("general", "s1", {
+				text: "Plan:\n- laptop step",
+				attachments: [{ id: "f2", name: "lap.png" }],
+			});
+			const review = { title: "Review", text: "Review this" };
+			writeWebPrefs(a.agentDir, {
+				prefs: { savedPrompts: [review, { title: "Desk", text: "From the desktop" }] },
+				updatedAt: Date.now(),
+			});
+			writeWebPrefs(b.agentDir, {
+				prefs: {
+					...readWebPrefs(b.agentDir)!.prefs,
+					savedPrompts: [review, { title: "Lap", text: "From the laptop" }],
+				},
+				updatedAt: Date.now(),
+			});
+
+			await sync(a, b);
+			await sync(a, b);
+
+			const draft = new ModeStateStore(a.agentDir).get("general").drafts.s1!;
+			expect(draft.text).toContain("- desktop step");
+			expect(draft.text).toContain("- laptop step");
+			expect(draft.attachments.map((file) => file.id).sort()).toEqual(["f1", "f2"]);
+			expect(new ModeStateStore(b.agentDir).get("general").drafts.s1).toEqual(draft);
+			const saved = readWebPrefs(a.agentDir)!.prefs.savedPrompts as { title: string }[];
+			expect(saved.map((prompt) => prompt.title).sort()).toEqual(["Desk", "Lap", "Review"]);
+			expect(readWebPrefs(b.agentDir)!.prefs.savedPrompts).toEqual(saved);
+			await converged(drive, a, b);
+		});
+
+		it("keeps each computer's own paths in a chat's session.json and merges the rest", async () => {
+			const drive = new FakeDrive();
+			const a = device(drive, "desktop", "device-a");
+			const b = device(drive, "laptop", "device-b");
+			const chat = writeSession(a.dataRoot);
+			const onDesktop = writeChatMetadata(a.dataRoot, "C:\\Users\\desk\\Study", "2026-01-02T00:00:00.000Z", chat);
+			await sync(a, b);
+			const onLaptop = join(b.dataRoot, "workspaces", "ws1", "sessions", "s1", "metadata", "session.json");
+			const laptopChat = join(b.dataRoot, "workspaces", "ws1", "sessions", "s1", "conversation", basename(chat));
+			// The other computer's paths never arrive; the chat file's path here takes their place.
+			const received = JSON.parse(readFileSync(onLaptop, "utf8")) as Record<string, unknown>;
+			expect(received.conversationPath).toBe(laptopChat);
+			expect(received.cwd).toBeUndefined();
+			expect(received.updatedAt).toBe("2026-01-02T00:00:00.000Z");
+
+			// Both computers write the file again, each with its own folder, as opening the chat does.
+			writeChatMetadata(a.dataRoot, "C:\\Users\\desk\\Study", "2026-01-03T00:00:00.000Z", chat);
+			writeChatMetadata(b.dataRoot, "C:\\Users\\lap\\Study", "2026-01-04T00:00:00.000Z", laptopChat);
+			await sync(a, b);
+			await sync(a, b);
+
+			const desktop = JSON.parse(readFileSync(onDesktop, "utf8")) as Record<string, unknown>;
+			const laptop = JSON.parse(readFileSync(onLaptop, "utf8")) as Record<string, unknown>;
+			expect(desktop).toMatchObject({ cwd: "C:\\Users\\desk\\Study", conversationPath: chat });
+			expect(laptop).toMatchObject({ cwd: "C:\\Users\\lap\\Study", conversationPath: laptopChat });
+			expect(desktop.updatedAt).toBe("2026-01-04T00:00:00.000Z");
+			expect(laptop.updatedAt).toBe("2026-01-04T00:00:00.000Z");
+			// The two files differ only in their paths, which do not travel: nothing goes back and forth.
+			await converged(drive, a, b);
+		});
+
+		it("merges a notes file both computers edited, line by line", async () => {
+			const drive = new FakeDrive();
+			const a = device(drive, "desktop", "device-a");
+			const b = device(drive, "laptop", "device-b");
+			writeSession(a.dataRoot);
+			const notes = (root: string) => join(root, "workspaces", "ws1", "sessions", "s1", "notes", "plan.md");
+			mkdirSync(join(a.dataRoot, "workspaces", "ws1", "sessions", "s1", "notes"), { recursive: true });
+			writeFileSync(notes(a.dataRoot), "# Plan\n- one\n- two\n");
+			await sync(a, b);
+			writeFileSync(notes(a.dataRoot), "# Plan\n- one\n- two\n- from the desktop\n");
+			writeFileSync(notes(b.dataRoot), "# Plan\n- zero\n- one\n- two\n");
+
+			await sync(a, b);
+			await sync(a, b);
+
+			const desktop = readFileSync(notes(a.dataRoot), "utf8");
+			expect(desktop).toBe("# Plan\n- zero\n- one\n- two\n- from the desktop\n");
+			expect(readFileSync(notes(b.dataRoot), "utf8")).toBe(desktop);
+			await converged(drive, a, b);
+		});
+
+		it("keeps both versions of a file that cannot be merged: the newer under its name, the other beside it", async () => {
+			const drive = new FakeDrive();
+			const a = device(drive, "desktop", "device-a");
+			const b = device(drive, "laptop", "device-b");
+			writeSession(a.dataRoot);
+			const artifacts = (root: string) => join(root, "workspaces", "ws1", "sessions", "s1", "artifacts");
+			mkdirSync(artifacts(a.dataRoot), { recursive: true });
+			writeFileSync(join(artifacts(a.dataRoot), "chart.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]));
+			await sync(a, b);
+			const older = Buffer.from([0x89, 0x50, 0x4e, 0x47, 2]);
+			const newer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 3]);
+			writeFileSync(join(artifacts(a.dataRoot), "chart.png"), older);
+			utimesSync(join(artifacts(a.dataRoot), "chart.png"), new Date("2026-02-01Z"), new Date("2026-02-01Z"));
+			writeFileSync(join(artifacts(b.dataRoot), "chart.png"), newer);
+			utimesSync(join(artifacts(b.dataRoot), "chart.png"), new Date("2026-02-02Z"), new Date("2026-02-02Z"));
+
+			await sync(a, b);
+			await sync(a, b);
+
+			const copy = `chart (conflicted copy ${createHash("sha256").update(older).digest("hex").slice(0, 8)}).png`;
+			for (const item of [a, b]) {
+				expect(readFileSync(join(artifacts(item.dataRoot), "chart.png"))).toEqual(newer);
+				expect(readFileSync(join(artifacts(item.dataRoot), copy))).toEqual(older);
+			}
+			await converged(drive, a, b);
+		});
+
+		it("keeps the handoff summary that covers more of the chat, and never syncs a chat's search index", async () => {
+			const drive = new FakeDrive();
+			const a = device(drive, "desktop", "device-a");
+			const b = device(drive, "laptop", "device-b");
+			writeSession(a.dataRoot);
+			const metadata = (root: string) => join(root, "workspaces", "ws1", "sessions", "s1", "metadata");
+			const handoff = (summary: string, coveredCount: number) =>
+				JSON.stringify({
+					version: 1,
+					sessionId: "s1",
+					summary,
+					coveredCount,
+					updatedAt: "2026-01-01T00:00:00.000Z",
+				});
+			mkdirSync(metadata(a.dataRoot), { recursive: true });
+			writeFileSync(join(metadata(a.dataRoot), "handoff.json"), handoff("first", 2));
+			writeFileSync(join(metadata(a.dataRoot), "history-index.json"), JSON.stringify({ version: 1, ino: 42 }));
+			await sync(a, b);
+			// The index records the chat file's inode on the computer that built it, so it stays there.
+			expect(existsSync(join(metadata(b.dataRoot), "history-index.json"))).toBe(false);
+
+			writeFileSync(join(metadata(a.dataRoot), "handoff.json"), handoff("desktop summary", 4));
+			writeFileSync(join(metadata(b.dataRoot), "handoff.json"), handoff("laptop summary", 6));
+			await sync(a, b);
+			await sync(a, b);
+
+			for (const item of [a, b]) {
+				expect(readFileSync(join(metadata(item.dataRoot), "handoff.json"), "utf8")).toContain("laptop summary");
+			}
+			await converged(drive, a, b);
+		});
+
+		it("merges the review entries an older version left for the personal prompt and a chat's session.json", async () => {
+			const drive = new FakeDrive();
+			const a = device(drive, "desktop", "device-a");
+			const chat = writeSession(a.dataRoot);
+			new ModeStateStore(a.agentDir).setPersonalPrompt("general", "Answer in Chinese.\nKept on this computer.");
+			const metadata = writeChatMetadata(a.dataRoot, "C:\\here", "2026-01-02T00:00:00.000Z", chat);
+			const promptCopy = join(a.root, "prompt-copy");
+			writeFileSync(promptCopy, "Answer in Chinese.\nWritten on the laptop.");
+			const metadataCopy = join(a.root, "session-copy.json");
+			writeFileSync(
+				metadataCopy,
+				JSON.stringify({
+					version: 1,
+					sessionId: "s1",
+					workspaceId: "ws1",
+					cwd: "C:\\there",
+					createdAt: "2026-01-01T00:00:00.000Z",
+					updatedAt: "2026-01-05T00:00:00.000Z",
+					conversationPath: "C:\\there\\chat.jsonl",
+				}),
+			);
+			const entry = { reason: "both-modified" as const, at: new Date().toISOString(), deviceName: "laptop" };
+			const state = a.store.state("account-1");
+			state.conflicts.push(
+				{
+					...entry,
+					id: "old-prompt",
+					key: "prompt:general",
+					kind: "prompt",
+					remoteCopyPath: promptCopy,
+					message: "",
+				},
+				{
+					...entry,
+					id: "old-metadata",
+					key: "file:workspaces/ws1/sessions/s1/metadata/session.json",
+					kind: "file",
+					remoteCopyPath: metadataCopy,
+					message: "",
+				},
+			);
+			a.store.saveState(state);
+			a.engine.loadState();
+
+			await a.engine.runOnce();
+
+			const prompt = new ModeStateStore(a.agentDir).getPersonalPrompt("general");
+			expect(prompt).toContain("Kept on this computer.");
+			expect(prompt).toContain("Written on the laptop.");
+			expect(JSON.parse(readFileSync(metadata, "utf8"))).toMatchObject({
+				cwd: "C:\\here",
+				conversationPath: chat,
+				updatedAt: "2026-01-05T00:00:00.000Z",
+			});
+			expect(a.engine.status().conflicts).toHaveLength(0);
+		});
+	});
+
 	describe("built-in browser", () => {
 		const profile = (item: Device) => join(item.agentDir, "desktop-profile");
 		const writeProfile = (item: Device, name: string, value: unknown) => {
@@ -989,6 +1381,72 @@ describe("browser file merge", () => {
 	});
 });
 
+describe("record merge", () => {
+	it("gives the same result whichever computer is local, and keeps what each side added", () => {
+		for (const [left, right] of [
+			["a\nx\nb", "a\ny\nb"],
+			["one\ntwo", "two\none"],
+			["same", "same\nmore"],
+		] as const) {
+			expect(mergeText(undefined, left, right)).toBe(mergeText(undefined, right, left));
+		}
+		expect(mergeText(undefined, "a\nx\nb", "a\ny\nb").split("\n").sort()).toEqual(["a", "b", "x", "y"]);
+
+		const draft = (text: string, ids: string[]) =>
+			JSON.stringify({ text, attachments: ids.map((id) => ({ id, name: `${id}.png` })) });
+		const base = draft("Plan:", ["f0"]);
+		const merged = mergeDraft(base, draft("Plan:\n- here", ["f0", "f1"]), draft("Plan:\n- there", ["f0", "f2"]));
+		expect(merged).toBe(
+			mergeDraft(base, draft("Plan:\n- there", ["f0", "f2"]), draft("Plan:\n- here", ["f0", "f1"])),
+		);
+		expect(
+			JSON.parse(merged!)
+				.attachments.map((file: { id: string }) => file.id)
+				.sort(),
+		).toEqual(["f0", "f1", "f2"]);
+		expect(mergeDraft(undefined, "not json", draft("x", []))).toBeUndefined();
+
+		const prompts = (...titles: string[]) =>
+			JSON.stringify(titles.map((title) => ({ title, text: `${title} text` })));
+		expect(mergeSavedPrompts(prompts("A"), prompts("A", "B"), prompts("A", "C"))).toBe(
+			mergeSavedPrompts(prompts("A"), prompts("A", "C"), prompts("A", "B")),
+		);
+
+		const crlf = new TextEncoder().encode("x\r\ny\r\n");
+		const lf = new TextEncoder().encode("x\nz\n");
+		expect(mergeTextFile("notes/plan.md", crlf, lf)).toEqual(mergeTextFile("notes/plan.md", lf, crlf));
+		expect(mergeTextFile("artifacts/chart.png", crlf, lf)).toBeUndefined();
+		expect(mergeTextFile("notes/plan.md", new Uint8Array([0xff, 0xfe, 0x00]), lf)).toBeUndefined();
+
+		const summary = (coveredCount: number) => JSON.stringify({ summary: `${coveredCount}`, coveredCount });
+		expect(pickHandoff(summary(3), summary(5))).toBe(summary(5));
+		expect(pickHandoff(summary(5), summary(3))).toBe(summary(5));
+
+		const older = { updatedAt: "2026-01-01T00:00:00.000Z", hash: "b" };
+		const newer = { updatedAt: "2026-01-02T00:00:00.000Z", hash: "a" };
+		expect(newerFileVersion(older, newer)).toBe("remote");
+		expect(newerFileVersion(newer, older)).toBe("local");
+
+		const metadata = (cwd: string, updatedAt: string) =>
+			JSON.stringify({ version: 1, sessionId: "s1", cwd, updatedAt, conversationPath: `${cwd}\\chat.jsonl` });
+		const here = sessionMetadataFile(
+			metadata("C:\\a", "2026-01-02Z"),
+			metadata("D:\\b", "2026-01-03Z"),
+			true,
+			() => undefined,
+		);
+		const there = sessionMetadataFile(
+			metadata("D:\\b", "2026-01-03Z"),
+			metadata("C:\\a", "2026-01-02Z"),
+			true,
+			() => undefined,
+		);
+		expect(here!.portable).toBe(there!.portable);
+		expect(JSON.parse(here!.file)).toMatchObject({ cwd: "C:\\a", updatedAt: "2026-01-03Z" });
+		expect(JSON.parse(there!.file)).toMatchObject({ cwd: "D:\\b", updatedAt: "2026-01-03Z" });
+	});
+});
+
 describe("Google OAuth client configuration", () => {
 	it("stores the client id and secret trimmed on this device", () => {
 		const root = mkdtempSync(join(tmpdir(), "myharness-sync-client-"));
@@ -1024,5 +1482,67 @@ describe("Google OAuth client configuration", () => {
 		expect(status.clientSecretConfigured).toBe(true);
 		expect(JSON.stringify(status)).not.toContain("GOCSPX-test");
 		await service.dispose();
+	});
+
+	/** A service with no client of its own on this device, whatever the environment sets. */
+	function signInService(builtInApp: () => { clientId: string; clientSecret?: string } | undefined): SyncService {
+		vi.stubEnv("MYHARNESS_GOOGLE_CLIENT_ID", "");
+		vi.stubEnv("MYHARNESS_GOOGLE_CLIENT_SECRET", "");
+		const root = mkdtempSync(join(tmpdir(), "myharness-sync-sign-in-"));
+		roots.push(root);
+		const agentDir = join(root, "agent");
+		const dataRoot = join(root, "data");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(dataRoot, { recursive: true });
+		return SyncService.create({ agentDir, dataRoot, builtInApp, openExternal: () => {} });
+	}
+
+	/** Plays the browser for a sign-in the user refuses; returns its authorization URL once the service stopped waiting. */
+	async function refuseSignIn(service: SyncService): Promise<URL> {
+		const authorize = new URL((await service.connect()).authUrl);
+		const redirect = new URL(authorize.searchParams.get("redirect_uri")!);
+		redirect.search = new URLSearchParams({
+			error: "access_denied",
+			state: authorize.searchParams.get("state")!,
+		}).toString();
+		await fetch(redirect);
+		for (let i = 0; i < 200 && service.status().phase === "authorizing"; i++) {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		expect(service.status().phase).not.toBe("authorizing");
+		return authorize;
+	}
+
+	it("signs in with MyHarness's own app until this device sets a client of its own", async () => {
+		const service = signInService(() => ({
+			clientId: "builtin-client.apps.googleusercontent.com",
+			clientSecret: "test-builtin",
+		}));
+		try {
+			expect(service.status()).toMatchObject({ builtInClient: true, clientConfigured: false, connected: false });
+			const builtIn = await refuseSignIn(service);
+			expect(builtIn.searchParams.get("client_id")).toBe("builtin-client.apps.googleusercontent.com");
+			expect(builtIn.searchParams.get("scope")?.split(" ")).toEqual(
+				expect.arrayContaining(["openid", "email", "https://www.googleapis.com/auth/drive.file"]),
+			);
+
+			await service.updateConfig({ clientId: "own-client.apps.googleusercontent.com", clientSecret: "test-own" });
+			const own = await refuseSignIn(service);
+			expect(own.searchParams.get("client_id")).toBe("own-client.apps.googleusercontent.com");
+		} finally {
+			await service.dispose();
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("asks for a client of the user's own when the build ships no app", async () => {
+		const service = signInService(() => undefined);
+		try {
+			expect(service.status().builtInClient).toBe(false);
+			await expect(service.connect()).rejects.toThrow("client id");
+		} finally {
+			await service.dispose();
+			vi.unstubAllEnvs();
+		}
 	});
 });

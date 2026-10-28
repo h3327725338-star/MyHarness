@@ -197,16 +197,22 @@ export function slotUrl(url) {
 }
 
 // ---- The right panel belongs to one conversation ---------------------------------------------------
-// The tabs a conversation has open, which one is on screen and which changes scope it reads are that conversation's own
-// state: switching chats shows the panel of the chat on screen, a chat that never opened a tab starts with an empty
-// panel, and coming back restores what was open there. The live values stay in `state.view` so every component keeps
-// reading them; this module remembers them per session and swaps them when the chat on screen changes. The panel width
-// and the collaboration layout stay the window's: a screen does not get narrower because another chat was on it.
-const PANEL_KEYS = ["panelOpen", "panelTab", "wsTabs", "wsActive", "wsRecent", "wsClosed", "changesScope"];
+// Everything about the right panel is the state of one conversation: the tabs it has open, which one is on screen, the
+// changes scope it reads, whether the panel is open, how wide it is, and collaboration mode (the workspace maximized with
+// the chat in a column beside it, and that column's width). Switching chats shows the panel of the chat on screen as it
+// was left there, a chat that never opened a tab starts with an empty panel, and opening, resizing or maximizing one
+// chat's panel never changes another's. The live values stay in `state.view` so every component keeps reading them; this
+// module remembers them per session and swaps them when the chat on screen changes. The sidebar stays the window's (see
+// applyPanel), and so do display preferences such as website tabs shown as icons only.
+const PANEL_KEYS = ["panelOpen", "panelTab", "wsTabs", "wsActive", "wsRecent", "wsClosed", "changesScope", "panelW", "chatW", "wsMax"];
 const PANEL_STATES_MAX = 40;
+// A chat's widths become its own once they have been on screen there (its panel open, its column in collaboration
+// mode); until then (`undefined`) it starts from these: the last widths the user dragged in any chat.
+const panelDefaults = { panelW: prefs.panelW ?? 560, chatW: prefs.chatW ?? 420 };
+const ownWidth = (value) => (Number.isFinite(value) && value > 0 ? Math.round(value) : undefined);
 /** The panel of a conversation that has nothing open: where a new chat starts. */
 function emptyPanel() {
-	return { panelOpen: false, panelTab: "changes", wsTabs: [], wsActive: null, wsRecent: [], wsClosed: [], changesScope: "session" };
+	return { panelOpen: false, panelTab: "changes", wsTabs: [], wsActive: null, wsRecent: [], wsClosed: [], changesScope: "session", panelW: undefined, chatW: undefined, wsMax: false };
 }
 /** A saved panel of one conversation, with the tabs that cannot be shown any more dropped and the active one resolved. */
 function normalizePanel(value) {
@@ -227,10 +233,15 @@ function normalizePanel(value) {
 		// The restore-closed-tab list is a page-session convenience, not a conversation's saved layout.
 		wsClosed: [],
 		changesScope: source.changesScope === "worktree" ? "worktree" : "session",
+		panelW: ownWidth(source.panelW),
+		chatW: ownWidth(source.chatW),
+		// Collaboration mode lasts as long as this page (saved panels never have it): a page opens with the plain layout.
+		wsMax: false,
 	};
 }
 const panelStates = new Map(); // session id -> the panel that conversation had open
 let panelKey = null; // the session whose panel is on screen
+let panelShown = 0; // counts the panels put on screen (see panelInstance)
 for (const [id, value] of Object.entries(prefs.wsPanels && typeof prefs.wsPanels === "object" ? prefs.wsPanels : {})) {
 	if (id) panelStates.set(id, normalizePanel(value));
 }
@@ -283,14 +294,14 @@ export const state = {
 		wsClosed: [],
 		/** Changes panel scope of this chat: its own saved edits, or the folder's working tree. */
 		changesScope: "session",
-		panelW: prefs.panelW ?? 560,
-		/** Collaboration mode: the workspace fills the window and the chat becomes a column on its right (never restored). */
+		/** Width of this chat's panel. */
+		panelW: panelDefaults.panelW,
+		/** Collaboration mode of this chat: its workspace fills the window and the chat becomes a column on its right. */
 		wsMax: false,
-		/** Whether the sidebar was open before collaboration mode hid it; it comes back on exit. */
+		/** While a maximized chat is on screen: the sidebar of the plain layout, given back when it ends (see plainSidebar). */
 		wsMaxSidebar: null,
-		/** Collaboration mode was on when a chat with nothing open came on screen; it returns with an open workspace. */
-		wsMaxPaused: false,
-		chatW: prefs.chatW ?? 420,
+		/** Width of this chat's column in collaboration mode. */
+		chatW: panelDefaults.chatW,
 		expanded: prefs.expanded ?? {},
 		// The open groups of the General sidebar; Coding keeps `expanded` (see chat-modes.js expandedKey).
 		expandedGeneral: prefs.expandedGeneral ?? {},
@@ -338,6 +349,11 @@ setLang(state.view.lang);
 function panelOnScreen() {
 	const panel = {};
 	for (const key of PANEL_KEYS) panel[key] = state.view[key];
+	const kept = panelStates.get(panelKey);
+	if (!panel.panelOpen && kept?.panelW === undefined) panel.panelW = undefined;
+	if (!panel.wsMax && kept?.chatW === undefined) panel.chatW = undefined;
+	// The sidebar a maximized chat shows is part of its layout: shown there, it is shown again when that chat comes back.
+	if (panel.wsMax) panel.wsSidebar = state.view.sidebarOpen;
 	return panel;
 }
 
@@ -355,57 +371,55 @@ function rememberPanel() {
 }
 
 /**
- * Show the panel of `sessionId`: the one that conversation had open, or an empty one for a chat that never opened a
- * tab. A chat in collaboration mode that has nothing open leaves it, since there would be no workspace to fill.
+ * The sidebar of the plain layout: while a maximized chat is on screen, the one from before collaboration mode hid it,
+ * unless the user showed the sidebar while in it, which then stands. Leaving the mode, saving the preferences and showing
+ * a chat that is not maximized all give the sidebar this value.
  */
-function applyPanel(sessionId) {
+export function plainSidebar(view = state.view) {
+	return view.wsMax ? view.sidebarOpen || view.wsMaxSidebar === true : view.sidebarOpen;
+}
+
+/**
+ * Show the panel of `sessionId`: the one that conversation had open, or an empty one for a chat that never opened a
+ * tab, with its own widths and its own collaboration mode. `patch` changes that panel on its way in.
+ *
+ * The sidebar is the window's: a chat that is not maximized shows it as the user keeps it (plainSidebar), and a
+ * maximized chat hides it again, unless the user showed it while that chat was maximized. So collaboration mode entered
+ * in one chat (or in one mode) neither follows a switch to another chat nor ends there, and the chat it was entered in
+ * comes back maximized.
+ */
+function applyPanel(sessionId, patch) {
 	const key = sessionId ?? null;
 	if (key === panelKey) return;
 	rememberPanel();
-	const panel = key ? (panelStates.get(key) ?? emptyPanel()) : emptyPanel();
+	const panel = { ...(key ? (panelStates.get(key) ?? emptyPanel()) : emptyPanel()), ...patch };
 	panelKey = key;
+	panelShown += 1;
 	// A native browser view is drawn above the page: the one of the tab that is leaving must go before the panel of
 	// the other conversation is rendered over it.
 	const leaving = state.view.wsTabs.find((tab) => tab.id === state.view.wsActive);
 	const staying = panel.panelOpen && panel.wsTabs.some((tab) => tab.id === leaving?.id);
 	if (state.view.panelOpen && leaving?.type === "browser" && !staying)
 		globalThis.myHarnessDesktop?.browser?.({ action: "hide" })?.catch?.(() => undefined);
-	// Collaboration mode is the layout of the mode on screen (swapModeLayout). A chat with no workspace to fill pauses it
-	// (the sidebar is left as the user has it, and the sidebar to give back on exit is kept); the next chat with an open
-	// workspace, e.g. the one the user came from, shows it maximized again instead of the mode being lost on the way.
-	const empty = !panel.panelOpen || panel.wsTabs.length === 0;
-	const layout = state.view.wsMax && empty ? { wsMax: false, wsMaxPaused: true } : state.view.wsMaxPaused && !empty ? { wsMax: true, wsMaxPaused: false } : {};
-	state.view = { ...state.view, ...panel, ...layout };
+	const view = state.view;
+	// A workspace with nothing open has nothing to fill the window with.
+	const maxed = panel.wsMax === true && panel.panelOpen && panel.wsTabs.length > 0;
+	const sidebar = maxed
+		? { wsMaxSidebar: view.wsMax ? (view.wsMaxSidebar ?? view.sidebarOpen) : view.sidebarOpen, sidebarOpen: panel.wsSidebar === true }
+		: { wsMaxSidebar: null, sidebarOpen: plainSidebar(view) };
+	const next = { ...view };
+	for (const name of PANEL_KEYS) next[name] = panel[name];
+	next.panelW = panel.panelW ?? panelDefaults.panelW;
+	next.chatW = panel.chatW ?? panelDefaults.chatW;
+	state.view = { ...next, wsMax: maxed, ...sidebar };
 }
-
-// Coding and General each keep their own layout: collaboration mode entered in one does not follow a mode switch into
-// the other, and comes back when the user returns. Kept for this page only, like collaboration mode itself.
-const modeLayouts = { coding: null, general: null }; // mode -> { sidebarOpen } while that mode is in collaboration mode
-let layoutMode = null; // the mode whose layout is on screen (null: the one the page opened in)
 
 /**
- * Give the screen the layout of `mode`. The leaving mode keeps whether it was in collaboration mode (on screen or
- * paused) and whether its sidebar was shown; the entering mode gets its own back, or the plain layout with the sidebar
- * from before collaboration mode (the rule of actions.js `leaveWorkspaceMax`). `resume`: the panel on screen already
- * belongs to the chat being shown, so a workspace with something open is maximized at once; otherwise the mode waits
- * paused and applyPanel maximizes it when that chat's panel comes.
+ * Identity of the panel on screen. It changes whenever the panel of another chat is shown, so the panel's components
+ * start over there instead of carrying one chat's tree, search or viewer into another; a chat that takes over the panel
+ * on screen in place (followPanel) keeps it.
  */
-function swapModeLayout(mode, resume) {
-	const leaving = layoutMode ?? state.view.chatMode;
-	layoutMode = mode;
-	if (leaving === mode) return;
-	const view = state.view;
-	const maxed = view.wsMax || view.wsMaxPaused;
-	modeLayouts[leaving] = maxed ? { sidebarOpen: view.sidebarOpen } : null;
-	const plainSidebar = maxed && view.wsMaxSidebar !== null && !view.sidebarOpen ? view.wsMaxSidebar : view.sidebarOpen;
-	const saved = modeLayouts[mode];
-	if (!saved) {
-		if (maxed) state.view = { ...view, wsMax: false, wsMaxPaused: false, wsMaxSidebar: null, sidebarOpen: plainSidebar };
-		return;
-	}
-	const now = resume && view.panelOpen && view.wsTabs.length > 0;
-	state.view = { ...view, wsMax: now, wsMaxPaused: !now, wsMaxSidebar: plainSidebar, sidebarOpen: saved.sidebarOpen };
-}
+export const panelInstance = () => panelShown;
 
 /**
  * The panel follows the session that the slot on screen holds. A chat can come on screen without a switch: the first
@@ -418,8 +432,7 @@ function followPanel(sessionId) {
 	if (!sessionId || sessionId === panelKey || state.switching) return;
 	if (panelKey === null) {
 		// The first chat after the page opened: its own tabs, with the panel closed as on every page open.
-		applyPanel(sessionId);
-		if (state.view.panelOpen) state.view = { ...state.view, panelOpen: false };
+		applyPanel(sessionId, { panelOpen: false });
 		return;
 	}
 	// The same slot now holds another session. A panel that session already has (an Agent command that arrived before
@@ -489,9 +502,14 @@ export function storedPanel(sessionId) {
 export function saveStoredPanel(sessionId, panel) {
 	if (!sessionId || sessionId === panelKey) return;
 	panelStates.delete(sessionId);
-	// A tab the Agent brought to the front there is also the one its section of the panel goes back to.
+	// A tab the Agent brought to the front there is also the one its section of the panel goes back to. A chat whose last
+	// tab was closed there is no longer maximized.
 	if (panel.wsTabs.length > 0 || panel.panelOpen)
-		panelStates.set(sessionId, { ...panel, wsRecent: recentSectionTabs(panel.wsRecent, panel.wsTabs, panel.wsActive) });
+		panelStates.set(sessionId, {
+			...panel,
+			wsRecent: recentSectionTabs(panel.wsRecent, panel.wsTabs, panel.wsActive),
+			wsMax: panel.wsMax === true && panel.panelOpen && panel.wsTabs.length > 0,
+		});
 	while (panelStates.size > PANEL_STATES_MAX) panelStates.delete(panelStates.keys().next().value);
 	persistView();
 }
@@ -593,6 +611,8 @@ export function setView(patch) {
 	const colorThemes = { ...state.view.colorThemes };
 	if (Object.hasOwn(patch, "colorTheme")) colorThemes[mode] = colorThemeOf(patch.colorTheme);
 	state.view = { ...state.view, ...patch, colorThemes, colorTheme: colorThemes[mode] };
+	// A width the user dragged is the chat's own, and also where the panel of a chat that has none of its own yet starts.
+	for (const key of ["panelW", "chatW"]) if (patch[key] !== undefined) panelDefaults[key] = ownWidth(patch[key]) ?? panelDefaults[key];
 	// Each section of the panel remembers its own last tab: the navigation row goes back to it.
 	if (patch.wsActive !== undefined || patch.wsTabs !== undefined) {
 		const recent = recentSectionTabs(state.view.wsRecent, state.view.wsTabs, state.view.wsActive);
@@ -610,16 +630,17 @@ export function readWidthValue(value) {
 }
 
 // The right panel is not remembered: it always starts closed, and only its own buttons open it. What each conversation
-// had open is saved with `wsPanels` (see rememberPanel).
-const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "panelW", "chatW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "linkTarget", "runMode", "readWidth", "lang", "termShell", "savedPrompts", "wsTabIconsOnly"];
+// had open, and its widths, are saved with `wsPanels` (see rememberPanel); `panelW` / `chatW` are the widths a chat
+// without its own starts with.
+const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "expanded", "expandedGeneral", "chatMode", "theme", "colorThemes", "motion", "processDefault", "linkTarget", "runMode", "readWidth", "lang", "termShell", "savedPrompts", "wsTabIconsOnly"];
 function persistView() {
-	const out = {};
+	const out = { ...panelDefaults };
 	for (const key of PERSISTED) out[key] = state.view[key];
 	rememberPanel();
-	out.wsPanels = Object.fromEntries(panelStates);
-	// Collaboration mode hides the sidebar only for its own duration; the saved choice is the one from before, unless
-	// the user opened it again while in it (the same rule as leaving the mode, actions.js `leaveWorkspaceMax`).
-	if ((state.view.wsMax || state.view.wsMaxPaused) && state.view.wsMaxSidebar !== null && !state.view.sidebarOpen) out.sidebarOpen = state.view.wsMaxSidebar;
+	// Collaboration mode lasts as long as this page: the saved panels leave it out (normalizePanel).
+	out.wsPanels = Object.fromEntries([...panelStates].map(([id, { wsMax, wsSidebar, ...panel }]) => [id, panel]));
+	// Collaboration mode hides the sidebar only for its own duration; the saved choice is the sidebar of the plain layout.
+	out.sidebarOpen = plainSidebar();
 	savePrefs(out);
 	applyAppearance();
 }
@@ -1473,8 +1494,6 @@ export async function refreshAll({ full = true } = {}) {
 /** Put a mode on screen (its identity via `data-chat-mode`, its sidebar lists) and remember it in this browser. */
 function setChatMode(mode) {
 	const next = chatModeOf(mode);
-	// A switch that is still loading its chat (a pending slot) shows the panel it is leaving: no workspace to judge yet.
-	swapModeLayout(next, !String(activeSlot).startsWith("pending:"));
 	if (state.view.chatMode === next) return;
 	state.view = { ...state.view, chatMode: next };
 	persistView();
@@ -1602,6 +1621,7 @@ export async function switchChatMode(target) {
 	}
 	const previousMode = state.view.chatMode;
 	const previousSlot = activeSlot;
+	const previousPanel = panelKey;
 	const targetView = { mode, path: state.modeState?.[mode]?.lastSessionFile, timing, retry: () => switchChatMode(mode) };
 	// Lock sends before a View Transition captures the old page; its update callback selects the target.
 	state.switching = { ...targetView, seq, error: null };
@@ -1613,6 +1633,8 @@ export async function switchChatMode(target) {
 		state.activeSlot = previousSlot;
 		state.switching = null;
 		state.opening = null;
+		// beginSwitch gave the screen the target's (empty) panel: the chat back on screen gets its own again.
+		applyPanel(previousPanel);
 		setChatMode(previousMode);
 		state.view = { ...state.view, modeIntent: previousMode };
 		emit();
@@ -1685,8 +1707,11 @@ export function settleLanding(nonce) {
 	if (state.landing?.nonce === nonce) state.landing = null;
 }
 
-/** Select a real target immediately, before opening it. Synthetic slots cannot make API writes. */
-export function beginSwitch({ path = null, mode = uiMode(), name = "", sessionId, retry, fresh = null, timing = startInteraction(mode !== uiMode() ? "mode" : "session") }, seq) {
+/**
+ * Select a real target immediately, before opening it. Synthetic slots cannot make API writes. `panel`: the session whose
+ * panel the target shows meanwhile (its own; none while it is not known yet, e.g. a new chat).
+ */
+export function beginSwitch({ path = null, mode = uiMode(), name = "", sessionId, panel = sessionId, retry, fresh = null, timing = startInteraction(mode !== uiMode() ? "mode" : "session") }, seq) {
 	if (!isLatestSwitch(seq)) return null;
 	const id = `pending:${seq}`;
 	for (const key of bags.keys()) if (String(key).startsWith("pending:")) bags.delete(key);
@@ -1699,6 +1724,8 @@ export function beginSwitch({ path = null, mode = uiMode(), name = "", sessionId
 	// `freshRow`: the sidebar lists it at once too, as the current row of the group it goes to (`fresh.group`, a
 	// workspace root or GENERAL_KEY), and the real row takes over that row's place when it arrives (see freshRowKey).
 	state.switching = { seq, path, mode, name, retry, timing, error: null, fresh: !!fresh, freshRow: fresh?.group ? { key: id, group: fresh.group } : null };
+	// Never the panel or the collaboration mode of the chat being left: they are that chat's own.
+	applyPanel(panel ?? null);
 	setChatMode(mode);
 	state.view = { ...state.view, modeIntent: mode, selectedTerminal: null };
 	measureInteraction(timing, "visibleMs");
@@ -1725,14 +1752,11 @@ export async function activateSlot(slot, seq = nextSwitch(), pending = state.swi
 	const bag = bagOf(slot);
 	const info = state.slots.find((item) => item.slot === slot);
 	let mode = chatModeOf(bag.snap?.mode ?? info?.mode ?? pending?.mode ?? uiMode());
-	// The right panel belongs to the chat: show that chat's own tabs (a chat that never opened one has an empty panel),
-	// in the layout of the chat's mode. A loaded chat of the other mode takes both together with its mode, inside the
-	// reveal (show below): taken here, the page could draw them under the leaving mode's chat before the reveal starts.
+	// The right panel belongs to the chat: show that chat's own tabs and layout (a chat that never opened a tab has an
+	// empty panel). A loaded chat of the other mode takes its panel together with its mode, inside the reveal (show
+	// below): taken here, the page could draw it under the leaving mode's chat before the reveal starts.
 	const leavingPanel = panelKey;
-	if (!bag.loaded || mode === state.view.chatMode) {
-		swapModeLayout(mode, false);
-		applyPanel(info?.sessionId ?? bag.snap?.session?.id ?? pending?.sessionId ?? null);
-	}
+	if (!bag.loaded || mode === state.view.chatMode) applyPanel(info?.sessionId ?? bag.snap?.session?.id ?? pending?.sessionId ?? null);
 	if (!bag.loaded) {
 		if (pending?.seq !== seq) pending = beginSwitch({ mode, path: info?.sessionFile ?? bag.snap?.session?.file, name: info?.name ?? bag.snap?.session?.name, sessionId: info?.sessionId ?? bag.snap?.session?.id, retry: () => activateSlot(slot) }, seq);
 		// A confirmed slot can safely hold a draft, but sending remains locked until both reads finish.
@@ -1817,7 +1841,8 @@ function recoverLostSlot(slot, retryTarget) {
 	recovering.add(slot);
 	const seq = nextSwitch();
 	const mode = chatModeOf(retryTarget?.mode ?? lost?.mode ?? uiMode());
-	const pending = beginSwitch({ path: file, mode, retry: () => recoverLostSlot(slot, { file, mode }) }, seq);
+	// The chat on screen is opened again: it keeps its panel meanwhile.
+	const pending = beginSwitch({ path: file, mode, panel: lost?.session?.id, retry: () => recoverLostSlot(slot, { file, mode }) }, seq);
 	// A chat deleted elsewhere (another window, the sidebar) is gone for good: show its mode's latest chat instead, so
 	// the page stays in the mode it was in.
 	const openLatest = async () => {

@@ -1,6 +1,6 @@
 // Application shell: sidebar + conversation + optional inspector panel, plus global overlays and shortcuts.
 import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, autofocusOnMount, Collapse, FoldIn, Icon, Modal, Overlay, Resizer, Spinner, usePresence, useRetainedRows } from "./ui.js";
-import { api, applyColumnWidths, attempt, dismissToast, post, setView, state, useStore } from "./store.js";
+import { api, applyColumnWidths, attempt, dismissToast, panelInstance, post, setView, state, useStore } from "./store.js";
 import { actions, confirmDialog, resolveConfirm } from "./actions.js";
 import { Sidebar } from "./sidebar.js";
 import { peekButtonEnter, peekButtonLeave } from "./sidebar-peek.js";
@@ -120,6 +120,9 @@ function PanelContainer() {
 	const closedCount = useStore((s) => s.view.wsClosed.length);
 	const wsMax = useStore((s) => s.view.wsMax);
 	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
+	// Another chat's panel is another panel: its tabs mount afresh instead of showing the tree, search or viewer state a
+	// tab of the same name had in the chat before.
+	const instance = useStore(() => panelInstance());
 	const panelRef = useRef(null);
 	const headRef = useRef(null);
 	const active = tabs.find((item) => item.id === activeId) || tabs[0] || null;
@@ -170,7 +173,7 @@ function PanelContainer() {
 			<button class=${`icon-btn sm panel-max ${wsMax ? "active" : ""}`} aria-pressed=${wsMax} title=${`${t(wsMax ? "Restore the workspace (Esc)" : "Maximize the workspace and keep chatting beside it")} (${shortcutFor("workspaceMax", state.view.shortcuts)})`} aria-label=${t(wsMax ? "Restore the workspace" : "Maximize the workspace")} onClick=${() => actions.toggleWorkspaceMax()}><${Icon} name=${wsMax ? "minimize" : "maximize"} size=${14} /></button>
 			${wsMax ? null : html`<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="panelRight" size=${15} /></button>`}
 		</div>
-		<div class="panel-body">
+		<div class="panel-body" key=${instance}>
 			${tabs.map((item) => html`<div class="panel-pane" key=${item.id} data-ws-tab=${item.id} hidden=${item.id !== active?.id}>
 				${item.id !== active?.id ? null : item.type === "file" ? html`<${FileTab} key=${item.id} path=${item.path} />` : item.type === "browser" ? html`<${BrowserPanel} key=${item.id} tabId=${item.id} url=${item.url} muted=${item.muted === true} />` : panelTab(item.type)}
 			</div>`)}
@@ -461,6 +464,7 @@ export function App() {
 	const panelOpen = useStore((s) => s.view.panelOpen);
 	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
 	const wsMax = useStore((s) => s.view.wsMax);
+	const instance = useStore(() => panelInstance());
 	const connected = useStore((s) => s.connected);
 	const everConnected = useStore((s) => s.everConnected);
 	const restarting = useStore((s) => s.restarting);
@@ -480,18 +484,26 @@ export function App() {
 	useLayoutEffect(() => {
 		if (appRef.current) applyColumnWidths(appRef.current);
 	});
-	const wasMax = useRef(wsMax);
+	// The open panel of another chat comes with that chat's widths and collaboration mode: they take effect at once, as
+	// its conversation and tabs do, instead of the columns gliding from one chat's widths to the other's while the whole
+	// conversation is laid out again on every frame. A panel that opens or closes with the switch still slides.
+	const shown = useRef({ wsMax, instance, panelOpen });
+	const switching = useRef(0);
 	useLayoutEffect(() => {
-		if (wasMax.current === wsMax || !appRef.current) return undefined;
-		wasMax.current = wsMax;
+		const before = shown.current;
+		shown.current = { wsMax, instance, panelOpen };
+		const swap = before.wsMax !== wsMax || (before.instance !== instance && before.panelOpen && panelOpen);
+		if (!swap || !appRef.current) return undefined;
 		// A morph keeps the transitions off by itself for as long as it runs (layout.css): the class going on and off here
 		// restyled the whole page twice, the second time in the middle of the morph.
 		if (document.documentElement.classList.contains("ws-morph")) return undefined;
 		const app = appRef.current;
 		app.classList.add("ws-switching");
-		const timer = setTimeout(() => app.classList.remove("ws-switching"), 60);
-		return () => clearTimeout(timer);
-	}, [wsMax]);
+		// Kept apart from the effect: a later render inside the 60ms must not leave the class on for good.
+		clearTimeout(switching.current);
+		switching.current = setTimeout(() => app.classList.remove("ws-switching"), 60);
+		return undefined;
+	}, [wsMax, instance, panelOpen]);
 	useWorkspaceTitle();
 
 

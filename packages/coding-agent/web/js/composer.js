@@ -23,6 +23,7 @@ import { invalidateAttachmentCaches } from "./attachments.js";
 import { chatModeOf, draftFromServer } from "./chat-modes.js";
 import { clipLine, formatQuotes, quoteFromSelection } from "./quote-text.js";
 import { clearQuoteHighlights, paintQuotes } from "./quote-highlight.js";
+import { rememberQuoteOrigins } from "./quote-origins.js";
 import { MAX_UPLOAD_BYTES, sendFileInChunks } from "./upload-chunks.js";
 
 /** Images up to this size travel inline with the message (as before); a larger one is attached as a file. */
@@ -214,7 +215,7 @@ function ModelPicker() {
 			await attempt(loadSnapshot, { quiet: true });
 		}
 	};
-	return html`<span ref=${anchor} class="picker-anchor">
+	return html`<span ref=${anchor} class="picker-anchor model-anchor">
 		<button class="chip" onClick=${() => setOpen(!open)} title=${running ? t("Models can be switched when the agent is idle") : `${t("Model")}: ${model ? model.name || model.id : t("No model")}`} aria-haspopup="listbox" aria-expanded=${open}>
 			<span class="truncate chip-text">${model ? model.name || model.id : opening ? "…" : t("No model")}</span><${Chevron} />
 		</button>
@@ -407,7 +408,7 @@ export function Composer() {
 	}, [editorInsert?.nonce]);
 	useEffect(() => {
 		if (!quoteInsert?.text) return;
-		const quote = quoteFromSelection(quoteInsert.text, { note: quoteInsert.note, hint: quoteInsert.hint });
+		const quote = quoteFromSelection(quoteInsert.text, { note: quoteInsert.note, hint: quoteInsert.hint, origin: quoteInsert.origin });
 		if (quote) setQuotes((prev) => [...prev, quote]);
 		// A file picked with the quote goes through the same attachment pipeline as one picked in the input.
 		if (quoteInsert.files?.length) importFiles.current(quoteInsert.files);
@@ -697,6 +698,8 @@ const send = async (mode) => {
 		const previousText = text;
 		const previousImages = images;
 		const previousQuotes = quotes;
+		// A click on a quote of the sent message leads to where it was picked, not to the same words elsewhere.
+		if (quotes.length) rememberQuoteOrigins(value, quotes.map((quote) => quote.origin), sessionId);
 		setText("");
 		setImages([]);
 		setQuotes([]);

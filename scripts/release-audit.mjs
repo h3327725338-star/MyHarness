@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
 
@@ -259,6 +260,24 @@ function isPlaceholder(value, path) {
 	return false;
 }
 
+/**
+ * Values that look like credentials but were reviewed as public on purpose; docs/RELEASE_GATE.md ("复核过的公开值")
+ * gives the reason for each. An entry exempts one exact value, by its SHA-256, in one file: any other value there, or a
+ * changed one, is still reported.
+ */
+const REVIEWED_PUBLIC_VALUES = [
+	// Client secret of MyHarness's own Google OAuth desktop client.
+	{
+		path: "packages/coding-agent/src/providers/credentials/oauth-apps.ts",
+		sha256: "650241b6aa7408015b2bdae0e7f0e13cf732aa794ed411d592108144c5a97212",
+	},
+];
+
+function isReviewedPublicValue(path, value) {
+	const digest = createHash("sha256").update(value).digest("hex");
+	return REVIEWED_PUBLIC_VALUES.some((entry) => entry.path === path && entry.sha256 === digest);
+}
+
 function isSyntheticPrivateKey(text, path, matchIndex) {
 	if (!pathLooksSynthetic(path)) return false;
 	const block = text.slice(matchIndex, matchIndex + 256);
@@ -292,7 +311,9 @@ function scanText(path, text, findings) {
 
 	const assignmentRegex = /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|secret)\b\s*[:=]\s*["'`]([^"'`\r\n]{12,})["'`]/gi;
 	for (const match of text.matchAll(assignmentRegex)) {
-		if (!isPlaceholder(match[1], normalizedPath)) addFinding(findings, "credential-like assignment", normalizedPath, text, match.index);
+		if (!isPlaceholder(match[1], normalizedPath) && !isReviewedPublicValue(normalizedPath, match[1])) {
+			addFinding(findings, "credential-like assignment", normalizedPath, text, match.index);
+		}
 	}
 
 	const queryRegex = /[?&](?:token|key|secret|password|access_token|api_key)=([^&#\s]{12,})/gi;

@@ -17,7 +17,8 @@ Drive, have not been verified yet.
 | --- | --- |
 | Global, Workspace and Session memories, including archives, pending quarantine and the user profile | Yes |
 | General-mode Workspaces: identity, name, instructions, memory/library switches | Yes |
-| General-mode chats: conversation JSONL (branches merged by entry id), handoff metadata, session metadata | Yes |
+| General-mode chats: conversation JSONL (branches merged by entry id), handoff metadata, session metadata (without this computer's paths) | Yes |
+| A chat's search index (`metadata/history-index.json`) | No, it describes the chat file on the computer that built it |
 | Session attachments (`uploads/`), artifacts, notes, tool results and other session files | Yes |
 | Workspace library sources and workspace artifacts | Yes |
 | Ordinary files inside a General workspace, after the user turns file sync on | Yes, through the separate file channel below |
@@ -40,8 +41,14 @@ the same archived and pinned state. An empty General prompt or draft is represen
 device clears it on the others; retyping it afterwards is a newer version and is applied again. The saved prompts work the same way (record
 `saved-prompts:web`): an emptied list is a deletion. An arriving list replaces `prefs.savedPrompts` in
 `<agentDir>/web-ui-prefs.json` with a newer `updatedAt` and keeps every other preference; open pages read it again on
-`sync_applied`. Devices running an older version ignore this record. Both devices changing the list before syncing is
-a conflict like any other non-chat record: the local list stays and the other one is kept as a copy.
+`sync_applied`. Devices running an older version ignore this record. Both devices changing the list before syncing
+merges the two lists (see Merge rules): every prompt either device added stays, once.
+
+A chat's `metadata/session.json` records this computer's folder (`cwd`) and chat file path (`conversationPath`). Those
+two fields never travel: the record carries the other fields only, an arriving version is written with this computer's
+paths (or, when the file is new here, the chat file's path here), and a chat opened in another folder on each computer
+is no change and no conflict. A device on an older version still sends the whole file; its paths are used only where
+this computer has none. The first pass after the update publishes each chat's session.json once in this form.
 
 The built-in browser's data are records of kind `browser` (`src/sync/browser-data.ts`): each is one file of the desktop
 profile, `<agentDir>/desktop-profile` (`browser-bookmarks.json`, `browser-speed-dial.json`, `browser-zoom.json`,
@@ -54,19 +61,39 @@ side never sees the passphrase or anything inside the vault. How the desktop sea
 
 ## Setup
 
+MyHarness ships its own Google app (`builtInOAuthApp("google", "sync")` in
+`src/providers/credentials/oauth-apps.ts`, published In production), so a Google account is all a computer needs:
+
+1. Open **Settings → Google Drive** in MyHarness and press **Connect Google Drive**.
+2. Complete the sign-in in the system browser.
+3. MyHarness creates `My Drive/MyHarness/sync-v1/…`, or joins the one another computer already created, and starts the
+   first upload.
+
+Every other computer does the same with the same Google account. When Google stops accepting the saved sign-in (access
+revoked, password changed, an app still in Testing after 7 days), the Account row offers **Sign in again**: the same
+account keeps its space and this device's sync state; another account starts over like a new connection.
+
+To use a client of one's own instead ("MyHarness's own OAuth apps" in `settings.md`), open **Advanced: your own Google
+OAuth client** on the same page; it opens by itself only when no app can sign in, as in a build without MyHarness's own
+app:
+
 1. In Google Cloud Console create an OAuth client of type **Desktop app** and enable the Google Drive API.
-2. Open **Settings → Google Drive** in MyHarness, paste the client id **and the client secret** and save each one.
-3. Press **Connect Google Drive** and complete the sign-in in the system browser.
-4. MyHarness creates `My Drive/MyHarness/sync-v1/…` and starts the first upload.
+2. Paste the client id **and the client secret**, save each one, then connect as above.
+
+A client saved on this device takes precedence over MyHarness's own app; `MYHARNESS_GOOGLE_CLIENT_ID` and
+`MYHARNESS_GOOGLE_CLIENT_SECRET` remain available as a fallback for a build started from a shell. Every computer has to
+sign in through the same client: `drive.file` shows an app only the files it created, so a computer on another client
+may not see the existing `MyHarness` folder and starts a separate space. A consent screen left in Testing admits only
+its test users, and their sign-ins expire after 7 days; publishing the app (In production) removes both limits.
 
 Both values are required. Google's token endpoint answers `client_secret is missing` and refuses the exchange when a
 desktop client sends only the authorization code and its PKCE verifier, so the secret is stored next to the client id
 and sent with the code exchange and every refresh. It is not a confidential value for an installed app — it cannot
-keep a secret that ships with the client — but the endpoint still demands it. `MYHARNESS_GOOGLE_CLIENT_ID` and
-`MYHARNESS_GOOGLE_CLIENT_SECRET` remain available as a fallback for a build started from a shell.
+keep a secret that ships with the client — but the endpoint still demands it.
 
-Only the `drive.file` scope is requested: MyHarness can manage the files it created and files the user explicitly hands
-to the app, not the rest of the drive.
+Only the `drive.file` scope is requested, plus `openid`, `email` and `profile` for the account label: MyHarness can
+manage the files it created and files the user explicitly hands to the app, not the rest of the drive. All four are
+non-sensitive scopes, so a published app shows no unverified-app warning and has no 100-user cap.
 
 ## Cloud layout
 
@@ -148,8 +175,22 @@ Each record has a stable key (`kind:id`) and a per-device version vector.
   the same whichever device merges, so both reach one text and the next pass converges. A browser file is never removed
   because another device deleted it: the file here is published again past the deletion and the other device gets it
   back. Vaults are written by one computer each and never merged.
-- Concurrent edits of an attachment or workspace: the local version stays in use and the other version is saved
-  under `<agentDir>/sync/recovered/…`; the conflict is listed in Settings.
+- Concurrent edits of the General personal prompt, a draft, the saved prompts list or a chat or Workspace file:
+  merged (`src/sync/record-merge.ts`), so neither edit is lost and no review entry is left. The prompt, a draft's text
+  and plain-text files (`.md`, `.markdown`, `.txt`, `.text`, `.csv`, `.tsv`, `.log`, UTF-8, up to 2 MB) merge line by
+  line like a memory body, against the last common version for the prompt and drafts and without one for files (so an
+  unchanged line both sides still have is kept, and where both sides changed lines both versions of them stay). The
+  saved prompts and a draft's attachments merge item by item. A chat's session.json merges field by field (the later
+  `updatedAt`, the earlier `createdAt`, other differing fields from the newer version) and keeps this computer's
+  paths. A handoff summary keeps the one that covers more of the chat. Any other file (images, PDFs, JSON, code, larger
+  text) keeps both versions as files: the newer one (modification time, then content hash) under its name and the
+  other beside it as `<name> (conflicted copy <first 8 hex of its SHA-256>)<extension>`, which also travels. Every merge
+  gives the same result whichever computer runs it, and the merged version is published past both, so the two
+  computers converge and stop.
+- Concurrent edits of a Workspace identity: the local version stays in use and the other version is saved under
+  `<agentDir>/sync/recovered/…`; the conflict is listed in Settings. Review entries an older version left for the
+  prompt, drafts, saved prompts or files are merged from their saved copy on the first pass after a start, the same way;
+  an item deleted here since keeps its entry instead of coming back.
 - Delete vs edit: the deletion is not silently undone, but the edited content is kept as a recoverable copy.
 - Re-creating a record after the deletion has been seen is a newer version and is applied; an old offline copy that
   predates the deletion is not resurrected.
@@ -167,8 +208,20 @@ A Workspace is identified by its stable `workspaceId`. Its root folder is bound 
 - a restored Workspace whose original folder sits inside a Drive root is bound automatically to the same relative
   folder on this device when exactly one such folder exists and no other Workspace claims it; the placeholder is used
   only when that folder is missing or ambiguous;
+- a restored Workspace removed from every list on this device (here, or by its deletion on another device) is not listed
+  as waiting for a folder; the entry is kept and listed again once the Workspace is added back;
 - **Choose folder** in Settings binds the real folder. MyHarness never writes its sync data into an external folder and
-  never changes sharing permissions.
+  never changes sharing permissions. One folder belongs to one Workspace on a device. When another Workspace already
+  uses the chosen folder, a hidden one can release it (`/api/sync/release-occupant`); a listed one is named with its
+  chat count and the dialog offers to merge the restored Workspace into it (`/api/sync/merge-workspace`,
+  `sync/workspace-merge.ts`). The merge moves the restored Workspace's chats (each with its attachments, artifacts,
+  notes and images, its header and metadata rewritten to the kept Workspace) and its memories into the kept Workspace,
+  then removes the restored one from this device's lists. Nothing is deleted: a chat or memory whose name the kept
+  Workspace already uses stays where it was and is reported. It waits for the sync pass in flight, is refused while one
+  of the chats runs, and closes the chats of it that are open. Sync publishes the moves, so the other device gets the
+  chats in the kept Workspace (its old copies go to the sync backups) and drops the merged Workspace from its lists;
+  if that device still had the folder bound to the merged Workspace, choosing the folder for the kept one there asks
+  once to release it.
 - a binding (or a Workspace applied from another device) takes effect without a restart: the running app re-reads the
   Workspace registry, so its own copy can never be saved back over the new folder, and open idle chats of that
   Workspace move onto it, so the Files panel shows the bound folder at once;
@@ -311,8 +364,9 @@ Everything device-specific lives below `<agentDir>/sync/`:
 
 - `config.json` — device name/id, enabled, paused, OAuth client id and secret, cloud folder id, account label;
 - `state-<account>.json` — vectors, tombstones, applied batches, conflicts, bindings (one file per Google account);
-- `bases-<account>/` — the last content both devices committed for each memory, used as the common ancestor of a
-  three-way merge. Never uploaded; one content file per hash plus an index.
+- `bases-<account>/` — the last content both devices committed for each memory, the personal prompt, each draft and
+  the saved prompts list, used as the common ancestor of a three-way merge. Never uploaded; one content file per hash
+  plus an index.
 - `hashes-<account>.json` — the content hash of each synced local file with the size and modification time it was
   taken at. A file that still has both is not read again, also after a restart; anything else is streamed through the
   hash again. Without it the first pass after every start read and hashed every synced file (about 1.2 GB for a large
@@ -434,7 +488,7 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 | --- | --- |
 | `GET /api/sync/state` | Status snapshot (account, folder, counters, conflicts, bindings, issues, risk) |
 | `POST /api/sync/config` | `{ enabled?, paused?, clientId?, clientSecret?, deviceName? }` |
-| `POST /api/sync/connect` | Start OAuth; answers `{ authUrl }`, completion continues in the background |
+| `POST /api/sync/connect` | Start OAuth with this device's client, else MyHarness's own app (status `builtInClient`); answers `{ authUrl }`, completion continues in the background. While connected it signs in again and keeps the space for the same account |
 | `POST /api/sync/disconnect` | Stop syncing and forget the token on this device |
 | `POST /api/sync/check` | Run one push + pull pass now |
 | `POST /api/sync/download` | Start "Download now" in the background; progress in the status's `manual` |
@@ -448,20 +502,25 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 | `POST /api/sync/files/confirm-deletes` | `{ workspaceId }` release a held bulk deletion |
 | `POST /api/sync/occupancy` | `{ workspaceId, rootPath }` which Workspace already claims the folder |
 | `POST /api/sync/release-occupant` | `{ workspaceId, confirmed: true }` move a hidden Workspace's binding to `<dataRoot>/workspace-folders/reserved-<id8>`, keeping its chats; both the route and the service refuse the call without the flag |
+| `POST /api/sync/merge-workspace` | `{ workspaceId, targetWorkspaceId, confirmed: true }` merge the restored Workspace into the listed one that holds its folder; answers `{ status, merged: { chats, memories, kept, warnings } }`; refused without the flag or while one of its chats runs |
 
 ## Limits and not-yet-verified behavior
 
 - Real Google OAuth sign-in, two physical machines running this build, publishing snapshots, folder rename, revoked
   authorization, quota exhaustion and Drive outage behavior have not been run against a live account; besides the
-  in-memory Drive tests, only the read-only catch-up dry run described at the top was run against a real Drive.
+  in-memory Drive tests, only the read-only catch-up dry run described at the top was run against a real Drive. MyHarness's
+  own app is registered and published, but a sign-in through it is tested only with a stand-in app up to the
+  authorization URL, not end to end. Merging Workspaces is tested with two devices on the in-memory Drive only.
 - Background sync stops when MyHarness quits and continues on the next start. Tray support and launch-at-login are not
   implemented, so after a reboot nothing uploads until MyHarness is opened.
 - Built-in browser sync was run between two profiles of one Electron process and with the in-memory Drive, not between two
   physical computers through a real Drive. A vault is written again whenever its sign-ins changed (at most every 30
   minutes while browsing), and Drive keeps every uploaded version as an object; old versions are not cleaned up.
 - Batches over 5000 operations written by another client are refused; this daemon never writes such a batch itself.
-- Conflicts for chats and drafts are kept for review but there is no “apply the other version” button yet; the copy
-  path is shown. Memories no longer create review entries: they merge automatically.
+- Review entries remain only for a chat entry or title both devices changed, a Workspace identity both changed, and
+  delete-vs-edit; there is no “apply the other version” button yet, and the local path and the copy path are shown in
+  full. Memories, the prompt, drafts, the saved prompts and files no longer create review entries: they merge
+  automatically. These merges are tested with two devices on the in-memory Drive only.
 - A snapshot stands for its device's own batches by batch time. A device whose clock jumped backwards could publish a
   batch with an earlier time than its last snapshot; the same exposure already exists for the per-device watermark.
 - Old batches and objects are never removed from Drive (no garbage collection yet), so the folder keeps growing; the
@@ -547,7 +606,11 @@ refusing while paused).
 The suite covers: first upload and restore on a second device, memory deletion without resurrection, automatic
 three-way merge of concurrent memory edits until both devices hold the same text (and no further batch is published),
 an edit restoring a memory deleted concurrently, a legacy review copy merged on the next pass, chat branch merge, draft
-and prompt deletes, concurrent delete-vs-edit for chats and drafts, missing
+and prompt deletes, concurrent delete-vs-edit for chats and drafts, concurrent edits of the personal prompt, a draft,
+the saved prompts, a chat's session.json (each computer keeps its own paths), a notes file, an image (kept as a
+conflicted copy) and a handoff summary converging without review entries or further batches, a chat's search index
+staying on its computer, older review entries for the prompt and session.json merged from their copies, the record
+merges giving the same result whichever side is local, missing
 objects deferring a batch, no re-reading of already applied batches, a large change set split into several batches, an
 ignored self-batch, refused hostile identities, a damaged batch reported once, an object that never arrives reported
 and skipped, archive markers and ordinary JSON files beside artifacts, a Workspace removed from every list, a chat

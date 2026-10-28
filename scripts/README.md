@@ -15,7 +15,7 @@
 | `generate-coding-agent-shrinkwrap.mjs` | 生成或 `--check` 校验发布 shrinkwrap；不带 `--check` 会写文件 | 是（不带 `--check`） |
 | `generate-coding-agent-install-lock.mjs` | 生成或 `--check` 校验独立安装 lock；不带 `--check` 会写目录文件 | 是（不带 `--check`） |
 | `check-lockfile-commit.mjs` | 提交前阻止不符合锁文件约束的状态 | 否 |
-| `release-audit.mjs` | 检查 staged 文件、当前 tracked tree 或指定 Git ref 的路径、凭据模式、用户路径、运行时产物、License 和 manifest；staged 模式还检查整个 index 中是否残留 Agent/Harness/IDE 本地状态目录和 Agent 工作区目录（`_receipts/`、`_tickets/`、`outputs/`） | 否 |
+| `release-audit.mjs` | 检查 staged 文件、当前 tracked tree 或指定 Git ref 的路径、凭据模式（`REVIEWED_PUBLIC_VALUES` 按文件和 SHA-256 豁免复核过的公开值，见 `docs/RELEASE_GATE.md`）、用户路径、运行时产物、License 和 manifest；staged 模式还检查整个 index 中是否残留 Agent/Harness/IDE 本地状态目录和 Agent 工作区目录（`_receipts/`、`_tickets/`、`outputs/`） | 否 |
 
 依赖检查的扫描边界回归测试：`node --test scripts/check-pinned-deps.test.mjs`。
 

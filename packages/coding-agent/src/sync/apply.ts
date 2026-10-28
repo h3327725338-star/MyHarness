@@ -7,6 +7,7 @@ import type { ModeStateStore } from "../session/mode-state.ts";
 import { readSessionHeader } from "../session/storage/jsonl/index.ts";
 import { writeFileAtomically, writeFileAtomicallySync } from "../utils/atomic-write.ts";
 import { browserFileOf, browserProfileDir } from "./browser-data.ts";
+import { isSessionMetadataId, sessionMetadataFile } from "./record-merge.ts";
 import { savedPromptsOf, writeSavedPrompts } from "./saved-prompts.ts";
 import type { SyncLocalStore } from "./store.ts";
 import type { SyncRecord } from "./types.ts";
@@ -268,12 +269,74 @@ export async function applyFile(ctx: ApplyContext, record: SyncRecord, data: Uin
 	const target = resolveInsideRoot(ctx.dataRoot, record.id);
 	if (!target) return outcome;
 	assertDirectTarget(target, ctx.dataRoot);
+	// A chat's session.json keeps this computer's paths; only the fields that travel come from the other computer.
+	const content = isSessionMetadataId(record.id)
+		? (sessionMetadataFor(ctx, record, target, data, false)?.bytes ?? data)
+		: data;
 	backupIfExists(ctx, "file", record.key, record.id.split("/").pop() ?? "file", target);
 	ensureDir(dirname(target));
 	// Written and flushed off the main thread: a first download writes thousands of these, some up to 200 MB.
-	await writeFileAtomically(target, data);
+	await writeFileAtomically(target, content);
 	outcome.applied = true;
 	return outcome;
+}
+
+/**
+ * Write another computer's version of a chat's session.json merged into this computer's (record-merge.ts): the fields
+ * both changed are merged, the paths stay this computer's. Returns what the scan reads back, or undefined when either
+ * version is not a JSON object.
+ */
+export async function writeMergedSessionMetadata(
+	ctx: ApplyContext,
+	record: SyncRecord,
+	data: Uint8Array,
+): Promise<{ portable: string; changed: boolean } | undefined> {
+	const target = resolveInsideRoot(ctx.dataRoot, record.id);
+	if (!target || !isSessionMetadataId(record.id)) return undefined;
+	assertDirectTarget(target, ctx.dataRoot);
+	const merged = sessionMetadataFor(ctx, record, target, data, true);
+	if (!merged) return undefined;
+	if (merged.changed) {
+		backupIfExists(ctx, "file", record.key, "session.json", target);
+		ensureDir(dirname(target));
+		await writeFileAtomically(target, merged.bytes);
+	}
+	return { portable: merged.portable, changed: merged.changed };
+}
+
+function sessionMetadataFor(
+	ctx: ApplyContext,
+	record: SyncRecord,
+	target: string,
+	data: Uint8Array,
+	concurrent: boolean,
+): { bytes: Uint8Array; portable: string; changed: boolean } | undefined {
+	let localText: string | undefined;
+	try {
+		localText = readFileSync(target, "utf8");
+	} catch {
+		localText = undefined;
+	}
+	const [, workspaceId, , sessionId] = record.id.split("/");
+	const conversationDir = getSessionConversationDir(ctx.dataRoot, workspaceId!, sessionId!);
+	const merged = sessionMetadataFile(localText, fromUtf8(data), concurrent, (fileName) => {
+		if (fileName?.endsWith(".jsonl") && /^[^\\/:]+$/u.test(fileName)) return join(conversationDir, fileName);
+		try {
+			const latest = readdirSync(conversationDir)
+				.filter((name) => name.endsWith(".jsonl"))
+				.sort()
+				.at(-1);
+			return latest ? join(conversationDir, latest) : undefined;
+		} catch {
+			return undefined;
+		}
+	});
+	if (!merged) return undefined;
+	return {
+		bytes: new TextEncoder().encode(merged.file),
+		portable: merged.portable,
+		changed: merged.file !== localText,
+	};
 }
 
 function workspacePlaceholder(dataRoot: string, record: SyncRecord): string {

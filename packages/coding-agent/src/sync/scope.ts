@@ -1,12 +1,19 @@
 import { type Dirent, existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { getSessionDir, getWorkspaceDir, getWorkspaceMetadataPath, getWorkspacesDir } from "../config/paths/index.ts";
+import {
+	getSessionDir,
+	getSessionMetadataPath,
+	getWorkspaceDir,
+	getWorkspaceMetadataPath,
+	getWorkspacesDir,
+} from "../config/paths/index.ts";
 import { WEB_PREFS_FILE } from "../config/web-prefs.ts";
 import { WorkspaceStore } from "../data/workspace-store.ts";
 import { listMemoryFiles, type MemoryFile } from "../session/memory/store.ts";
 import type { ModeStateStore } from "../session/mode-state.ts";
 import { readSessionHeader } from "../session/storage/jsonl/index.ts";
 import { listBrowserFiles } from "./browser-data.ts";
+import { portableSessionMetadata } from "./record-merge.ts";
 import { readSavedPrompts } from "./saved-prompts.ts";
 import type { ScannedEntity } from "./types.ts";
 import { stableJson } from "./util.ts";
@@ -21,18 +28,35 @@ const TEMP_FILE_PATTERN = /\.(?:tmp|part|crdownload)$/u;
  * chat is open) and anything inside a lock directory. An archive or pin marker is real user state and does travel.
  */
 const LOCAL_ONLY_FILE_PATTERN = /(?:\.bridge|\.lock|\.lock\.owner)$|\.lock\//u;
+/**
+ * A chat's search index (`metadata/history-index.json`) is checked against the chat file's inode and time on this
+ * computer, so a copy from another computer is never valid there: it was rebuilt on use and published back each time.
+ */
+const LOCAL_CACHE_FILE_PATTERN = /(?:^|\/)sessions\/[^/]+\/metadata\/history-index\.json$/u;
 
 /**
  * Whether a Data-root relative path is a temporary or local-only file. Such a file is never uploaded, and one an older
- * version did upload is never written or deleted on another computer: it describes a process of the computer it came from.
+ * version did upload is never written or deleted on another computer: it describes a process (or, for a chat's search
+ * index, the files) of the computer it came from.
  */
 export function isLocalOnlyPath(relativePath: string): boolean {
-	return TEMP_FILE_PATTERN.test(relativePath) || LOCAL_ONLY_FILE_PATTERN.test(relativePath);
+	return (
+		TEMP_FILE_PATTERN.test(relativePath) ||
+		LOCAL_ONLY_FILE_PATTERN.test(relativePath) ||
+		LOCAL_CACHE_FILE_PATTERN.test(relativePath)
+	);
 }
 
 export interface HeaderCacheEntry {
 	mtimeMs: number;
 	general: boolean;
+}
+
+/** The traveling part of a chat's session.json (see portableSessionMetadata) for the size and time it was read at. */
+export interface SessionMetadataCacheEntry {
+	mtimeMs: number;
+	size: number;
+	inline: string;
 }
 
 export interface ScanOptions {
@@ -43,6 +67,8 @@ export interface ScanOptions {
 	memoryMetadataCache?: Map<string, { signature: string; id: string; name: string }>;
 	/** Async callers supply an already traversed memory listing. */
 	memories?: MemoryFile[];
+	/** Keyed by file path; a session.json whose size and time did not change is not read again. */
+	sessionMetadataCache?: Map<string, SessionMetadataCacheEntry>;
 }
 
 function toPosix(value: string): string {
@@ -83,6 +109,28 @@ function addFile(
 	};
 	if (meta) entity.meta = meta;
 	map.set(key, entity);
+}
+
+/**
+ * A chat's session.json travels without this computer's paths (record-merge.ts), so the same chat opened in another
+ * folder, or with the data folder spelled differently, is no change to publish and never a conflict.
+ */
+function travelingSessionMetadata(entity: ScannedEntity, cache: Map<string, SessionMetadataCacheEntry>): void {
+	if (!entity.path) return;
+	const cached = cache.get(entity.path);
+	let inline = cached && cached.mtimeMs === entity.mtimeMs && cached.size === entity.size ? cached.inline : undefined;
+	if (inline === undefined) {
+		try {
+			inline = portableSessionMetadata(readFileSync(entity.path, "utf8"));
+		} catch {
+			inline = undefined;
+		}
+		// A file that is not JSON travels as it is.
+		if (inline === undefined) return;
+		cache.set(entity.path, { mtimeMs: entity.mtimeMs ?? 0, size: entity.size ?? 0, inline });
+	}
+	entity.inline = inline;
+	entity.size = Buffer.byteLength(inline);
 }
 
 function walkFiles(directory: string, visit: (file: string) => void): void {
@@ -172,6 +220,7 @@ export async function scanLocalEntitiesAsync(options: ScanOptions, sliceMs = 12)
 function* scanSteps(options: ScanOptions, entities: Map<string, ScannedEntity>): Generator<void, void, void> {
 	const { dataRoot, agentDir, modeState } = options;
 	const headerCache = options.headerCache ?? new Map<string, HeaderCacheEntry>();
+	const sessionMetadataCache = options.sessionMetadataCache ?? new Map<string, SessionMetadataCacheEntry>();
 
 	// 1. All memories, including archives and pending quarantine entries.
 	for (const memory of options.memories ?? listMemoryFiles(dataRoot, { metadataCache: options.memoryMetadataCache })) {
@@ -287,6 +336,9 @@ function* scanSteps(options: ScanOptions, entities: Map<string, ScannedEntity>):
 						addFile(entities, dataRoot, file),
 					);
 				}
+				const metadataId = toPosix(relative(dataRoot, getSessionMetadataPath(dataRoot, workspaceId, session.name)));
+				const metadata = entities.get(`file:${metadataId}`);
+				if (metadata) travelingSessionMetadata(metadata, sessionMetadataCache);
 				// Legacy uploads live inside the conversation folder, beside the JSONL rather than in a session uploads folder.
 				walkFiles(join(getSessionDir(dataRoot, workspaceId, session.name), CONVERSATION_DIR), (file) => {
 					if (!file.endsWith(".jsonl")) addFile(entities, dataRoot, file);

@@ -16,7 +16,7 @@
 | `mode-state.ts` | `ModeStateStore`：coding/general 两套本地偏好（上次会话、默认模型、草稿、个人提示），带锁读写 `chat-mode-state.json`，不是第二套 Settings |
 | `artifacts/store.ts` | 会话 `artifacts/`（reports/tests/temporary）的创建、按会话列举、派生索引刷新、删除聊天后的孤儿标记；读写前拒绝 symlink/junction |
 | `projection/index.ts` | 从条目树到上下文：`buildSessionContext()`、`buildContextEntries()`、`getLatestCompactionEntry()`、环检测 |
-| `storage/jsonl/index.ts` | JSONL 的解析与容错、文件头读取、追加与重写、会话目录与元数据、列表扫描、搬迁 |
+| `storage/jsonl/index.ts` | JSONL 的解析与容错、文件头读取、追加与重写、会话目录与元数据、列表扫描、搬迁；`moveSessionToWorkspace()` 把整个会话目录移到同一 Data root 的另一个工作区（合并工作区时用） |
 | `storage/jsonl/parse-cache.ts` | 按文件字节预算（32 MiB）淘汰的解析缓存，文件身份/大小/修改时间校验，完整追加前缀增量续读；恢复诊断文件重新读取 |
 | `storage/jsonl/write-batch.ts` | user/assistant 消息 75ms / 256KiB 合批 durable append；关键条目、读操作、正常关闭、轮次结束和 bridge 公告边界 flush |
 | `storage/jsonl/tail-window.ts` | 有明确完整性与缺失父节点标记的原始尾窗，仅预览/诊断，不可替代完整会话或模型上下文 |

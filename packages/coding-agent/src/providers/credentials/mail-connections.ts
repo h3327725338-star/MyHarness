@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import { getAgentDir } from "../../config.ts";
 import { type AuthStorageBackend, FileAuthStorageBackend } from "./auth-storage.ts";
+import { builtInOAuthApp, type OAuthAppIdentity } from "./oauth-apps.ts";
 
 /**
  * Mailbox connections (Gmail and Outlook). Like GitHub Connect these are website credentials, kept apart from model
@@ -79,10 +80,13 @@ interface MailData {
 	apps?: Partial<Record<MailProvider, MailAppConfig>>;
 	accounts?: MailConnection[];
 }
+/** Where the app of a sign-in comes from: an environment variable, the user's own app, or MyHarness's own app. */
+export type MailAppSource = "environment" | "own" | "built-in";
 export interface MailAppStatus {
 	configured: boolean;
 	clientSecretSet: boolean;
 	fromEnvironment: boolean;
+	source: MailAppSource | null;
 }
 export interface MailApiResult {
 	account: MailAccount;
@@ -204,13 +208,17 @@ async function loopbackAuthorization(
 export class MailConnections {
 	private readonly storage: AuthStorageBackend;
 	private readonly request: typeof fetch;
+	private readonly builtIn: (provider: MailProvider) => OAuthAppIdentity | undefined;
 
 	constructor(
 		storage: AuthStorageBackend = new FileAuthStorageBackend(join(getAgentDir(), "mail-connections.json")),
 		request: typeof fetch = fetch,
+		builtIn: (provider: MailProvider) => OAuthAppIdentity | undefined = (provider) =>
+			builtInOAuthApp(provider, "mail"),
 	) {
 		this.storage = storage;
 		this.request = request;
+		this.builtIn = builtIn;
 	}
 
 	private parse(text: string | undefined): MailData {
@@ -252,23 +260,31 @@ export class MailConnections {
 		return this.storage.withLock((text) => ({ result: this.parse(text) }));
 	}
 
-	private app(provider: MailProvider): MailAppConfig | undefined {
+	/** The app a sign-in uses: the environment first, then the user's own app, then MyHarness's own app. */
+	private resolveApp(provider: MailProvider): { app: MailAppConfig; source: MailAppSource } | undefined {
 		const spec = MAIL_PROVIDER_SPECS[provider];
 		const envId = process.env[spec.clientIdEnv]?.trim();
 		if (envId) {
 			const envSecret = spec.clientSecretEnv ? process.env[spec.clientSecretEnv]?.trim() : undefined;
-			return { clientId: envId, ...(envSecret ? { clientSecret: envSecret } : {}) };
+			return { app: { clientId: envId, ...(envSecret ? { clientSecret: envSecret } : {}) }, source: "environment" };
 		}
 		const saved = this.read().apps?.[provider];
-		return saved?.clientId ? saved : undefined;
+		if (saved?.clientId) return { app: saved, source: "own" };
+		const builtIn = this.builtIn(provider);
+		return builtIn?.clientId ? { app: builtIn, source: "built-in" } : undefined;
+	}
+
+	private app(provider: MailProvider): MailAppConfig | undefined {
+		return this.resolveApp(provider)?.app;
 	}
 
 	getAppStatus(provider: MailProvider): MailAppStatus {
-		const app = this.app(provider);
+		const resolved = this.resolveApp(provider);
 		return {
-			configured: !!app,
-			clientSecretSet: !!app?.clientSecret,
-			fromEnvironment: !!process.env[MAIL_PROVIDER_SPECS[provider].clientIdEnv]?.trim(),
+			configured: !!resolved,
+			clientSecretSet: !!resolved?.app.clientSecret,
+			fromEnvironment: resolved?.source === "environment",
+			source: resolved?.source ?? null,
 		};
 	}
 

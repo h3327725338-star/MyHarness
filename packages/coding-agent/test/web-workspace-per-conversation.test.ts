@@ -36,7 +36,7 @@ it.skipIf(!installed.length)(
 				join(root, "test.js"),
 				`
 import {h,render} from '/vendor/preact.js';
-import {activateSlot,setView,state} from '/js/store.js';
+import {activateSlot,panelInstance,setView,state} from '/js/store.js';
 import {actions} from '/js/actions.js';
 import {ChangesPanel} from '/js/panel-changes.js';
 import {BranchChip} from '/js/branch-menu.js';
@@ -109,17 +109,37 @@ try{
  must(state.view.wsActive===inA[2],'A active tab was not restored: '+state.view.wsActive);
  must(state.view.changesScope==='worktree','A changes scope was not restored: '+state.view.changesScope);
 
- // Collaboration mode survives a trip through a chat that has nothing open: it pauses there and A comes back maximized.
+ // Collaboration mode and the widths are the chat's own too. A is widened and maximized; B, whose panel is open as well,
+ // keeps its plain layout, its width and the sidebar, and A comes back as it was, also after a chat with nothing open.
+ const layout=()=>JSON.stringify({open:state.view.panelOpen,max:state.view.wsMax,panelW:state.view.panelW,chatW:state.view.chatW,sidebar:state.view.sidebarOpen});
+ must(state.view.sidebarOpen===true&&state.view.panelW===560,'setup: the sidebar or the default width is not the fixture\\'s: '+layout());
+ const shownA=panelInstance();
+ setView({panelW:640});
  actions.toggleWorkspaceMax(true);
  await wait(400);
- must(state.view.wsMax===true,'collaboration mode did not start');
- await activateSlot('c');
- must(state.view.wsMax===false,'a chat with nothing open is shown maximized');
- await activateSlot('a');
- must(state.view.wsMax===true,'A lost collaboration mode after a switch through an empty chat');
+ setView({chatW:500});
+ must(state.view.wsMax===true&&state.view.sidebarOpen===false,'collaboration mode did not start: '+layout());
+ await activateSlot('b');
+ must(panelInstance()!==shownA,'B shows the panel components of A');
+ must(state.view.panelOpen===true&&state.view.wsMax===false,'B took the collaboration mode of A: '+layout());
+ must(state.view.panelW===560&&state.view.sidebarOpen===true,'B took the width of A, or its sidebar stayed hidden: '+layout());
+ setView({panelW:700});
+ actions.toggleWorkspaceMax(true);
+ await wait(400);
+ // B was never maximized: its chat column starts from the width dragged last (in A) and is B's own from now on.
+ must(state.view.chatW===500,'B did not start from the last dragged chat column width: '+layout());
+ setView({chatW:380});
  actions.toggleWorkspaceMax(false);
  await wait(400);
- must(state.view.wsMax===false&&state.view.wsMaxPaused===false,'leaving collaboration mode left it paused');
+ await activateSlot('c');
+ must(state.view.wsMax===false,'a chat with nothing open is shown maximized: '+layout());
+ // A chat without a panel of its own starts from the width dragged last.
+ must(state.view.panelW===700&&state.view.chatW===380,'a chat without a panel did not start from the last widths: '+layout());
+ await activateSlot('a');
+ must(state.view.wsMax===true&&state.view.panelW===640&&state.view.chatW===500&&state.view.sidebarOpen===false,'A did not come back as it was: '+layout());
+ actions.toggleWorkspaceMax(false);
+ await wait(400);
+ must(state.view.wsMax===false&&state.view.sidebarOpen===true,'leaving collaboration mode did not give the sidebar back: '+layout());
  await activateSlot('c');
  await activateSlot('a');
  must(state.view.wsMax===false,'collaboration mode came back after the user left it');
@@ -128,11 +148,23 @@ try{
  must(JSON.stringify(ids())===JSON.stringify(inB),'B tabs were not restored: '+JSON.stringify(ids()));
  must(state.view.wsActive==='file:two.ts','B active tab was not restored: '+state.view.wsActive);
  must(state.view.changesScope==='session','B changes scope was not restored: '+state.view.changesScope);
+ must(state.view.wsMax===false&&state.view.panelW===700&&state.view.chatW===380,'B lost its own layout: '+layout());
 
+ // Maximized in A and saved: the preferences keep each chat's widths and the sidebar of the plain layout, never
+ // collaboration mode, which lasts as long as the page.
+ await activateSlot('a');
+ actions.toggleWorkspaceMax(true);
+ await wait(400);
  const saved=JSON.parse(localStorage.getItem('myharness.web.prefs')||'{}');
  must(saved.wsPanels&&saved.wsPanels.a&&saved.wsPanels.b,'the per-conversation panels were not saved: '+JSON.stringify(saved.wsPanels));
  must(JSON.stringify(saved.wsPanels.a.wsTabs.map(tab=>tab.id))===JSON.stringify(inA),'the saved panel of A is wrong');
+ must(saved.wsPanels.a.panelW===640&&saved.wsPanels.a.chatW===500&&saved.wsPanels.b.panelW===700,'the widths of each chat were not saved: '+JSON.stringify(saved.wsPanels));
+ must(saved.panelW===700&&saved.chatW===380,'the widths a new chat starts with were not saved: '+JSON.stringify({panelW:saved.panelW,chatW:saved.chatW}));
+ must(!('wsMax' in saved.wsPanels.a)&&!('wsSidebar' in saved.wsPanels.a),'collaboration mode was saved: '+JSON.stringify(saved.wsPanels.a));
+ must(saved.sidebarOpen===true,'the sidebar hidden by collaboration mode was saved as hidden');
  must(saved.wsTabs===undefined,'the old global tab list is still written');
+ actions.toggleWorkspaceMax(false);
+ await wait(400);
 
  // The uncommitted count sits on the scope button that owns it: the conversation's own number on This chat,
  // the folder's whole number on Working tree. There is no separate explanatory row.

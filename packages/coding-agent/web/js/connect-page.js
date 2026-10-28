@@ -5,10 +5,11 @@
 // (command-panel.js).
 //
 // Every service has one "Sign in" that takes the simplest way there is: GitHub uses the sign-in GitHub CLI or Git already
-// has on this computer (or the user's own OAuth app when one is set up); a mailbox signs in on its own website in the
-// built-in browser, where the Agent then works with it; the desktop host tells whether each website is signed in
-// (`webMail`, browser-web-mail.cjs). Google and Microsoft give API access to mail only to a registered OAuth app, so the
-// user's own apps live folded under "Advanced" for those who want the mail tool's direct API access.
+// has on this computer (or the user's own OAuth app when one is set up); a mailbox signs in to the mail tool's direct API
+// access through an OAuth app — MyHarness's own when this build ships one (providers/credentials/oauth-apps.ts), else
+// the user's own — and without any app it signs in on its own website in the built-in browser, where the Agent then
+// works with it; the desktop host tells whether each website is signed in (`webMail`, browser-web-mail.cjs). Google and
+// Microsoft give API access to mail only to a registered OAuth app, so the user's own apps live folded under "Advanced".
 import { html, useEffect, useRef, useState, Collapse, Icon, Spinner } from "./ui.js";
 import { api, attempt, post, setView, toast, useStore } from "./store.js";
 import { actions, confirmDialog } from "./actions.js";
@@ -199,9 +200,10 @@ function AccountRow({ title, subtitle, warn, children }) {
 
 /**
  * The OAuth app of a service (under "Advanced"): numbered steps and the fields. Not set up yet, they are shown; set up,
- * they fold under one line, where a new Client ID replaces the saved one. The fields never show a saved secret.
+ * or covered by MyHarness's own app (`builtIn`), they fold under one line, where a Client ID of the user's own replaces
+ * the saved or built-in one. The fields never show a saved secret.
  */
-function AppSetup({ steps, configured, fromEnvironment, idPlaceholder, secret, secretSet, onSave, open, setOpen }) {
+function AppSetup({ steps, configured, builtIn, fromEnvironment, idPlaceholder, secret, secretSet, onSave, open, setOpen }) {
 	const [clientId, setClientId] = useState("");
 	const [clientSecret, setClientSecret] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -230,9 +232,9 @@ function AppSetup({ steps, configured, fromEnvironment, idPlaceholder, secret, s
 					<button class="btn primary" disabled=${busy || !ready} onClick=${save}>${busy ? html`<${Spinner} />` : null}${t("Save")}</button>
 				</div>`}
 	</div>`;
-	if (!configured) return html`<${Collapse} open=${open}>${body}<//>`;
+	if (!configured && !builtIn) return html`<${Collapse} open=${open}>${body}<//>`;
 	return html`<div class="svc-app">
-		<button class="svc-app-toggle" aria-expanded=${open} onClick=${() => setOpen(!open)}><${Icon} name="chevronRight" size=${13} class="disclose" />${fromEnvironment ? t("OAuth app set by an environment variable") : t("Uses your own OAuth app · change")}</button>
+		<button class="svc-app-toggle" aria-expanded=${open} onClick=${() => setOpen(!open)}><${Icon} name="chevronRight" size=${13} class="disclose" />${fromEnvironment ? t("OAuth app set by an environment variable") : configured ? t("Uses your own OAuth app · change") : t("Uses MyHarness's own app · use your own instead")}</button>
 		<${Collapse} open=${open}>${body}<//>
 	</div>`;
 }
@@ -324,12 +326,15 @@ function MailProviderCard({ c, provider, openAdvanced }) {
 	<//>`;
 }
 
-/** One service's own OAuth app inside "Advanced": open while it is not set up, folded to one line once it is. */
-function AdvancedApp({ name, configured, ...setup }) {
-	const [open, setOpen] = useState(!configured);
+/**
+ * One service's own OAuth app inside "Advanced": open while sign-in has no app at all, folded to one line once the user
+ * set one up or MyHarness's own app covers it.
+ */
+function AdvancedApp({ name, configured, builtIn, ...setup }) {
+	const [open, setOpen] = useState(!configured && !builtIn);
 	return html`<div class="svc-adv-item">
 		<div class="svc-adv-name"><strong>${name}</strong>${configured ? html`<span class="badge ok">${t("set")}</span>` : null}</div>
-		<${AppSetup} configured=${configured} open=${open} setOpen=${setOpen} ...${setup} />
+		<${AppSetup} configured=${configured} builtIn=${builtIn} open=${open} setOpen=${setOpen} ...${setup} />
 	</div>`;
 }
 
@@ -355,7 +360,8 @@ function AdvancedApps({ c, open, setOpen, anchor }) {
 			${Object.keys(MAIL_PROVIDERS).map((provider) => {
 				const app = c.mail.providers?.[provider];
 				const info = MAIL_PROVIDERS[provider];
-				return html`<${AdvancedApp} key=${provider} name=${providerLabel(provider)} steps=${SETUP_STEPS[provider]} configured=${!!app?.configured} fromEnvironment=${!!app?.fromEnvironment} idPlaceholder=${info.idPlaceholder} secret=${!!info.secret} secretSet=${!!app?.clientSecretSet} onSave=${saveMail(provider)} />`;
+				// `configured` here is an app of the user's own (or the environment's); MyHarness's own app only folds the steps.
+				return html`<${AdvancedApp} key=${provider} name=${providerLabel(provider)} steps=${SETUP_STEPS[provider]} configured=${!!app?.configured && app.source !== "built-in"} builtIn=${app?.source === "built-in"} fromEnvironment=${!!app?.fromEnvironment} idPlaceholder=${info.idPlaceholder} secret=${!!info.secret} secretSet=${!!app?.clientSecretSet && app.source !== "built-in"} onSave=${saveMail(provider)} />`;
 			})}
 		<//>
 	</section>`;

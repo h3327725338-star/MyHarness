@@ -336,6 +336,9 @@ const MAIL_PROVIDERS = {
 	},
 };
 
+/** What a provider's sign-in app is: MyHarness's own (built into this build), the user's own, or none yet. */
+const mailAppValue = (app) => (app?.source === "built-in" ? t("MyHarness's own") : app?.configured ? t("set") : t("not set"));
+
 function mailScreen() {
 	const { data, error, reload } = useLoaded(() => api("/api/mail"));
 	const event = useStore((s) => s.mailEvent);
@@ -395,7 +398,7 @@ function mailScreen() {
 			title: t("{name} OAuth app", { name: app.label }),
 			subtitle: t(info.setup),
 			rows: [
-				{ key: "client", label: "Client ID", desc: app.fromEnvironment ? t("Set by an environment variable, which takes precedence.") : t("First setup or a different app"), value: app.configured ? t("set") : t("not set"), chevron: true, onEnter: (c) => c.push(idScreen) },
+				{ key: "client", label: "Client ID", desc: app.fromEnvironment ? t("Set by an environment variable, which takes precedence.") : t("First setup or a different app"), value: mailAppValue(app), chevron: true, onEnter: (c) => c.push(idScreen) },
 				{ key: "register", label: t(info.registerLabel), icon: "externalLink", onEnter: () => openSystemLink(info.register) },
 			],
 		};
@@ -452,11 +455,11 @@ function mailScreen() {
 		}
 	for (const provider of Object.keys(MAIL_PROVIDERS)) {
 		const app = data.providers?.[provider];
-		if (app) rows.push({ key: `app-${provider}`, label: t("{name} OAuth app", { name: app.label }), value: app.configured ? t("set") : t("not set"), chevron: true, onEnter: (c) => c.push(appScreen(provider)) });
+		if (app) rows.push({ key: `app-${provider}`, label: t("{name} OAuth app", { name: app.label }), value: mailAppValue(app), chevron: true, onEnter: (c) => c.push(appScreen(provider)) });
 	}
 	return {
 		title: "Mail Connect",
-		subtitle: [data.error ? serverText(data.error) : "", t("Connect Gmail or Outlook mailboxes so MyHarness can read, search, send and organize your mail. Each provider needs your own OAuth app once.")].filter(Boolean).join("\n"),
+		subtitle: [data.error ? serverText(data.error) : "", t("Connect Gmail or Outlook mailboxes so MyHarness can read, search, send and organize your mail. A provider without MyHarness's own app needs your own OAuth app once.")].filter(Boolean).join("\n"),
 		rows,
 	};
 }

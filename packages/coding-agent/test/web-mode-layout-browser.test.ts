@@ -37,7 +37,7 @@ window.fetch=async(url,init={})=>{
  if(u==='/api/resources')return new Response(JSON.stringify({commands:[],tools:[],skills:[],templates:[],extensions:[]}));
  return new Response('{}');
 };
-const show=()=>JSON.stringify({slot:state.activeSlot,mode:state.view.chatMode,key:panelSessionId(),open:state.view.panelOpen,tabs:state.view.wsTabs.map(t=>t.id),max:state.view.wsMax,paused:state.view.wsMaxPaused,sidebar:state.view.sidebarOpen});
+const show=()=>JSON.stringify({slot:state.activeSlot,mode:state.view.chatMode,key:panelSessionId(),open:state.view.panelOpen,tabs:state.view.wsTabs.map(t=>t.id),max:state.view.wsMax,sidebar:state.view.sidebarOpen});
 // Every state the page renders: a Coding chat must never be drawn in General's collaboration layout.
 const leaks=[];
 subscribe(()=>{if(state.view.wsMax&&(state.view.chatMode==='coding'||String(panelSessionId()).startsWith('c')))leaks.push(show());});
@@ -61,14 +61,14 @@ try{
  await switchChatMode('coding');
  await settle();
  must(state.activeSlot==='C'&&state.view.chatMode==='coding','(1) C is not on screen: '+show());
- must(state.view.wsMax===false&&state.view.wsMaxPaused===false,'(1) Coding took General\\'s collaboration mode: '+show());
+ must(state.view.wsMax===false,'(1) Coding took General\\'s collaboration mode: '+show());
  must(state.view.panelOpen===true&&state.view.wsTabs.some(t=>t.id==='file:C:/fixture/a.txt'),'(1) C lost its own panel: '+show());
  must(state.view.sidebarOpen===true,'(1) the sidebar from before collaboration mode did not come back: '+show());
 
  // (2) Back to General: maximized again, with its sidebar hidden as it was there.
  await switchChatMode('general');
  await settle();
- must(state.activeSlot==='G'&&state.view.wsMax===true&&state.view.wsMaxPaused===false,'(2) General lost its collaboration mode: '+show());
+ must(state.activeSlot==='G'&&state.view.wsMax===true,'(2) General lost its collaboration mode: '+show());
  must(state.view.sidebarOpen===false&&state.view.wsTabs.some(t=>t.id==='file:C:/fixture/b.txt'),'(2) General did not come back as it was: '+show());
 
  // (3) To a Coding chat that still has to load (and has nothing open): plain layout from the first frame.
@@ -77,7 +77,7 @@ try{
  await switchChatMode('coding');
  await settle();
  must(state.activeSlot==='C2'&&state.view.chatMode==='coding','(3) C2 is not on screen: '+show());
- must(state.view.wsMax===false&&state.view.wsMaxPaused===false&&state.view.panelOpen===false,'(3) C2 is not in the plain layout: '+show());
+ must(state.view.wsMax===false&&state.view.panelOpen===false,'(3) C2 is not in the plain layout: '+show());
  must(state.view.sidebarOpen===true,'(3) the sidebar did not come back: '+show());
  await switchChatMode('general');
  await settle();
@@ -99,7 +99,7 @@ try{
  await settle();
  await switchChatMode('general');
  await settle();
- must(state.view.wsMax===false&&state.view.wsMaxPaused===false,'(5) collaboration mode came back after the user left it: '+show());
+ must(state.view.wsMax===false,'(5) collaboration mode came back after the user left it: '+show());
  must(leaks.length===0,'a Coding chat was drawn maximized: '+leaks.slice(0,3).join(' | '));
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 }catch(error){document.body.insertAdjacentHTML('beforeend','<p id="ready">'+String(error.stack||error)+'</p>');}

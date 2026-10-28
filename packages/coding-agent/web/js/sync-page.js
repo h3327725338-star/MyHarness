@@ -160,6 +160,8 @@ export function SyncPage() {
 	const [clientTouched, setClientTouched] = useState(false);
 	const [deviceTouched, setDeviceTouched] = useState(false);
 	const [detailsOpen, setDetailsOpen] = useState(false);
+	// null until the user toggles it: the client fields then show only when nothing else can sign in.
+	const [clientOpen, setClientOpen] = useState(null);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -207,6 +209,9 @@ export function SyncPage() {
 	const state = stateLine(status, sync);
 	const folder = status.folder;
 	const account = status.account;
+	// With MyHarness's own Google app a sign-in is all it takes; a client of the user's own is needed only without one.
+	const canSignIn = (status.clientConfigured && status.clientSecretConfigured) || !!status.builtInClient;
+	const clientShown = clientOpen ?? (!status.connected && !canSignIn);
 	const risk = status.externalRisk ?? { detected: false };
 	const files = sync.files;
 	const fileWorkspaces = sync.workspaces;
@@ -279,6 +284,38 @@ export function SyncPage() {
 						toast(t("Workspace folder bound."), "success");
 						return;
 					}
+				} else if (occupant) {
+					// A folder belongs to one Workspace on a device. The restored one joins the Workspace that holds it.
+					const ok = await confirmDialog({
+						title: t("Merge into {name}?", { name: occupant.name }),
+						message: t(
+							"{name} on this computer already uses this folder ({count} chats). Merging moves the chats and memories of the workspace restored from the other computer into {name}, on every computer, and removes the restored workspace from the lists. Nothing is deleted.",
+							{ name: occupant.name, count: occupant.chatCount },
+						),
+						confirmLabel: t("Merge"),
+					});
+					if (!ok) return;
+					try {
+						const result = await post("/api/sync/merge-workspace", {
+							workspaceId,
+							targetWorkspaceId: occupant.workspaceId,
+							confirmed: true,
+						});
+						if (result?.status) set({ syncStatus: result.status });
+						const kept = result?.merged?.kept?.length ?? 0;
+						toast(
+							kept
+								? t("Merged into {name}. {count} items with a name {name} already uses stayed with the restored workspace.", {
+										name: occupant.name,
+										count: kept,
+									})
+								: t("Merged into {name}.", { name: occupant.name }),
+							kept ? "warning" : "success",
+						);
+					} catch (mergeError) {
+						toast(mergeError?.message || t("The operation failed."), "error", 7000);
+					}
+					return;
 				}
 			}
 			toast(error?.message || t("The operation failed."), "error", 7000);
@@ -422,14 +459,17 @@ export function SyncPage() {
 			<${Row}
 				label=${t("Account")}
 				description=${account?.email ||
-					(status.clientConfigured && status.clientSecretConfigured
+					(canSignIn
 						? t("No Google account is connected on this computer.")
 						: t("Paste the client id and secret of a Google Cloud desktop OAuth client first."))}
 			>
 				${status.connected
-					? html`<button class="btn" disabled=${busy === "disconnect"} onClick=${disconnect}>${t("Disconnect")}</button>`
-					: html`<button class="btn primary" disabled=${busy === "connect" || !status.clientConfigured || !status.clientSecretConfigured} onClick=${connect}>${busy === "connect" ? t("Opening…") : t("Connect Google Drive")}</button>`}
-				${status.phase === "authorizing"
+					? html`${status.lastError && status.phase !== "authorizing"
+								? html`<button class="btn" disabled=${busy === "connect"} onClick=${connect}>${busy === "connect" ? t("Opening…") : t("Sign in again")}</button>`
+								: null}
+							<button class="btn" disabled=${busy === "disconnect"} onClick=${disconnect}>${t("Disconnect")}</button>`
+					: html`<button class="btn primary" disabled=${busy === "connect" || !canSignIn} onClick=${connect}>${busy === "connect" ? t("Opening…") : t("Connect Google Drive")}</button>`}
+				${status.phase === "authorizing" && !status.connected
 					? html`<button class="btn" disabled=${busy === "disconnect"} onClick=${cancelWait}>${t("Cancel waiting")}</button>`
 					: null}
 			<//>
@@ -438,64 +478,6 @@ export function SyncPage() {
 						<a class="btn" href=${folder.url} target="_blank" rel="noreferrer" data-link-system><${Icon} name="drive" size=${14} />${folder.name}</a>
 					<//>`
 				: null}
-			<${Row}
-				label=${t("OAuth client id")}
-				description=${t("Paste the client ID of a Google Cloud desktop OAuth client.")}
-				wide=${true}
-			>
-				<div class="row sync-field">
-					<input
-						class="field grow"
-						value=${clientId}
-						placeholder="1234567890-…apps.googleusercontent.com"
-						spellcheck="false"
-						autocomplete="off"
-						onInput=${(event) => {
-							setClientTouched(true);
-							setClientId(event.target.value);
-						}}
-					/>
-					<button
-						class="btn"
-						disabled=${busy === "client" || !clientId.trim() || clientId.trim() === (status.clientId ?? "")}
-						onClick=${async () => {
-							setClientTouched(false);
-							await run("client", () => post("/api/sync/config", { clientId: clientId.trim() }));
-						}}
-					>${t("Save")}</button>
-				</div>
-			<//>
-			<${Row}
-				label=${t("OAuth client secret")}
-				description=${status.clientSecretConfigured
-					? t("A secret is saved on this computer. Paste a new one only to replace it.")
-					: t("Google rejects the token exchange without it, even with PKCE.")}
-				wide=${true}
-			>
-				<div class="row sync-field">
-					<input
-						class="field grow"
-						type="password"
-						value=${clientSecret}
-						placeholder=${status.clientSecretConfigured ? "••••••••" : "GOCSPX-…"}
-						spellcheck="false"
-						autocomplete="off"
-						onInput=${(event) => setClientSecret(event.target.value)}
-					/>
-					<button
-						class="btn"
-						disabled=${busy === "secret" || !clientSecret.trim()}
-						onClick=${async () => {
-							const result = await run(
-								"secret",
-								() => post("/api/sync/config", { clientSecret: clientSecret.trim() }),
-								"Client secret saved.",
-							);
-							if (result) setClientSecret("");
-						}}
-					>${t("Save")}</button>
-				</div>
-			<//>
 			<${Row} label=${t("This device")} description=${t("Shown on the other computers when they report progress.")}>
 				<div class="row sync-field">
 					<input
@@ -517,6 +499,69 @@ export function SyncPage() {
 						}}
 					>${t("Save")}</button>
 				</div>
+			<//>
+			<button class="set-card-toggle" aria-expanded=${clientShown} onClick=${() => setClientOpen(!clientShown)}>
+				<${Icon} name="chevronRight" size=${13} class="disclose" /><span class="set-label">${t("Advanced: your own Google OAuth client")}</span>
+			</button>
+			<${Collapse} open=${clientShown}>
+				<${Row}
+					label=${t("OAuth client id")}
+					description=${t("Paste the client ID of a Google Cloud desktop OAuth client. It replaces MyHarness's own app for the browser sign-in.")}
+					wide=${true}
+				>
+					<div class="row sync-field">
+						<input
+							class="field grow"
+							value=${clientId}
+							placeholder="1234567890-…apps.googleusercontent.com"
+							spellcheck="false"
+							autocomplete="off"
+							onInput=${(event) => {
+								setClientTouched(true);
+								setClientId(event.target.value);
+							}}
+						/>
+						<button
+							class="btn"
+							disabled=${busy === "client" || !clientId.trim() || clientId.trim() === (status.clientId ?? "")}
+							onClick=${async () => {
+								setClientTouched(false);
+								await run("client", () => post("/api/sync/config", { clientId: clientId.trim() }));
+							}}
+						>${t("Save")}</button>
+					</div>
+				<//>
+				<${Row}
+					label=${t("OAuth client secret")}
+					description=${status.clientSecretConfigured
+						? t("A secret is saved on this computer. Paste a new one only to replace it.")
+						: t("Google rejects the token exchange without it, even with PKCE.")}
+					wide=${true}
+				>
+					<div class="row sync-field">
+						<input
+							class="field grow"
+							type="password"
+							value=${clientSecret}
+							placeholder=${status.clientSecretConfigured ? "••••••••" : "GOCSPX-…"}
+							spellcheck="false"
+							autocomplete="off"
+							onInput=${(event) => setClientSecret(event.target.value)}
+						/>
+						<button
+							class="btn"
+							disabled=${busy === "secret" || !clientSecret.trim()}
+							onClick=${async () => {
+								const result = await run(
+									"secret",
+									() => post("/api/sync/config", { clientSecret: clientSecret.trim() }),
+									"Client secret saved.",
+								);
+								if (result) setClientSecret("");
+							}}
+						>${t("Save")}</button>
+					</div>
+				<//>
 			<//>
 		<//>
 		<${Card} title=${t("Automatic sync")} description=${t("Changes upload after a short pause; other computers are checked in the background.")}>
@@ -616,7 +661,7 @@ export function SyncPage() {
 							<div class="set-text">
 								<span class="set-label">${conflict.path}</span>
 								<span class="set-desc">${t(conflict.message)}</span>
-								${conflict.remoteCopyPath ? html`<span class="dim mono truncate" title=${conflict.remoteCopyPath}>${conflict.remoteCopyPath}</span>` : null}
+								${conflict.remoteCopyPath ? html`<span class="dim mono sync-path">${conflict.remoteCopyPath}</span>` : null}
 								<span class="dim">${conflict.deviceName} · ${timeText(conflict.at)}</span>
 							</div>
 							<div class="set-control row">
@@ -642,11 +687,11 @@ export function SyncPage() {
 		${conflicts.length
 			? html`<${Card} title=${t("Kept for review")} id="sync-review" description=${t("Nothing was overwritten. The local version is in use; the other version is saved beside the agent data.")}>
 					${conflicts.slice(0, 20).map(
-						(conflict) => html`<div class="set-row stack" key=${conflict.id}>
+						(conflict) => html`<div class="set-row wide" key=${conflict.id}>
 							<div class="set-text"><span class="set-label">${reviewTitle(conflict)}</span><span class="set-desc">${t(conflict.message)}</span></div>
 							<div class="set-control sync-paths">
-								<span class="dim mono truncate" title=${conflict.localPath || ""}>${conflict.localPath || ""}</span>
-								${conflict.remoteCopyPath ? html`<span class="dim mono truncate" title=${conflict.remoteCopyPath}>${conflict.remoteCopyPath}</span>` : null}
+								${conflict.localPath ? html`<span class="dim sync-path">${t("On this computer:")} <span class="mono">${conflict.localPath}</span></span>` : null}
+								${conflict.remoteCopyPath ? html`<span class="dim sync-path">${t("Copy of the other version:")} <span class="mono">${conflict.remoteCopyPath}</span></span>` : null}
 								<span class="dim">${conflict.deviceName} · ${timeText(conflict.at)}</span>
 							</div>
 						</div>`,

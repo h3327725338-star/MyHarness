@@ -230,6 +230,10 @@
 .app:not(.ws-max) .main > .resizer { left: auto; right: -4px; }
 
 .toasts { position: absolute; top: 52px; right: 14px; display: flex; flex-direction: column; z-index: 60; pointer-events: none; max-width: 420px; }
+/* Under a dialog's scrim (z-index 200) a toast was dimmed and partly covered by the dialog. While a dialog is open (an
+   .overlay-host: Settings, a confirmation, the palette) the toasts move above it, to the top centre of the window, clear
+   of its title and close button. Otherwise popover menus still cover them. */
+.app:has(> .overlay-host) .toasts { position: fixed; top: 12px; right: auto; left: 50%; transform: translateX(-50%); z-index: 650; width: max-content; max-width: min(420px, calc(100vw - 32px)); }
 /* A toast sits in a Collapse slot (Toasts in app.js) so a dismissed one folds away; its spacing is inside the slot, and while it
    is shown the slot does not clip its shadow. */
 .toast-slot .toast { margin-bottom: 8px; }

@@ -1,5 +1,5 @@
 // User-level operations. Each maps to a real backend endpoint; nothing here fakes Agent behaviour.
-import { addPendingMessage, removePendingMessage, GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, hideWhileDeleting, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, noteFreshRow, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode, verifyLiveUpdates, REQUEST_TIMEOUT } from "./store.js";
+import { addPendingMessage, removePendingMessage, GENERAL_KEY, beginSwitch, failSwitch, canSendToActive, activateSlot, activeSlotId, api, attempt, emit, flushDrafts, hideWhileDeleting, isLatestSwitch, loadArchived, loadGitStatus, loadResources, loadSessions, loadSlots, loadUnbound, loadWorkspaces, nextSwitch, noteFreshRow, plainSidebar, post, refreshAll, set, setView, state, switchChatMode, toast, uiMode, verifyLiveUpdates, REQUEST_TIMEOUT } from "./store.js";
 import { chatModeOf, expandedKey } from "./chat-modes.js";
 import { BUILTIN_COMMAND_KINDS } from "./builtin-commands.js";
 import { commitChanges, pushChanges } from "./git-flow.js";
@@ -143,12 +143,11 @@ export function exportTooLargeMessage(status, body) {
 /**
  * The view patch that ends collaboration mode (empty when not in it). Collaboration mode hid the sidebar; leaving gives
  * back the state it had before, unless the user opened the sidebar while in it: that newer choice stands, instead of the
- * sidebar the user just opened vanishing again on exit.
+ * sidebar the user just opened vanishing again on exit (store.js `plainSidebar`).
  */
 function leaveWorkspaceMax() {
 	if (!state.view.wsMax) return {};
-	const sidebar = state.view.wsMaxSidebar;
-	return { wsMax: false, wsMaxSidebar: null, ...(sidebar === null || state.view.sidebarOpen ? {} : { sidebarOpen: sidebar }) };
+	return { wsMax: false, wsMaxSidebar: null, sidebarOpen: plainSidebar() };
 }
 
 /**
@@ -191,12 +190,11 @@ export const actions = {
 	/**
 	 * Collaboration mode: the workspace takes the room of the sidebar and the conversation, and the conversation becomes
 	 * a column on its right, so the user can keep talking to the Agent while watching the file or page it works on. The
-	 * sidebar is hidden for the duration (it can still be shown) and comes back as it was on exit.
+	 * sidebar is hidden for the duration (it can still be shown) and comes back as it was on exit. It is the mode of the
+	 * chat on screen: other chats keep their own layout (store.js applyPanel).
 	 */
 	toggleWorkspaceMax(force) {
 		const next = typeof force === "boolean" ? force : !state.view.wsMax;
-		// The user's own choice replaces a mode paused by a chat switch (store.js applyPanel).
-		if (state.view.wsMaxPaused) setView({ wsMaxPaused: false });
 		if (next === state.view.wsMax) return;
 		if (next && !state.view.wsActive && !state.view.wsTabs.length) return;
 		// The columns swap places: layout-morph.js moves each one from its old box to its new one.
@@ -437,10 +435,10 @@ export const actions = {
 	},
 
 	/** Mount a saved quote above the input: the passage, the reader's note, any file picked with it, where it was picked. */
-	addQuote(text, { note = "", files = [], hint = 0 } = {}) {
+	addQuote(text, { note = "", files = [], hint = 0, origin = null } = {}) {
 		const trimmed = String(text || "").trim();
 		if (!trimmed) return;
-		set({ quoteInsert: { text: trimmed, note, files, hint, nonce: Date.now() } });
+		set({ quoteInsert: { text: trimmed, note, files, hint, origin, nonce: Date.now() } });
 	},
 
 	async send(text, { images, attachments, mode, clientMessageId, onRejected } = {}) {

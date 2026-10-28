@@ -417,7 +417,7 @@ function rememberTavilyUsage(value) {
 /** Remaining searches of one key, or why they are unknown. */
 function keyCount(entry, loading) {
 	if (!entry) return loading ? t("Checking…") : "";
-	if ("error" in entry) return t("Count unavailable");
+	if ("error" in entry) return t("Could not check");
 	return entry.remaining === null ? t("Unlimited") : t("{count} searches left", { count: entry.remaining });
 }
 
@@ -512,7 +512,7 @@ function TavilyKeyRow({ off }) {
 		await act(() => post("/api/settings/tavily-key/delete", { id: key.id }, ""), t("API key deleted"));
 	};
 	const total = !configured ? t("Not configured")
-		: known.total === undefined ? (usage.loading || !Object.keys(known.byId).length ? t("Checking…") : t("Count unavailable"))
+		: known.total === undefined ? (usage.loading || !Object.keys(known.byId).length ? t("Checking…") : t("Could not check"))
 		: known.total === null ? t("Unlimited")
 		: known.unknown ? `${t("{count} searches left", { count: known.total })} · ${t("{n} keys unavailable", { n: known.unknown })}`
 		: t("{count} searches left", { count: known.total });

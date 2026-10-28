@@ -274,6 +274,8 @@ export interface SyncStatusSnapshot {
 	progress?: SyncProgress | null;
 	/** The independent workspace file channel; absent until the service is wired with a transport. */
 	files?: import("./files/types.ts").WorkspaceFileSyncStatus;
+	/** Set by the service: MyHarness ships its own Google OAuth app, so signing in needs no client of the user's. */
+	builtInClient?: boolean;
 }
 
 /** What the scanner found locally. Content is read lazily; unchanged files are not hashed twice. */

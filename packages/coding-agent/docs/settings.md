@@ -70,19 +70,19 @@ Interactive mode 和 Web UI 都可以在任务完成、失败或中断后显示�
 
 Google 和 Microsoft 只把邮箱 API 开放给注册过的 OAuth 应用（Outlook.com 自 2024 年 9 月起也不再接受 IMAP 应用专用密码），所以邮箱的**登录**有两种结果：
 
-- 没有配置自己的 OAuth 应用、且在桌面应用中：点**登录**会关闭设置，在内置浏览器新开该邮箱的网页版（Gmail `https://mail.google.com/`，Outlook `https://outlook.office.com/mail/`），用户在网站自己的页面登录。登录状态由内置浏览器保存，Agent 之后用 `workspace` 工具在网页里读写和整理邮件；`mail` 工具在没有 API 邮箱时会把 Agent 引向这条路。桌面宿主会告诉页面网站是否已登录（`desktop:browser` 的 `webMail`，`packages/desktop/browser-web-mail.cjs`）：Gmail 看 Google 的登录 Cookie 是否存在（只看名字），再用浏览器自己的 Cookie 读 Gmail 的 Atom 订阅得到邮箱地址；Outlook 没有这样的接口（未登录也返回同一个启动页），以标签实际显示的收件箱标题（“Mail - 名字 - Outlook”）记为已登录，从邮箱地址被转到微软登录页记为已退出；打开着的邮箱标签优先。已登录时卡片显示“已登录”和地址或名字、按钮变成**打开**，右侧栏 Session 的“连接”也列出这个邮箱；退出登录在网站上操作。旧版桌面宿主不认识 `webMail` 时，卡片保持原来的“登录”。
-- 在**高级：使用自己的 OAuth 应用**里配置了该邮箱的应用：点**登录**走下面的 OAuth 流程，连接任意多个邮箱，供默认的 main-agent `mail` 工具直接调用 API（不在桌面应用里时，没有应用的邮箱卡片显示**开始设置**，点它展开“高级”）：
+- 没有可用的 OAuth 应用（这个版本没有 MyHarness 自带的应用，用户也没有配置自己的）、且在桌面应用中：点**登录**会关闭设置，在内置浏览器新开该邮箱的网页版（Gmail `https://mail.google.com/`，Outlook `https://outlook.office.com/mail/`），用户在网站自己的页面登录。登录状态由内置浏览器保存，Agent 之后用 `workspace` 工具在网页里读写和整理邮件；`mail` 工具在没有 API 邮箱时会把 Agent 引向这条路。桌面宿主会告诉页面网站是否已登录（`desktop:browser` 的 `webMail`，`packages/desktop/browser-web-mail.cjs`）：Gmail 看 Google 的登录 Cookie 是否存在（只看名字），再用浏览器自己的 Cookie 读 Gmail 的 Atom 订阅得到邮箱地址；Outlook 没有这样的接口（未登录也返回同一个启动页），以标签实际显示的收件箱标题（“Mail - 名字 - Outlook”）记为已登录，从邮箱地址被转到微软登录页记为已退出；打开着的邮箱标签优先。已登录时卡片显示“已登录”和地址或名字、按钮变成**打开**，右侧栏 Session 的“连接”也列出这个邮箱；退出登录在网站上操作。旧版桌面宿主不认识 `webMail` 时，卡片保持原来的“登录”。
+- 有可用的 OAuth 应用——MyHarness 自带的（见下文“MyHarness 自带的 OAuth 应用”），或在**高级：使用自己的 OAuth 应用**里配置的：点**登录**走下面的 OAuth 流程，连接任意多个邮箱，供默认的 main-agent `mail` 工具直接调用 API（不在桌面应用里时，没有应用的邮箱卡片显示**开始设置**，点它展开“高级”）：
 
 | 入口 | 覆盖的邮箱 | 登录与 API |
 | --- | --- | --- |
 | **连接 Gmail** | `@gmail.com` / `@googlemail.com` 个人邮箱和 Google Workspace（自定义域名）邮箱 | Google OAuth，scope `https://mail.google.com/`；Gmail API（`gmail.googleapis.com`） |
 | **连接 Outlook** | 个人 Microsoft 账号（outlook.com、hotmail.com、live.com、msn.com 等）和任意组织的 Microsoft 365 / Exchange Online 工作或学校邮箱 | Microsoft identity platform `/common`；Microsoft Graph（`graph.microsoft.com`），scope `User.Read Mail.ReadWrite Mail.Send MailboxSettings.ReadWrite offline_access` |
 
-自己的 OAuth 应用都在页面最下方默认折叠的**高级：使用自己的 OAuth 应用**里：每个服务一段编号步骤（第一步带注册页面的入口），填入 Client ID（Gmail 还要 Client Secret）保存；设置好后收成一行“使用你自己的 OAuth 应用 · 更改”，需要换 Client ID 时再展开：
+自己的 OAuth 应用都在页面最下方默认折叠的**高级：使用自己的 OAuth 应用**里：每个服务一段编号步骤（第一步带注册页面的入口），填入 Client ID（Gmail 还要 Client Secret）保存；设置好后收成一行“使用你自己的 OAuth 应用 · 更改”，需要换 Client ID 时再展开；已由 MyHarness 自带应用覆盖的服务收成“使用 MyHarness 自带的应用 · 改用自己的”，在这里填的应用会代替自带应用：
 
 - Google：在 Google Cloud Console 启用 Gmail API、配置 OAuth 同意屏幕，创建类型为“桌面应用”的 OAuth 客户端，填入 Client ID 和 Client Secret（桌面客户端的 secret 不是机密，但 Google 换取令牌时需要）。停留在“测试”状态的应用只能由测试用户登录，且刷新令牌 7 天后失效；自己的 Google Workspace 可把同意屏幕设为“内部”。
 - Microsoft：在 Microsoft Entra 应用注册中选择“任何组织目录中的账户和个人 Microsoft 账户”，添加平台“移动和桌面应用程序”，重定向 URI 填 `http://localhost`，只填应用程序（客户端）ID，不需要 secret。组织可能要求管理员批准应用或禁止用户授权，这由租户策略决定。
-- 环境变量优先于已保存的值：`MYHARNESS_GOOGLE_CLIENT_ID`、`MYHARNESS_GOOGLE_CLIENT_SECRET`、`MYHARNESS_MICROSOFT_CLIENT_ID`、`MYHARNESS_MICROSOFT_CHINA_CLIENT_ID`。
+- 优先级：环境变量 > 已保存的自己的应用 > MyHarness 自带的应用。环境变量：`MYHARNESS_GOOGLE_CLIENT_ID`、`MYHARNESS_GOOGLE_CLIENT_SECRET`、`MYHARNESS_MICROSOFT_CLIENT_ID`。
 
 登录使用授权码 + PKCE 和本机回环重定向：服务端在 `127.0.0.1` 的随机端口临时监听（Outlook 的 `localhost` 重定向同时监听 `[::1]`），在系统浏览器打开登录页，回调后换取令牌并读取邮箱地址；10 分钟未完成或点**取消**即关闭监听。没有使用 device code：Google 不允许 Gmail scope 走 device flow，很多 Microsoft 365 租户也用条件访问禁止它。
 
@@ -96,6 +96,27 @@ Gmail 的 `text/*` 正文会解码成 `body.text`；Outlook 请求带 `Prefer: o
 即将过期的令牌会在访问或**验证连接**前自动刷新（Microsoft 会轮换刷新令牌）。凭据保存在 `~/.myharness/agent/mail-connections.json`（或配置的 agent directory），与 `account-connections.json` 一样依靠文件权限、锁和原子写入保护，不使用 keychain。**断开连接**只删除本机凭据；远端授权在 Google 账号的第三方连接、Microsoft 个人账号的应用权限或“我的应用”中撤销。
 
 不支持：Exchange 本地部署（on-premises）邮箱、Microsoft 365 美国政府云、共享邮箱（`.Shared` 权限只适用于工作账号，未申请），以及 IMAP/SMTP 应用专用密码登录。
+
+<a id="myharnesss-own-oauth-apps"></a>
+
+## MyHarness 自带的 OAuth 应用（MyHarness's own OAuth apps）
+
+Google 云端硬盘同步、Gmail 和 Outlook 的 API 访问都要经过一个注册过的 OAuth 应用。`src/providers/credentials/oauth-apps.ts` 记录 MyHarness 自己注册的应用，每个应用写明用途（`uses`：`sync` 同步、`mail` 邮箱），`builtInOAuthApp(provider, use)` 只返回登记了该用途的应用。当前：
+
+- Google：已填入 MyHarness 的桌面客户端“MyHarness Desktop”，同意屏幕已发布为正式版，只用于同步。用户在设置 → Google 云端硬盘点**连接 Google 云端硬盘**、在浏览器里登录即可，不用创建或粘贴任何东西。
+- Gmail 暂不使用这个应用（见下文受限 scope），仍在桌面应用里走网页版，或在**高级：使用自己的 OAuth 应用**里配置。
+- Microsoft：还没有注册，Outlook 同 Gmail。
+
+用户配置的应用始终优先：同步先用这台设备保存的客户端（`config.json` 为空时取 `MYHARNESS_GOOGLE_CLIENT_ID`/`MYHARNESS_GOOGLE_CLIENT_SECRET`），邮箱按上面的优先级；都没有时才用自带应用。状态里用 `builtInClient`（`GET /api/sync/state`）和 `source: "built-in"`（`GET /api/mail`）表示正在用自带应用。
+
+维护者注册与维护：
+
+- Google：在 MyHarness 的 Google Cloud 项目里创建类型为“桌面应用”的 OAuth 客户端，启用 Google Drive API（同步；邮箱另需 Gmail API），把同意屏幕发布为正式版（In production）；停留在“测试”状态时只有测试用户能登录，且登录 7 天后失效。发布前 Google 要求在 Branding 页填写应用主页和隐私政策网址，并把它们的域名加入授权域名；当前分别是仓库首页和 [`docs/PRIVACY.md`](../../../docs/PRIVACY.md)，授权域名 `github.com`。同步只请求 `openid`、`email`、`profile` 和 `drive.file`，都是非敏感 scope，发布后不会出现“未经验证的应用”提示，也没有 100 位新用户上限。Gmail 的 `https://mail.google.com/` 是受限 scope：通过 Google 的受限 scope 验证（含安全评估）之前，用户登录时会看到未经验证提示，并计入整个项目生命周期最多 100 位用户的上限，所以 Google 应用的 `uses` 目前只有 `sync`；验证通过后再加上 `mail`。Google 换取令牌时要求桌面客户端的 secret；它对安装在用户电脑上的应用不是机密，所以和 Client ID 一起写进 `oauth-apps.ts`。
+- Microsoft：Entra 应用注册选“任何组织目录中的账户和个人 Microsoft 账户”，平台“移动和桌面应用程序”，重定向 URI `http://localhost`；公共客户端，只填 Client ID。组织租户是否允许用户自行授权由租户策略决定。
+
+`drive.file` 只让应用看到它自己创建的文件，所以同步的每台电脑都要用同一个 OAuth 客户端登录；换用别的客户端（例如从自己的客户端改成自带应用）后可能看不到原来的 `MyHarness` 文件夹，会另建一个同步空间。
+
+发布审计（`scripts/release-audit.mjs`）会把源码里的 client secret 报为发现；Google 的 secret 已按 `docs/RELEASE_GATE.md` 的“复核过的公开值”登记，审计只豁免这一个值。轮换 secret 时要同时更新 `scripts/release-audit.mjs` 里对应的 SHA-256。推送含 secret 的提交时，GitHub 的 secret scanning 可能拦截（它识别 Google OAuth 客户端 ID 和 secret），确认后在 GitHub 给出的页面放行。
 
 <a id="providers-api-keys-and-default-model"></a>
 ## Providers、API Keys 和 Default Model

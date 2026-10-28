@@ -15,7 +15,7 @@ import { basename, clip, splitFirstSentence, dirname, fmtBytes, fmtDuration, fmt
 import { count, t, N_, serverText, tNodes, getLang } from "./i18n.js";
 import { openImageLightbox } from "./lightbox.js";
 import { MessageRail } from "./message-rail.js";
-import { jumpToQuote, offsetInScroller, registerScroller, REVEAL_ENTRY_EVENT, revealEntryIn, scrollToNode, turnKeyForEntry } from "./message-nav.js";
+import { jumpToQuote, keepScrollPlace, offsetInScroller, registerScroller, REVEAL_ENTRY_EVENT, revealEntryIn, scrollToNode, turnKeyForEntry } from "./message-nav.js";
 import { exportReadOnly } from "./export-mode.js";
 import { afterModeReveal, beforePageCapture, modeRevealActive } from "./mode-transition.js";
 
@@ -643,11 +643,19 @@ function UserText({ text }) {
 		return () => observer.disconnect();
 	}, []);
 	const folded = fold.foldable && !open;
+	// Folding gave the message another height: whatever the reader has at the top stays there in this same frame
+	// (keepScrollPlace). Not when it mounts: the transcript itself places what a mount moves.
+	const height = fold.foldable ? (open ? fold.full : fold.line * FOLDED_LINES) : null;
+	const sized = useRef(false);
+	useLayoutEffect(() => {
+		if (sized.current) keepScrollPlace();
+		sized.current = true;
+	}, [height]);
 	// A quote in a sent message leads back to the passage it was taken from.
 	const onQuote = (event) => {
 		const quote = event.target.closest?.("blockquote");
 		if (!quote || event.target.closest("a") || window.getSelection?.()?.toString()) return;
-		void jumpToQuote(quote);
+		void jumpToQuote(quote, text);
 	};
 	const onQuoteHover = (event) => {
 		const quote = event.target.closest?.("blockquote");
@@ -1054,20 +1062,31 @@ function readPlace(el, stuck) {
 	if (found < 0) return { stick: true };
 	const node = sections[found];
 	const place = { stick: false, key: node.dataset.turnKey, offset: Math.round(top - node.getBoundingClientRect().top) };
-	// The block at the top inside that turn too (its path of child positions and the start of its text): coming back at
-	// another column width (a panel still sliding open) puts the same paragraph at the top, not the same pixel of the turn.
+	// The block at the top inside that turn too: every box on the way down to it (its position among its siblings, where
+	// its top was and the start of its text). Coming back at another column width (a panel still sliding open) puts the
+	// same paragraph at the top, not the same pixel of the turn; when the innermost boxes are not there again (a link that
+	// local-file detection added, not added yet), the deepest one that is still there is used.
 	const block = readingAnchor(el, el.querySelector(":scope > .transcript-inner"));
-	const path = [];
-	for (let at = block?.node; at && at !== node; at = at.parentElement) path.unshift(Array.prototype.indexOf.call(at.parentElement?.children ?? [], at));
-	if (block && block.node !== node && node.contains(block.node)) Object.assign(place, { path, blockTop: Math.round(block.top), blockText: block.node.textContent.slice(0, 40) });
+	if (block && block.node !== node && node.contains(block.node)) {
+		place.path = [];
+		for (let at = block.node; at !== node; at = at.parentElement)
+			place.path.unshift({ index: Array.prototype.indexOf.call(at.parentElement.children, at), top: Math.round(at.getBoundingClientRect().top - top), text: at.textContent.slice(0, 40) });
+	}
 	return place;
 }
-/** The block a remembered place names inside its turn `node`, or null when the turn no longer has it there. */
+/**
+ * The deepest box of a remembered place that its turn `node` still has (`{ el, top }`, `whole` when that is the block
+ * itself), or null when not even the first one is there.
+ */
 function placeBlock(node, want) {
-	if (!want.path) return null;
+	let found = null;
 	let at = node;
-	for (const index of want.path) at = at?.children[index];
-	return at && at.textContent.slice(0, 40) === want.blockText ? at : null;
+	for (const [depth, step] of (want.path || []).entries()) {
+		at = at.children[step.index];
+		if (!at || at.textContent.slice(0, 40) !== step.text) break;
+		found = { el: at, top: step.top, whole: depth === want.path.length - 1 };
+	}
+	return found;
 }
 /**
  * The block at the top of the view in `el` (a paragraph, a code block, a card: the deepest box that is still partly
@@ -1369,15 +1388,21 @@ export function Transcript() {
 	// Away from the bottom, the block the reader has at the top of the view (readingAnchor). Overflow anchoring is off (the
 	// follow does its own scrolling), so without this a change of the column's width — the panel sliding open beside it
 	// when a chat with an open panel comes back, the window resized — rewraps every turn above and moves the text away.
+	// It keeps the size of the view it was taken in: a scroll event that comes with another size (a zoom snaps the scroll
+	// position to the new pixel grid) is the browser's, and may run before the resize callback has put the block back.
 	const reading = useRef(null);
 	const noteReading = () => {
-		reading.current = stick.current ? null : readingAnchor(scroller.current, content.current);
+		const el = scroller.current;
+		const found = stick.current ? null : readingAnchor(el, content.current);
+		reading.current = found && { ...found, width: el.clientWidth, height: el.clientHeight };
 	};
 	const holdReading = () => {
 		const r = reading.current;
 		const el = scroller.current;
 		if (!r || !el || stick.current || anchor.current || restore.current) return;
 		if (!r.node.isConnected) { reading.current = null; return; }
+		r.width = el.clientWidth;
+		r.height = el.clientHeight;
 		const drift = r.node.getBoundingClientRect().top - el.getBoundingClientRect().top - r.top;
 		if (Math.abs(drift) >= 1) { el.scrollTop += drift; lastTop.current = el.scrollTop; }
 	};
@@ -1387,6 +1412,8 @@ export function Transcript() {
 	// A pending return to where the reader left this chat (readerPlaces), applied once that turn is on the page.
 	const restore = useRef(null);
 	const restoreTimer = useRef(0);
+	// applyRestore of the newest render, for the resize callback (it reads the turns of the render it was made in).
+	const restoreNow = useRef(() => {});
 	// At most one real scroll per frame: toBottom only schedules, the frame callback does one read plus one write.
 	const bottomFrame = useRef(0);
 	// The ResizeObserver reports the mounted content height; while pinned we scroll to that cached number instead
@@ -1404,6 +1431,9 @@ export function Transcript() {
 		measureFrame.current = 0;
 		const el = scroller.current;
 		if (!el) return;
+		// The view changed size since the block at the top was taken: the text moved under it, the reader did not move.
+		const r = reading.current;
+		if (r && !stick.current && (r.width !== el.clientWidth || r.height !== el.clientHeight)) holdReading();
 		const top = el.scrollTop;
 		const distance = Math.max(0, el.scrollHeight - el.clientHeight - top);
 		const near = distance <= 10;
@@ -1429,6 +1459,8 @@ export function Transcript() {
 	};
 	const onScroll = () => scheduleMeasure();
 	const noteInteraction = (event) => {
+		// Ctrl + wheel (and a touchpad pinch) zooms the window and never scrolls: the reader has not moved.
+		if (event.type === "wheel" && event.ctrlKey) return;
 		anchor.current = null;
 		if (event.type === "wheel" || event.type === "keydown" || event.type === "mousedown") landingWait.current = null;
 		if (event.type === "wheel" || event.type === "keydown" || event.target === scroller.current) {
@@ -1496,6 +1528,13 @@ export function Transcript() {
 		// Without a ResizeObserver (or before its first callback) the item signal still has to drive the follow.
 		if (!roActive.current && stick.current && Date.now() - lastInteract.current > 500) toBottom();
 	}, [items, order, userBash, toolRuns]);
+	// Away from the bottom, the page changed height: what the reader has in view stays where it is.
+	const holdView = () => {
+		// A return waiting for a long answer to be parsed: the parsed answer has just come in.
+		if (restore.current) restoreNow.current();
+		holdAnchor();
+		holdReading();
+	};
 	useEffect(() => {
 		if (!content.current || typeof ResizeObserver === "undefined") return undefined;
 		roActive.current = true;
@@ -1508,8 +1547,7 @@ export function Transcript() {
 			}
 			if (stick.current) followToBottom();
 			else {
-				holdAnchor();
-				holdReading();
+				holdView();
 				scheduleMeasure();
 			}
 		});
@@ -1528,6 +1566,8 @@ export function Transcript() {
 		release: () => { stick.current = false; holdPlace.current = false; anchor.current = null; restore.current = null; },
 		revealAll: () => nav.current.revealAll(),
 		pending: () => nav.current.pending(),
+		// At the bottom a message that folds only shortens the page, and the browser keeps the view at its end.
+		keep: () => { if (!stick.current) holdView(); },
 	}), []);
 	useLayoutEffect(() => {
 		anchor.current = null;
@@ -1545,7 +1585,7 @@ export function Transcript() {
 			stick.current = false;
 			holdPlace.current = false;
 			programmatic.current = false;
-			restore.current = { session, key: place.key, offset: place.offset, path: place.path, blockTop: place.blockTop, blockText: place.blockText, until: Date.now() + RESTORE_WAIT_MS };
+			restore.current = { session, key: place.key, offset: place.offset, path: place.path, until: Date.now() + RESTORE_WAIT_MS };
 			restoreTimer.current = setTimeout(() => giveUpRestore(), RESTORE_WAIT_MS + 50);
 			applyRestore();
 			return;
@@ -1647,9 +1687,16 @@ export function Transcript() {
 	// a stale one can never pull the reader back.
 	const giveUpRestore = () => {
 		clearTimeout(restoreTimer.current);
-		if (!restore.current) return;
-		readerPlaces.delete(restore.current.session);
+		const want = restore.current;
+		if (!want) return;
+		readerPlaces.delete(want.session);
 		restore.current = null;
+		// Already at its turn, waiting for a long answer to be parsed: the reader stays there.
+		if (want.placed) {
+			noteReading();
+			scheduleMeasure();
+			return;
+		}
 		stick.current = true;
 		toBottom();
 	};
@@ -1668,9 +1715,15 @@ export function Transcript() {
 			stick.current = false;
 			const block = placeBlock(node, want);
 			el.scrollTop = block
-				? block.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - want.blockTop
+				? block.el.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - block.top
 				: node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop + want.offset;
 			lastTop.current = el.scrollTop;
+			// A long answer of the turn is still plain text while its Markdown is parsed (markdown.js), with another
+			// height: the turn is where it was for now, and the block goes back to its place once the parsed answer is in.
+			if (!block?.whole && want.path && Date.now() < want.until && node.querySelector(".md-pending")) {
+				want.placed = true;
+				return;
+			}
 			readerPlaces.delete(want.session);
 			restore.current = null;
 			clearTimeout(restoreTimer.current);
@@ -1694,6 +1747,7 @@ export function Transcript() {
 		// Not in this chat any more (another branch, a rewritten history) or waited long enough: open like a first open.
 		giveUpRestore();
 	};
+	restoreNow.current = applyRestore;
 	useLayoutEffect(() => {
 		// A switch renders its first window from derived state; sync the state before paint so later frames grow from it.
 		if (switched && win !== firstWin.current) setWin(firstWin.current);
@@ -1743,6 +1797,8 @@ export function Transcript() {
 	useLayoutEffect(() => {
 		if (chunkHeightBefore.current && scroller.current) {
 			scroller.current.scrollTop += scroller.current.scrollHeight - chunkHeightBefore.current;
+			// Not the reader's move: the block they read is still the one at the top (see measureScroll).
+			lastTop.current = scroller.current.scrollTop;
 			chunkHeightBefore.current = 0;
 		}
 		// The batch is in and laid out (the reads above and the messages' own measuring forced it): what it cost sizes the next.
@@ -1824,7 +1880,10 @@ export function Transcript() {
 		if (!swapHeight.current || !scroller.current) return;
 		const delta = scroller.current.scrollHeight - swapHeight.current;
 		swapHeight.current = 0;
-		if (!stick.current && delta) scroller.current.scrollTop += delta;
+		if (!stick.current && delta) {
+			scroller.current.scrollTop += delta;
+			lastTop.current = scroller.current.scrollTop;
+		}
 	}, [turns]);
 	useLayoutEffect(() => {
 		if (restore.current) applyRestore();

@@ -1,9 +1,10 @@
 // Moving around the conversation: one scroll controller (registered by the Transcript, which owns the scroll position
 // and its "follow the bottom" rule) shared by the message index rail and the jump from a quote to its source.
 import { motionEnabled } from "./ui.js";
-import { dismissToast, fetchMoreTranscript, toast } from "./store.js";
+import { dismissToast, fetchMoreTranscript, state, toast } from "./store.js";
 import { t } from "./i18n.js";
 import { findQuoteOrigin, flashRange } from "./quote-highlight.js";
+import { quoteOrigin } from "./quote-origins.js";
 
 let controller = null;
 let animation = 0;
@@ -16,8 +17,8 @@ let missNotice = null;
 
 /**
  * The Transcript registers how to scroll it: `el` is its scroller, `release` stops it following the bottom,
- * `revealAll` mounts every loaded turn at once and `pending` says what is still on its way (`{ mounting, older }`, or
- * null when the whole conversation is on the page).
+ * `revealAll` mounts every loaded turn at once, `pending` says what is still on its way (`{ mounting, older }`, or
+ * null when the whole conversation is on the page) and `keep` holds the reader's place after a change of height.
  */
 export function registerScroller(next) {
 	controller = next;
@@ -27,6 +28,13 @@ export function registerScroller(next) {
 }
 
 export const scrollerElement = () => controller?.el || null;
+
+/**
+ * A message changed its own height (a long one folded once measured, or was opened): the transcript keeps the reader's
+ * place now. Its own resize callback comes a frame late for that (a change made in another resize callback is held over
+ * to the next frame), and that frame showed the text pushed away by everything that folded above it.
+ */
+export const keepScrollPlace = () => controller?.keep?.();
 
 const clampTop = (el, top) => Math.max(0, Math.min(top, el.scrollHeight - el.clientHeight));
 
@@ -100,8 +108,8 @@ export const NAV_ORIGIN_EVENT = "myharness:nav-origin";
  * the server, those are shown and fetched and the passage is looked for again, for a bounded time. `more` is true when
  * the search stopped while older history was still out of reach.
  */
-async function locateQuote(blockquote, text) {
-	let range = findQuoteOrigin(blockquote, text);
+async function locateQuote(blockquote, text, origin) {
+	let range = findQuoteOrigin(blockquote, text, origin);
 	if (range || !controller?.pending?.()) return { range, more: false };
 	let notice = null;
 	let olderDone = false;
@@ -126,7 +134,7 @@ async function locateQuote(blockquote, text) {
 				break;
 			}
 			await new Promise((resolve) => setTimeout(resolve, QUOTE_RETRY_MS));
-			range = findQuoteOrigin(blockquote, text);
+			range = findQuoteOrigin(blockquote, text, origin);
 			if (range) return { range, more: false };
 		}
 		return { range: null, more: Boolean(controller?.pending?.()?.older) && !olderDone };
@@ -135,13 +143,22 @@ async function locateQuote(blockquote, text) {
 	}
 }
 
+/** Which quote of its message a block quote is (the n-th block quote at the top level of the text), or -1 when nested. */
+function quotePosition(blockquote) {
+	const root = blockquote.parentElement;
+	if (!root?.classList.contains("md")) return -1;
+	return Array.prototype.filter.call(root.children, (node) => node.tagName === "BLOCKQUOTE").indexOf(blockquote);
+}
+
 /**
- * A quote in a sent message was clicked: scroll to the passage it was taken from and flash it. The place the reader came
- * from is announced so a "back" control can return there. Returns false when the passage cannot be found.
+ * A quote in a sent message (`message` is that message's text) was clicked: scroll to the passage it was taken from and
+ * flash it. The place it was picked, kept when the message was sent, decides between copies of the same words. The place
+ * the reader came from is announced so a "back" control can return there. Returns false when the passage cannot be found.
  */
-export async function jumpToQuote(blockquote) {
+export async function jumpToQuote(blockquote, message = "") {
 	if (!controller?.el || !blockquote) return false;
-	const { range, more } = await locateQuote(blockquote, blockquote.innerText || blockquote.textContent || "");
+	const origin = quoteOrigin(message, quotePosition(blockquote), state.snap?.session?.id);
+	const { range, more } = await locateQuote(blockquote, blockquote.innerText || blockquote.textContent || "", origin);
 	if (missNotice) dismissToast(missNotice);
 	missNotice = null;
 	// The reader switched chats while the passage was being looked for: there is nothing to report here any more.
