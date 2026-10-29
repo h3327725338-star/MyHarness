@@ -37,7 +37,9 @@ afterEach(() => {
 	// so a late pass cannot recreate directories the test already cleaned.
 	cancelWorkspaceMetadataReconciles();
 	for (const root of cleanupRoots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
+	// The four fixtures hold 1,200 seeded workspaces; on a busy Windows CI runner deleting them has taken longer than
+	// the default 10 s hook limit (vitest also fails a synchronous hook that overran).
+}, 60_000);
 
 function findAtomicTemps(root: string): string[] {
 	const result: string[] = [];
@@ -279,5 +281,6 @@ describe("WorkspaceStore crash recovery matrix", () => {
 		second.reconcileMetadataNow();
 		expect(second.getConsistencyIssues()).toHaveLength(0);
 		assertRegistryMetadataConsistency(reconcileData);
-	}, 120_000);
+		// Four child processes each start tsx and seed 300 workspaces: about 20 s here, but over 120 s on a busy CI runner.
+	}, 240_000);
 });
