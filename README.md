@@ -33,10 +33,12 @@ The reference model backend for this project is **NVIDIA Nemotron served by [Neb
 
 | Model | Jobs |
 |-------|------|
-| Nemotron 3 Ultra | main model |
-| Nemotron 3.5 Lightning | sub-agents, compaction, fallback, Auto Memory, hand-off notes, commit descriptions, bookmark notes, scheduled tasks, worktree naming, branch summaries |
+| Nemotron 3 Ultra | main model, commit descriptions |
+| Nemotron 3.5 Lightning | sub-agents, compaction, fallback, Auto Memory, hand-off notes, bookmark notes, scheduled tasks, worktree naming, branch summaries |
 | Nemotron 3 Nano | conversation naming, translation (Lightning when the account has no Nano) |
 | Nemotron 3.5 Super VL | vision assistant |
+
+The main model, sub-agents and commit descriptions are set to their model's highest thinking level. Each model offers only the thinking levels NVIDIA documents for it: Ultra has off, medium and high; Lightning has off and high.
 
 Token Factory has no balance API, so the Nebius card links to the console for the balance and top-up, shows what this computer estimates it has spent from the model prices, and a request refused with HTTP 402 or an error that names the balance is explained as a balance problem.
 
@@ -67,7 +69,7 @@ $env:NEBIUS_TOKEN_FACTORY_API_KEY = "<your-token-factory-key>"
 .\dev-desktop.cmd
 ```
 
-It can also be created by hand in Settings → **Providers** → **Add provider** with Base URL `https://api.tokenfactory.nebius.com/v1/` and API type OpenAI Chat Completions. The three text models of the example declare `text` input and map MyHarness thinking levels onto `reasoning_effort` (`off` → `none`, otherwise the level name); Super-VL declares `text` and `image` input and has no thinking-level map.
+It can also be created by hand in Settings → **Providers** → **Add provider** with Base URL `https://api.tokenfactory.nebius.com/v1/` and API type OpenAI Chat Completions. The text models of the example declare `text` input and offer only their documented thinking levels, sent as `reasoning_effort` (Ultra: off / medium / high; Super: off / low / high; Lightning: off / high; `off` is sent as `none`); Super-VL declares `text` and `image` input, is sent no `reasoning_effort` and always reasons.
 
 - Full setup, verification steps and limits: [NVIDIA Nemotron on Nebius Token Factory](packages/coding-agent/docs/nebius-token-factory.md).
 - Ready-to-copy configuration: [`examples/nebius-models.json`](packages/coding-agent/docs/examples/nebius-models.json).

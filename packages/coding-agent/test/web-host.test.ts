@@ -43,6 +43,10 @@ vi.mock("../src/utils/popup-notification.ts", async (importOriginal) => {
 
 const showPopupMock = vi.mocked(showPopupNotification);
 
+/** The kinds of the items the page shows: every turn also stores a hidden note with the current time. */
+const shownKinds = (items: any[]) =>
+	items.filter((item) => item.kind !== "custom" || item.display).map((item) => item.kind);
+
 interface Fixture {
 	hub: WebHostHub;
 	port: number;
@@ -1099,7 +1103,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		const forked = await fx.post("/api/sessions/fork-new", { entryId: userId("second question") }, source);
 		expect(forked.slot).not.toBe(source);
 		const forkedItems = (await fx.get("/api/transcript", forked.slot)).items;
-		expect(forkedItems.map((item: any) => item.kind)).toEqual(["user", "assistant"]);
+		expect(shownKinds(forkedItems)).toEqual(["user", "assistant"]);
 		expect(JSON.stringify(forkedItems)).toContain("first answer");
 		expect(JSON.stringify(forkedItems)).not.toContain("second");
 		expect(fx.hub.get(forked.slot)!.session.sessionFile).not.toBe(sourceFile);
@@ -1117,7 +1121,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		const rewound = await fx.post("/api/sessions/navigate", { targetId: userId("second question") }, source);
 		expect(rewound).toEqual({ cancelled: false, editorText: "second question" });
 		const after = (await fx.get("/api/transcript", source)).items;
-		expect(after.map((item: any) => item.kind)).toEqual(["user", "assistant"]);
+		expect(shownKinds(after)).toEqual(["user", "assistant"]);
 		expect(JSON.stringify(after)).toContain("first answer");
 		expect(JSON.stringify(after)).not.toContain("second");
 	});
@@ -1155,7 +1159,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 
 		const transcript = await fx.get("/api/transcript");
 		// The task's change card is an entry of the session, after the reply it belongs to.
-		expect(transcript.items.map((item: any) => item.kind)).toEqual([
+		expect(shownKinds(transcript.items)).toEqual([
 			"user",
 			"assistant",
 			"toolResult",
@@ -2086,10 +2090,18 @@ describe("Web host (real runtime with a faux provider)", () => {
 		const settings = (await fx.get("/api/settings")).items as Array<{ id: string; value: any }>;
 		const value = (id: string) => settings.find((s) => s.id === id)?.value;
 		expect(value("compactionModel")).toMatchObject({ provider: "nebius", model: "nvidia/Nemotron-3_5-Lightning" });
+		// Compaction keeps the provider's default thinking; sub-agents and commit descriptions think as hard as they can.
+		expect(value("compactionModel").thinkingLevel).toBeUndefined();
 		expect(value("subAgent")).toMatchObject({
 			provider: "nebius",
 			model: "nvidia/Nemotron-3_5-Lightning",
+			thinkingLevel: "high",
 			enabled: true,
+		});
+		expect(value("commitDescription")).toMatchObject({
+			provider: "nebius",
+			model: "nvidia/Nemotron-3-Ultra-550b-a55b",
+			thinkingLevel: "high",
 		});
 		expect(value("conversationNaming")).toMatchObject({
 			provider: "nebius",

@@ -7,6 +7,7 @@ import type { TLocalizedValidationError } from "typebox/error";
 import { MAX_KEEP_ALIVE_SECONDS, MIN_KEEP_ALIVE_SECONDS } from "../../platform/process/http-dispatcher.ts";
 import { stripJsonComments } from "../../utils/json.ts";
 import { normalizePath } from "../../utils/paths.ts";
+import { upgradeNebiusPresetModels } from "./nebius-preset.ts";
 
 const PercentileCutoffsSchema = Type.Object({
 	p50: Type.Optional(Type.Number()),
@@ -310,7 +311,7 @@ export class ModelConfig {
 		const config = parsed as ModelsJson;
 		const providers = new Map<string, ModelsJsonProvider>();
 		for (const [providerId, provider] of Object.entries(config.providers)) {
-			providers.set(providerId, deepFreeze(structuredClone(provider)));
+			providers.set(providerId, deepFreeze(upgradeNebiusPresetModels(providerId, structuredClone(provider))));
 		}
 		return new ModelConfig(providers);
 	}

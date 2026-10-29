@@ -26,7 +26,19 @@ interface PresetModel {
 	entry: Omit<ModelsJsonModel, "id">;
 }
 
-const EFFORT_MAP = {
+/**
+ * The thinking levels each model really has, from NVIDIA's model cards, sent as Token Factory's `reasoning_effort`.
+ * Token Factory's API accepts none, minimal, low, medium, high, xhigh and max for every model, but a model runs only its
+ * own modes, so only those are offered (a hidden level is null; xhigh and max are hidden by having no entry):
+ * - Ultra: reasoning off, medium effort, full reasoning (`enable_thinking`, `medium_effort` in its card);
+ * - Lightning: reasoning on or off (`enable_thinking`).
+ */
+const ULTRA_LEVELS = { off: "none", minimal: null, low: null, medium: "medium", high: "high" } as const;
+const LIGHTNING_LEVELS = { off: "none", minimal: null, low: null, medium: null, high: "high" } as const;
+/** Super VL and Nano are sent no `reasoning_effort` (see PRESET_MODELS), so they always reason: that is their one level. */
+const ALWAYS_REASONING = { off: null, minimal: null, low: null, medium: null } as const;
+/** What MyHarness 0.0.3 wrote for Ultra and Lightning: every name the API accepts, as if each were a level of its own. */
+const LEGACY_EFFORT_MAP = {
 	off: "none",
 	minimal: "minimal",
 	low: "low",
@@ -47,7 +59,8 @@ const usd = (input: number, output: number) => ({
 /**
  * The models, as docs/nebius-token-factory.md records them. Ultra, Lightning and Super VL were checked against Token
  * Factory on 2026-10-25. Nano's ID comes from third-party listings, so it is only added when the account's model list
- * names it; it declares no reasoning effort, so MyHarness never sends `reasoning_effort` to it.
+ * names it; like Super VL it declares no reasoning effort, so MyHarness never sends `reasoning_effort` to it (turning
+ * reasoning off through Token Factory was only tried on Super VL, where it broke the answer).
  */
 const PRESET_MODELS: readonly PresetModel[] = [
 	{
@@ -63,7 +76,7 @@ const PRESET_MODELS: readonly PresetModel[] = [
 			maxTokens: 65_536,
 			cost: usd(1, 3),
 			compat: { supportsReasoningEffort: true },
-			thinkingLevelMap: { ...EFFORT_MAP },
+			thinkingLevelMap: { ...ULTRA_LEVELS },
 		},
 	},
 	{
@@ -79,7 +92,7 @@ const PRESET_MODELS: readonly PresetModel[] = [
 			maxTokens: 65_536,
 			cost: usd(0.06, 0.24),
 			compat: { supportsReasoningEffort: true },
-			thinkingLevelMap: { ...EFFORT_MAP },
+			thinkingLevelMap: { ...LIGHTNING_LEVELS },
 		},
 	},
 	{
@@ -94,6 +107,7 @@ const PRESET_MODELS: readonly PresetModel[] = [
 			contextWindow: 1_048_576,
 			maxTokens: 4096,
 			cost: usd(0.3, 0.9),
+			thinkingLevelMap: { ...ALWAYS_REASONING },
 		},
 	},
 	{
@@ -108,9 +122,32 @@ const PRESET_MODELS: readonly PresetModel[] = [
 			contextWindow: 262_144,
 			maxTokens: 16_384,
 			cost: usd(0.06, 0.24),
+			thinkingLevelMap: { ...ALWAYS_REASONING },
 		},
 	},
 ];
+
+/**
+ * A preset model as MyHarness 0.0.3 wrote it, brought to the levels the model really has (above). An entry the user
+ * changed in any way is left as it is; so is every other provider. Used when models.json is read, so an existing setup
+ * shows the right levels without being set up again.
+ */
+export function upgradeNebiusPresetModels(providerId: string, provider: ModelsJsonProvider): ModelsJsonProvider {
+	if (providerId !== NEBIUS_PROVIDER_ID || !provider.models?.length) return provider;
+	let changed = false;
+	const models = provider.models.map((model) => {
+		const preset = PRESET_MODELS.find((candidate) => candidate.match.test(model.id));
+		if (!preset?.entry.thinkingLevelMap) return model;
+		const legacy =
+			preset.slot === "ultra" || preset.slot === "lightning"
+				? JSON.stringify(model.thinkingLevelMap) === JSON.stringify(LEGACY_EFFORT_MAP)
+				: model.thinkingLevelMap === undefined && !(model.compat && "supportsReasoningEffort" in model.compat);
+		if (!legacy) return model;
+		changed = true;
+		return { ...model, thinkingLevelMap: { ...preset.entry.thinkingLevelMap } };
+	});
+	return changed ? { ...provider, models } : provider;
+}
 
 /** Settings rows that pick a model, and the preset model each one gets. */
 export const NEBIUS_ROLE_PLAN = {
@@ -120,7 +157,7 @@ export const NEBIUS_ROLE_PLAN = {
 	subAgent: "lightning",
 	autoMemory: "lightning",
 	"sessionContinuity.handoff": "lightning",
-	commitDescription: "lightning",
+	commitDescription: "ultra",
 	bookmarkNotes: "lightning",
 	scheduledTasks: "lightning",
 	worktreeNaming: "lightning",

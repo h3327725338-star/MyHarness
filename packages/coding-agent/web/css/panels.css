@@ -90,10 +90,12 @@
 .modal-body .notice { margin: 4px 0; }
 
 /* In a narrow toolbar the select gives way; a segmented control keeps its labels on one line. */
-.segmented { display: inline-flex; flex: none; padding: 2px; gap: 2px; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--r-md); }
-.segmented button { display: inline-flex; align-items: center; gap: 5px; height: calc(var(--h-control-sm) - 6px); padding: 0 10px; border-radius: var(--r-sm); color: var(--text-2); font-size: var(--fs-sm); white-space: nowrap; }
+.segmented { position: relative; display: inline-flex; flex: none; padding: 2px; gap: 2px; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--r-md); }
+.segmented button { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 5px; height: calc(var(--h-control-sm) - 6px); padding: 0 10px; border-radius: var(--r-sm); color: var(--text-2); font-size: var(--fs-sm); white-space: nowrap; }
 .segmented button:hover { color: var(--text); }
-.segmented button.on { background: var(--surface-active); color: var(--text); font-weight: 600; }
+.segmented button.on { color: var(--text); font-weight: 600; }
+/* The chosen button's background, one element that slides between the buttons (Segmented in ui.js). */
+.segmented-thumb { position: absolute; top: 0; left: 0; width: 0; height: 0; border-radius: var(--r-sm); background: var(--surface-active); pointer-events: none; transition: transform var(--t-base) var(--ease), width var(--t-base) var(--ease); }
 .panel-toolbar > .select { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 
 /* Changes: the file list on top, the diff of the file being read under it. */

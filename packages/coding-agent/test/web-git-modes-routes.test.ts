@@ -193,7 +193,8 @@ describe.skipIf(!gitAvailable)("Git commit and push modes (routes)", () => {
 	it("saves modes and instructions, and null goes back to the built-in instructions", async () => {
 		const initial = await call("/api/git/preferences", undefined, "GET");
 		expect(initial.body.commit).toMatchObject({ mode: "direct", isDefault: true });
-		expect(initial.body.commit.instructions).toBe(initial.body.commit.defaultInstructions);
+		expect(initial.body.commit.instructions).toBe("");
+		expect(initial.body.commit.defaultInstructions).not.toBe("");
 		expect(initial.body.push.instructions).toBe("");
 		expect(
 			(await call("/api/git/preferences", { commit: { mode: "instructions", instructions: "Mine" } })).status,

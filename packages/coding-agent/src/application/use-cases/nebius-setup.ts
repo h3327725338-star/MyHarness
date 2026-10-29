@@ -1,3 +1,5 @@
+import type { ThinkingLevel } from "@myharness/agent-core";
+import { getSupportedThinkingLevels } from "@myharness/ai/compat";
 import type { AgentSession } from "../../agent/runtime/agent-session.ts";
 import type { SettingsManager } from "../../config/settings/index.ts";
 import {
@@ -22,7 +24,8 @@ import {
  *
  * Only jobs the user has not set get a model: a job with its own model keeps it, and the main model changes only when
  * there is no usable one. A job the user never touched is also turned on (naming, vision, sub-agents, fallback), since
- * its model is now there; one the user turned off stays off.
+ * its model is now there; one the user turned off stays off. The main model, sub-agents and commit descriptions get
+ * their model's highest thinking level (TOP_LEVEL_ROLES); the other jobs keep the provider's default.
  */
 export class NebiusSetupUseCase {
 	private readonly host: NebiusSetupHost;
@@ -117,6 +120,11 @@ export class NebiusSetupUseCase {
 			if (model) {
 				this.settings.setDefaultModelAndProvider(NEBIUS_PROVIDER_ID, mainId);
 				await this.session.setModel(model);
+				const top = this.topThinkingLevel(mainId);
+				if (top) {
+					this.session.setThinkingLevel(top);
+					this.settings.setDefaultThinkingLevel(top);
+				}
 				assigned.push("main");
 			}
 		} else kept.push("main");
@@ -157,10 +165,17 @@ export class NebiusSetupUseCase {
 		return auth ? `${provider}/${id}` : undefined;
 	}
 
+	/** The highest thinking level the model really has (the Nemotron levels are in nebius-preset.ts). */
+	private topThinkingLevel(modelId: string): ThinkingLevel | undefined {
+		const model = this.session.modelRuntime.getModel(NEBIUS_PROVIDER_ID, modelId);
+		return model ? (getSupportedThinkingLevels(model).at(-1) as ThinkingLevel | undefined) : undefined;
+	}
+
 	/** Give one job the model when it has none of its own; turn the job on when the user never touched it. */
 	private assign(role: Exclude<NebiusRole, "main">, model: string): { assigned: boolean; turnedOn: boolean } {
 		const s = this.settings;
-		const ref = { provider: NEBIUS_PROVIDER_ID, model };
+		const top = TOP_LEVEL_ROLES.has(role) ? this.topThinkingLevel(model) : undefined;
+		const ref = { provider: NEBIUS_PROVIDER_ID, model, ...(top ? { thinkingLevel: top } : {}) };
 		const raw = s.getGlobalSettings();
 		const free = (value: { provider?: string; model?: string }) => !value.provider && !value.model;
 		switch (role) {
@@ -237,6 +252,9 @@ export class NebiusSetupUseCase {
 		}
 	}
 }
+
+/** Jobs set up to think as hard as their model can (the user's request for the hackathon setup). */
+const TOP_LEVEL_ROLES: ReadonlySet<NebiusRole> = new Set(["subAgent", "commitDescription"]);
 
 export interface NebiusSetupHost {
 	getSession: () => AgentSession;

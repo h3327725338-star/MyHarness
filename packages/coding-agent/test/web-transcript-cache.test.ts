@@ -374,7 +374,8 @@ describe("GET /api/transcript through the cached host (real runtime)", () => {
 		await fx.post("/api/prompt", { text: "cache check" });
 		await fx.waitFor("run_finished");
 		const grown = await fx.get("/api/transcript");
-		expect(grown.items.map((item: any) => item.kind)).toEqual(["user", "assistant"]);
+		// The prompt is followed by the hidden note with the current time.
+		expect(grown.items.map((item: any) => item.kind)).toEqual(["user", "custom", "assistant"]);
 		// The paginated tail stitches back to exactly the full body: no stale prefix, no wrong branch.
 		const tail = await fx.get("/api/transcript?limit=1");
 		expect(tail.hasMore).toBe(true);

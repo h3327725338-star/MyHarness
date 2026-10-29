@@ -27,12 +27,10 @@
           },
           "thinkingLevelMap": {
             "off": "none",
-            "minimal": "minimal",
-            "low": "low",
+            "minimal": null,
+            "low": null,
             "medium": "medium",
-            "high": "high",
-            "xhigh": "xhigh",
-            "max": "max"
+            "high": "high"
           }
         },
         {
@@ -56,12 +54,10 @@
           },
           "thinkingLevelMap": {
             "off": "none",
-            "minimal": "minimal",
+            "minimal": null,
             "low": "low",
-            "medium": "medium",
-            "high": "high",
-            "xhigh": "xhigh",
-            "max": "max"
+            "medium": null,
+            "high": "high"
           }
         },
         {
@@ -85,12 +81,10 @@
           },
           "thinkingLevelMap": {
             "off": "none",
-            "minimal": "minimal",
-            "low": "low",
-            "medium": "medium",
-            "high": "high",
-            "xhigh": "xhigh",
-            "max": "max"
+            "minimal": null,
+            "low": null,
+            "medium": null,
+            "high": "high"
           }
         },
         {
@@ -109,6 +103,12 @@
             "cacheRead": 0,
             "cacheWrite": 0,
             "currency": "USD"
+          },
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": null,
+            "medium": null
           }
         }
       ]

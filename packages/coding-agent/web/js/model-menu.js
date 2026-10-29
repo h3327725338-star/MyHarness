@@ -201,11 +201,15 @@ export function EffortPicker({ levels, value, onChange, disabled, placement = "t
 	const [open, setOpen] = useState(false);
 	if (levels.length < 2) return null;
 	const text = value ? effortName(value) : t("Default");
+	// Every stop's name sits under it: with many stops the popover widens (52 px a stop, 44 px of padding) so that
+	// neighbouring names such as "Default" and "Off" never overlap.
+	const stops = levels.length + (withDefault ? 1 : 0);
+	const width = Math.max(264, (stops - 1) * 52 + 44);
 	return html`<span ref=${anchor} class=${`picker-anchor ${cls.split(" ").includes("model-ref-effort") ? "model-ref-effort-anchor" : ""}`}>
 		<button class=${cls} onClick=${() => setOpen(!open)} title=${title || t("Thinking effort")} aria-label=${label || t("Thinking effort")} aria-haspopup="dialog" aria-expanded=${open}>
 			<span class="truncate chip-text">${text}</span><${Chevron} />
 		</button>
-		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement=${placement} align=${align} width=${264} class="effort-pop">
+		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement=${placement} align=${align} width=${width} class="effort-pop">
 			<${EffortSlider} levels=${levels} value=${value} disabled=${disabled} onChange=${onChange} withDefault=${withDefault} autoFocus onDone=${() => setOpen(false)} />
 		<//>
 	</span>`;

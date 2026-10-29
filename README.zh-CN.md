@@ -33,10 +33,12 @@ MyHarness 是装在你自己 Windows 电脑上的个人 AI，在你已经登录�
 
 | 模型 | 负责 |
 |------|------|
-| Nemotron 3 Ultra | 主模型 |
-| Nemotron 3.5 Lightning | 子智能体、压缩上下文、备用模型、自动记忆、交接摘要、提交说明、书签用途、定时任务、工作副本命名、分支摘要 |
+| Nemotron 3 Ultra | 主模型、提交说明 |
+| Nemotron 3.5 Lightning | 子智能体、压缩上下文、备用模型、自动记忆、交接摘要、书签用途、定时任务、工作副本命名、分支摘要 |
 | Nemotron 3 Nano | 对话命名、翻译（账户没有 Nano 时由 Lightning 接手） |
 | Nemotron 3.5 Super VL | 视觉助手（识图） |
+
+主模型、子智能体和提交说明会设成所用模型最高的思考强度。每个模型只提供 NVIDIA 为它写明的思考档位：Ultra 有关闭、中、高三档，Lightning 只有关闭和高。
 
 Token Factory 没有余额查询接口，所以 Nebius 卡片提供控制台链接（查看余额、充值），显示这台电脑按模型标价估算的花费；请求因余额问题被拒（HTTP 402 或错误信息提到余额）时会明确说明是余额问题。
 
@@ -67,7 +69,7 @@ $env:NEBIUS_TOKEN_FACTORY_API_KEY = "<your-token-factory-key>"
 .\dev-desktop.cmd
 ```
 
-也可以在设置 → **Providers** → **添加 Provider** 中手动创建：Base URL 填 `https://api.tokenfactory.nebius.com/v1/`，API type 选 OpenAI Chat Completions。示例里的三个纯文本模型声明 `text` 输入，并把 MyHarness 的 thinking 档位映射到 `reasoning_effort`（`off` → `none`，其余同名）；Super-VL 声明 `text` 和 `image` 输入，没有 thinking 档位映射。
+也可以在设置 → **Providers** → **添加 Provider** 中手动创建：Base URL 填 `https://api.tokenfactory.nebius.com/v1/`，API type 选 OpenAI Chat Completions。示例里的纯文本模型声明 `text` 输入，只提供各自写明的 thinking 档位，通过 `reasoning_effort` 发送（Ultra：off / medium / high；Super：off / low / high；Lightning：off / high；`off` 发送为 `none`）；Super-VL 声明 `text` 和 `image` 输入，不发送 `reasoning_effort`，始终会推理。
 
 - 完整配置、验证步骤和限制：[NVIDIA Nemotron on Nebius Token Factory](packages/coding-agent/docs/nebius-token-factory.md)。
 - 可直接复制的配置：[`examples/nebius-models.json`](packages/coding-agent/docs/examples/nebius-models.json)。

@@ -37,7 +37,7 @@ import {
 	withDevice,
 	writeScheduleLocal,
 } from "./store.ts";
-import { isTimeZone, lastDue, localTimeZone, nextDue } from "./timing.ts";
+import { describeLocalTime, isTimeZone, lastDue, localTimeZone, nextDue } from "./timing.ts";
 
 const DAY_MS = 86_400_000;
 /** A time no longer ago than this is on time. */
@@ -331,7 +331,7 @@ export class ScheduleService {
 		if (kind === "agent" && !text) throw new ScheduleInputError("An Agent task needs the text of what to do.");
 		const tz = input.tz ?? existing?.tz ?? localTimeZone();
 		if (!isTimeZone(tz)) throw new ScheduleInputError(`Unknown time zone: ${tz}.`);
-		const repeat = this.repeatFrom(input.repeat, existing, kind, now);
+		const repeat = this.repeatFrom(input.repeat, existing, kind, now, tz);
 		const mode = input.mode ?? existing?.mode ?? "general";
 		if (mode !== "general" && mode !== "coding") throw new ScheduleInputError('mode must be "general" or "coding".');
 		const workspaceId = input.workspaceId === null ? undefined : (input.workspaceId ?? existing?.workspaceId);
@@ -345,7 +345,7 @@ export class ScheduleService {
 		const enabled = input.enabled ?? (newTime ? true : (existing?.enabled ?? true));
 		if (enabled && existing && !existing.enabled && repeat.type === "once" && Date.parse(repeat.at) <= now)
 			throw new ScheduleInputError(
-				`That time has already passed (${repeat.at}); give the task a new time to switch it on.`,
+				`That time has already passed (${repeat.at}); give the task a new time to switch it on. It is now ${describeLocalTime(now, tz)}.`,
 			);
 		const schedule: Schedule = {
 			id: existing?.id ?? newScheduleId(),
@@ -367,7 +367,13 @@ export class ScheduleService {
 		return schedule;
 	}
 
-	private repeatFrom(value: unknown, existing: Schedule | undefined, kind: ScheduleKind, now: number): ScheduleRepeat {
+	private repeatFrom(
+		value: unknown,
+		existing: Schedule | undefined,
+		kind: ScheduleKind,
+		now: number,
+		tz: string,
+	): ScheduleRepeat {
 		if (value === undefined && existing) {
 			const kept = repeatOf(existing.repeat, kind);
 			if (!kept)
@@ -393,7 +399,10 @@ export class ScheduleService {
 			);
 		const unchanged = existing?.repeat.type === "once" && repeat.type === "once" && existing.repeat.at === repeat.at;
 		if (repeat.type === "once" && !unchanged && Date.parse(repeat.at) <= now)
-			throw new ScheduleInputError(`That time has already passed (${repeat.at}).`);
+			// The current time is part of the answer: a model that guessed the year from its training data can correct it.
+			throw new ScheduleInputError(
+				`That time has already passed (${repeat.at}). It is now ${describeLocalTime(now, tz)}.`,
+			);
 		return repeat;
 	}
 

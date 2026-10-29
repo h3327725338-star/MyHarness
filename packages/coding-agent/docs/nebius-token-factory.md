@@ -25,10 +25,10 @@ Token Factory exposes an OpenAI-compatible Chat Completions surface, so the port
 
 | Model ID | Display name | Context | Max output | Input | Reasoning |
 |----------|--------------|---------|------------|-------|-----------|
-| `nvidia/Nemotron-3-Ultra-550b-a55b` | Nemotron 3 Ultra | 1,048,576 | 65,536 | text | `supportsReasoningEffort: true` |
-| `nvidia/nemotron-3-super-120b-a12b` | Nemotron 3 Super | 262,144 | 65,536 | text | `supportsReasoningEffort: true` |
-| `nvidia/Nemotron-3_5-Lightning` | Nemotron 3.5 Lightning | 1,048,576 | 65,536 | text | `supportsReasoningEffort: true` |
-| `nvidia/Nemotron-3.5-Super-VL` | Nemotron 3.5 Super VL | 1,048,576 | not published | text + image (the endpoint also accepts video) | reasoning is on by default; do **not** send `reasoning_effort: none` |
+| `nvidia/Nemotron-3-Ultra-550b-a55b` | Nemotron 3 Ultra | 1,048,576 | 65,536 | text | off / medium / high, as `reasoning_effort` |
+| `nvidia/nemotron-3-super-120b-a12b` | Nemotron 3 Super | 262,144 | 65,536 | text | off / low / high, as `reasoning_effort` |
+| `nvidia/Nemotron-3_5-Lightning` | Nemotron 3.5 Lightning | 1,048,576 | 65,536 | text | off / high, as `reasoning_effort` |
+| `nvidia/Nemotron-3.5-Super-VL` | Nemotron 3.5 Super VL | 1,048,576 | not published | text + image (the endpoint also accepts video) | always on; do **not** send `reasoning_effort: none` |
 
 Prices recorded in the example configuration are `$1 / $3` (Ultra), `$0.3 / $0.9` (Super and Super-VL) and `$0.06 / $0.24` (Lightning) per million input/output tokens (USD). They are configuration values, not a live price feed; confirm current pricing on the Token Factory pricing page before budgeting a long session.
 
@@ -49,16 +49,17 @@ What happens on save (`POST /api/providers/nebius/setup`):
 
 | Model | Jobs |
 |-------|------|
-| Nemotron 3 Ultra | main model (only when there is no usable main model yet) |
-| Nemotron 3.5 Lightning | sub-agents, compaction, fallback model, Auto Memory, hand-off notes, commit descriptions, bookmark notes, scheduled tasks, worktree naming, branch summaries |
+| Nemotron 3 Ultra | main model (only when there is no usable main model yet), commit descriptions |
+| Nemotron 3.5 Lightning | sub-agents, compaction, fallback model, Auto Memory, hand-off notes, bookmark notes, scheduled tasks, worktree naming, branch summaries |
 | Nemotron 3 Nano | conversation naming, translation (Lightning when the account has no Nano) |
 | Nemotron 3.5 Super VL | vision assistant |
 
+- The main model (when it is set up now), sub-agents and commit descriptions get their model's highest thinking level (high for Ultra and Lightning); the other jobs keep the provider's default.
 - Conversation naming, the vision assistant, sub-agents and the fallback model are turned on when the user never touched them; one the user turned off stays off.
 
-Nano is declared without `compat.supportsReasoningEffort` (like Super VL), so MyHarness never sends `reasoning_effort` to it; its 16,384-token output cap is a conservative value, since Token Factory does not publish one.
+Nano is declared without `compat.supportsReasoningEffort` (like Super VL), so MyHarness never sends `reasoning_effort` to it and it always reasons; its 16,384-token output cap is a conservative value, since Token Factory does not publish one.
 
-**Balance and spending.** Token Factory has no balance API (the balance and **Top up** are in the console's navigation). Once set up, the Nebius card shows **Balance and top up** (opens `https://tokenfactory.nebius.com/`), **Get an API key**, **Set up jobs again** (runs the setup with the saved key; it only fills jobs that have no model), and this computer's estimate: every finished model request adds `usage.cost.total` to `provider-spend.json` next to `models.json` (prices from the model entries; the Token Factory bill is what counts). A request refused with HTTP `402`, or with an error that names the balance, is explained as a balance problem. The exact error Token Factory returns for a negative balance has not been observed.
+**Balance and spending.** Token Factory has no balance API (the balance and **Top up** are in the console's navigation). Once set up, the Nebius card shows **Balance and top up** (opens `https://tokenfactory.nebius.com/`), **Get an API key**, and this computer's estimate: every finished model request adds `usage.cost.total` to `provider-spend.json` next to `models.json` (prices from the model entries; the Token Factory bill is what counts). A request refused with HTTP `402`, or with an error that names the balance, is explained as a balance problem. The exact error Token Factory returns for a negative balance has not been observed.
 
 ## Setup in the Web UI by hand
 
@@ -105,12 +106,18 @@ Because of the second and third points, the example configuration declares this 
 
 ## Reasoning levels
 
-All three Nemotron entries set `compat.supportsReasoningEffort: true` and map MyHarness thinking levels onto `reasoning_effort`:
+Token Factory's Chat Completions API accepts `reasoning_effort` values `none`, `minimal`, `low`, `medium`, `high`, `xhigh` and `max` for every model, but a model runs only its own reasoning modes. MyHarness offers each model only the modes NVIDIA's model card documents for it (`enable_thinking`, plus `medium_effort` or `low_effort` in the chat template) and hides the other levels with `null` in `thinkingLevelMap`:
 
-| MyHarness level | Sent to Token Factory |
-|-----------------|-----------------------|
-| `off` | `none` |
-| `minimal` / `low` / `medium` / `high` / `xhigh` / `max` | same name |
+| Model | Modes in NVIDIA's model card | MyHarness levels → `reasoning_effort` |
+|-------|------------------------------|---------------------------------------|
+| Nemotron 3 Ultra | reasoning off, medium effort, full reasoning | `off` → `none`, `medium` → `medium`, `high` → `high` |
+| Nemotron 3 Super (example file only) | reasoning off, low effort, full reasoning | `off` → `none`, `low` → `low`, `high` → `high` |
+| Nemotron 3.5 Lightning | reasoning on or off | `off` → `none`, `high` → `high` |
+| Nemotron 3.5 Super VL, Nemotron 3 Nano | (no `reasoning_effort` is sent) | `high` only: the model's default, reasoning on |
+
+What Token Factory runs for each name is not documented by Nebius. A third-party measurement on Super found `none` answers without reasoning, `low` reasons less than `medium`, and `high` reasons as long as `medium`, which matches Super's three modes. That Ultra's `medium` runs its medium-effort mode has not been measured.
+
+MyHarness 0.0.3 wrote every accepted name as a level of its own for Ultra and Lightning, and no map for Super VL and Nano. Such entries, exactly as that version wrote them, get the levels above when `models.json` is read (`upgradeNebiusPresetModels`); an entry the user changed is left alone.
 
 Because `supportsReasoningEffort` is opt-in, a model entry without it keeps the portable request subset and will not send `reasoning_effort` at all.
 

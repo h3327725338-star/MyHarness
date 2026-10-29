@@ -76,7 +76,9 @@ describe("session bridge", () => {
 		const { client, hello } = await SessionBridgeClient.connect(descriptor!);
 		let closed = false;
 		mirror.attachBridge(client, hello);
-		expect(mirror.messages).toHaveLength(2);
+		// Every turn also carries a hidden note with the current time (agent/runtime/current-time.ts).
+		const talk = () => mirror.messages.filter((message) => message.role !== "custom");
+		expect(talk()).toHaveLength(2);
 		mirror.onMirrorClosed(() => {
 			closed = true;
 		});
@@ -86,10 +88,10 @@ describe("session bridge", () => {
 		// A prompt sent from this process runs in the owner and comes back as events and file entries.
 		await mirror.prompt("from the web");
 		await until(() => types.includes("agent_end"), "the owner to finish the run");
-		await until(() => mirror.isIdle && mirror.messages.length === 4, "the conversation to sync");
+		await until(() => mirror.isIdle && talk().length === 4, "the conversation to sync");
 		expect(types).toContain("agent_start");
 		expect(types).toContain("message_end");
-		expect(mirror.messages.map((message) => message.role)).toEqual(["user", "assistant", "user", "assistant"]);
+		expect(talk().map((message) => message.role)).toEqual(["user", "assistant", "user", "assistant"]);
 
 		// A prompt typed in the owner shows up here too.
 		types.length = 0;
@@ -100,7 +102,7 @@ describe("session bridge", () => {
 			45_000,
 			() => `; mirror events: ${types.join(",")}; mirror closed: ${closed}; owner output: ${ownerOutput}`,
 		);
-		await until(() => mirror.messages.length === 6, "the terminal prompt to sync");
+		await until(() => talk().length === 6, "the terminal prompt to sync");
 
 		// When the owner ends, the mirror reports it so the host can take the session over.
 		owner!.stdin!.write("exit\n");

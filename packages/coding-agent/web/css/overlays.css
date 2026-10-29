@@ -524,7 +524,7 @@
 .del-list li { overflow-wrap: anywhere; }
 .del-list .dim { margin-left: 6px; }
 .del-hint { margin: 2px 2px 0; color: var(--text-3); font-size: var(--fs-sm); line-height: 1.45; }
-/* Settings → Git: an instructions box fills its wide row, with "Restore default" under it. */
+/* Settings → Git: an instructions box fills its wide row. */
 .git-instructions { flex: 1 1 auto; width: 100%; min-width: 0; gap: 6px; padding-bottom: 12px; }
 /* Settings → Git: an instruction box folds under its name, like the personal prompts. */
 .git-instr { border-top: 1px solid var(--border); }

@@ -19,7 +19,7 @@ import { playNotificationSound } from "./notification-sounds.js";
 import { setDesktopNotificationClick, showNotification } from "./notifications.js";
 import { appFocused } from "./page-presence.js";
 import { runModeOf } from "./run-modes.js";
-import { colorThemeOf, modeColorThemesOf } from "./appearance-themes.js";
+import { COLOR_THEMES_VERSION, colorThemeOf, modeColorThemesOf } from "./appearance-themes.js";
 import { savedPromptsOf } from "./saved-prompts.js";
 import { takeRestartState } from "./restart-state.js";
 import { chatModeOf, draftToServer, expandedKey } from "./chat-modes.js";
@@ -659,6 +659,7 @@ const PERSISTED = ["shortcuts", "sidebarOpen", "sidebarW", "expanded", "expanded
 function persistView() {
 	const out = { ...panelDefaults };
 	for (const key of PERSISTED) out[key] = state.view[key];
+	out.colorThemesVersion = COLOR_THEMES_VERSION;
 	rememberPanel();
 	// Collaboration mode lasts as long as this page: the saved panels leave it out (normalizePanel).
 	out.wsPanels = Object.fromEntries([...panelStates].map(([id, { wsMax, wsSidebar, wsChatHidden, ...panel }]) => [id, panel]));

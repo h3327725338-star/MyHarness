@@ -17,7 +17,7 @@ Web UI 的每个对话都有自己的 `SettingsManager`，共用同一份 settin
 
 ## Web 外观与配色主题
 
-设置 → 外观的“显示模式”保留跟随系统／深色／浅色；“阅读宽度”下方新增“配色主题”：经典炭黑（`classic`，原 Coding 配色）、静谧森林（`forest`，克制灰绿）和暖夜琥珀（`amber`，暖棕深灰）。选择立即生效，并通过现有浏览器偏好 `myharness.web.prefs` 的 `colorThemes.coding` / `colorThemes.general` 分别保存，刷新前的启动脚本也读取它，避免先显示另一套配色。旧版共享 `colorTheme` 首次读取时作为两边初始值保留，之后各自独立修改；未设置或无效值使用经典炭黑。设置只修改当前 Coding／General 模式的配色，切换时恢复目标模式的选择；当前三套仅改变深色显示，浅色共用基础配色。无需重启，不写入项目或全局 Agent settings。
+设置 → 外观的“显示模式”保留跟随系统／深色／浅色；“阅读宽度”下方新增“配色主题”：经典炭黑（`classic`，原 Coding 配色）、静谧森林（`forest`，克制灰绿）和暖夜琥珀（`amber`，暖棕深灰）。选择立即生效，并通过现有浏览器偏好 `myharness.web.prefs` 的 `colorThemes.coding` / `colorThemes.general` 分别保存，刷新前的启动脚本也读取它，避免先显示另一套配色。旧版共享 `colorTheme` 首次读取时作为两边初始值保留，之后各自独立修改；未设置或无效值时 Coding 用经典炭黑、General 用静谧森林。每次保存都会写下两边的配色，所以没有 `colorThemesVersion: 2` 的旧保存里 General 的经典炭黑是当时的默认值而不是选择，按未设置处理（显示静谧森林）；之后保存都带这个版本号，用户再选经典炭黑会被保留。设置只修改当前 Coding／General 模式的配色，切换时恢复目标模式的选择；当前三套仅改变深色显示，浅色共用基础配色。无需重启，不写入项目或全局 Agent settings。
 
 ## Web 专属快捷键与代码智能状态
 
@@ -468,7 +468,7 @@ Memory Markdown files 是 source of truth：
 
 - `mode: "instructions"`（默认）：按 `instructions` 工作。Commit 用 Commit Description 模型写说明（提示词只影响写法），同时按提示词检查改动，要求停下就不提交；按提示词模式下仍保留提交前 hook 失败的自动修复（最多 3 轮）。Push 先按提示词检查待推送的提交，要求停下就不推送；推送后在后台跟进这个 commit 的 CI，提示词要求 CI 通过时自动修复、只提交修复改到的文件并重新 Push，最多 3 轮。
 - `mode: "direct"`：Commit 不调用模型，用文件清单生成说明后立即提交，不检查、不修复；`skipHooks: true` 时带 `--no-verify`。Push 只推送，不查 CI。
-- `instructions`：没有这个字段时使用内置默认提示词（`system-prompts/common/tasks/git-commit-default-instructions.md`、`git-push-default-instructions.md`）；空字符串表示不检查，Commit 说明按内置规则写。Web UI 保存的内容与内置默认相同时会删除这个字段，`POST /api/git/preferences` 里的 `instructions: null` 同样表示回到内置默认。
+- `instructions`：没有这个字段时使用内置默认提示词（`system-prompts/common/tasks/git-commit-default-instructions.md`、`git-push-default-instructions.md`）；空字符串表示不检查，Commit 说明按内置规则写。Web UI 的提示词框只显示这里保存的文字，没有时为空，并提示留空就用内置提示词；清空后保存会删除这个字段（`POST /api/git/preferences` 里的 `instructions: null`），回到内置默认。
 - 无论提示词怎么写，都不会绕过检查、强制 Push、改写已 Push 的提交或改 Git 配置；这些限制写在代码里，不由提示词决定。
 
 ```json
@@ -501,6 +501,8 @@ Global 设置。内置浏览器书签的“用途”由这个模型写（`POST /
 #### scheduledTasks（定时任务）
 
 Global 设置。定时的 Agent 任务到点时在新对话里运行，用这里的模型和 Thinking Effort（只用于那次运行开的对话，不改全局默认模型）；`provider`/`model` 为空时用主模型。设置 → 智能体 → 助手的“定时任务”行选择，行内显示当前实际用的模型。选的模型不可用时这次运行失败并在卡片上说明，不会悄悄换成别的模型。删除 Provider/模型时清理引用。
+
+模型自己不知道现在的时间：每一轮在用户消息后面附一条隐藏的当前本地时间（`src/agent/runtime/current-time.ts`，例如 `2026-10-29 19:58, Thursday (Asia/Kuala_Lumpur, UTC+08:00)`），排定时间时以它为准。给的一次性时间已经过去时，报错会写出当前时间（“That time has already passed (…). It is now …”），模型可以据此改正。
 
 ```json
 {

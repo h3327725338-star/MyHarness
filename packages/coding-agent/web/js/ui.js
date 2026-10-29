@@ -643,8 +643,44 @@ export function UnitGroup({ value, onInput, onCommit, unit, label, placeholder, 
 	</span>`;
 }
 
+/**
+ * The highlight is one element that slides to the chosen button. It is placed without sliding when it first appears and
+ * whenever the control changes size (fonts loading, a wider row, a folded section opening), so only a new choice moves it.
+ */
 export function Segmented({ value, options, onChange }) {
-	return html`<div class="segmented" role="tablist">${options.map(
+	const box = useRef(null);
+	const thumb = useRef(null);
+	const placed = useRef(false);
+	const place = (slide) => {
+		const root = box.current;
+		const mark = thumb.current;
+		if (!root || !mark) return;
+		const on = root.querySelector(":scope > button.on");
+		if (!on || !on.offsetWidth) {
+			mark.style.opacity = "0";
+			placed.current = false;
+			return;
+		}
+		const still = !slide || !placed.current;
+		if (still) mark.style.transition = "none";
+		mark.style.opacity = "";
+		mark.style.width = `${on.offsetWidth}px`;
+		mark.style.height = `${on.offsetHeight}px`;
+		mark.style.transform = `translate(${on.offsetLeft}px, ${on.offsetTop}px)`;
+		if (still) {
+			void mark.offsetWidth;
+			mark.style.transition = "";
+		}
+		placed.current = true;
+	};
+	useLayoutEffect(() => place(true), [value, options.length]);
+	useLayoutEffect(() => {
+		if (typeof ResizeObserver !== "function" || !box.current) return;
+		const observer = new ResizeObserver(() => place(false));
+		observer.observe(box.current);
+		return () => observer.disconnect();
+	}, []);
+	return html`<div class="segmented" role="tablist" ref=${box}><span class="segmented-thumb" aria-hidden="true" ref=${thumb} />${options.map(
 		(option) => html`<button type="button" role="tab" aria-selected=${value === option.value} class=${value === option.value ? "on" : ""} onClick=${() => onChange(option.value)} title=${option.title || ""}>${option.icon ? html`<${Icon} name=${option.icon} size=${14} />` : null}${option.label}</button>`,
 	)}</div>`;
 }

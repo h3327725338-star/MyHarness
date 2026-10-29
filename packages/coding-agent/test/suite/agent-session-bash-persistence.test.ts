@@ -200,9 +200,11 @@ describe("AgentSession bash and persistence characterization", () => {
 		await harness.session.prompt("start");
 
 		const entries = harness.sessionManager.getEntries();
+		// The user's prompt is followed by the hidden note with the current time.
 		expect(entries.map((entry) => entry.type)).toEqual([
 			"custom_message",
 			"message",
+			"custom_message",
 			"message",
 			"message",
 			"message",
@@ -210,6 +212,7 @@ describe("AgentSession bash and persistence characterization", () => {
 		expect(harness.session.messages.map((message) => message.role)).toEqual([
 			"custom",
 			"user",
+			"custom",
 			"assistant",
 			"toolResult",
 			"assistant",

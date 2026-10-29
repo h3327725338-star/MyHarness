@@ -1095,8 +1095,8 @@ const GIT_CARDS = {
 
 /**
  * Settings → Git: how /commit and /push run. The modes and the hooks switch apply at once (like every simple setting);
- * the two instruction texts are drafts kept until Save, like the personal prompts, with the same large editor. Saving the
- * built-in text again (or Restore default) stores nothing, so later built-in updates still apply.
+ * the two instruction texts are drafts kept until Save, like the personal prompts, with the same large editor. A box
+ * starts empty and saving it empty stores nothing: the built-in instructions are used, and later updates to them apply.
  */
 function GitPreferences() {
 	const [saved, setSaved] = useState(null);
@@ -1129,7 +1129,8 @@ function GitPreferences() {
 	const save = async () => {
 		const body = {};
 		for (const key of ["commit", "push"]) {
-			if (text[key] !== saved[key].instructions) body[key] = { instructions: text[key] === saved[key].defaultInstructions ? null : text[key] };
+			// An empty box goes back to the built-in instructions.
+			if (text[key] !== saved[key].instructions) body[key] = { instructions: text[key].trim() ? text[key] : null };
 		}
 		setBusy(true);
 		const ok = await attempt(() => post("/api/git/preferences", body), { success: t("Git instructions saved.") });
@@ -1172,6 +1173,7 @@ function GitPreferences() {
 								boxes.current[key] = el;
 							}}
 							value=${text[key]}
+							placeholder=${t("Write your own instructions. Left empty, the built-in instructions are used.")}
 							aria-label=${t(GIT_CARDS[key].instructions)}
 							onInput=${(e) => setText({ ...text, [key]: e.target.value })}
 						/>
@@ -1188,7 +1190,6 @@ function GitPreferences() {
 							<${Icon} name="maximize" size=${14} />
 						</button>
 					</div>
-					${text[key] !== part.defaultInstructions ? html`<div class="row"><button class="link-btn" onClick=${() => setText({ ...text, [key]: part.defaultInstructions })}>${t("Restore default")}</button></div>` : null}
 				</div><//>
 			</div>
 		<//>`;

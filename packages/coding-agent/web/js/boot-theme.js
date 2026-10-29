@@ -50,18 +50,21 @@
 		const dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
 		document.documentElement.dataset.theme = dark ? "dark" : "light";
 		const chatMode = prefs.chatMode === "general" ? "general" : "coding";
-		const colorTheme = prefs.colorThemes?.[chatMode] ?? prefs.colorTheme;
-		document.documentElement.dataset.colorTheme = ["classic", "forest", "amber"].includes(colorTheme) ? colorTheme : "classic";
-		for (const mode of ["coding", "general"]) {
-			const selected = prefs.colorThemes?.[mode] ?? prefs.colorTheme;
-			document.documentElement.dataset[`${mode}ColorTheme`] = ["classic", "forest", "amber"].includes(selected) ? selected : "classic";
-		}
+		// The rule of modeColorThemesOf (appearance-themes.js): General defaults to Quiet Forest, and its "classic" from
+		// before version 2 of the saved schemes is the old default, not a choice.
+		const schemeOf = (mode) => {
+			const saved = prefs.colorThemes?.[mode] ?? prefs.colorTheme;
+			const chosen = mode === "general" && saved === "classic" && prefs.colorThemesVersion !== 2 ? undefined : saved;
+			return ["classic", "forest", "amber"].includes(chosen) ? chosen : mode === "general" ? "forest" : "classic";
+		};
+		document.documentElement.dataset.colorTheme = schemeOf(chatMode);
+		for (const mode of ["coding", "general"]) document.documentElement.dataset[`${mode}ColorTheme`] = schemeOf(mode);
 		if (prefs.motion) document.documentElement.dataset.motion = prefs.motion;
 		document.documentElement.dataset.chatMode = prefs.chatMode === "general" ? "general" : "coding";
 	} catch {
 		document.documentElement.dataset.theme = "dark";
 		document.documentElement.dataset.colorTheme = "classic";
 		document.documentElement.dataset.codingColorTheme = "classic";
-		document.documentElement.dataset.generalColorTheme = "classic";
+		document.documentElement.dataset.generalColorTheme = "forest";
 	}
 })();

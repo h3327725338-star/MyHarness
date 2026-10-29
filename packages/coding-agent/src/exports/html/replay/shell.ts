@@ -68,7 +68,7 @@ export function bootScript({
 	var themes = prefs.colorThemes || {};
 	var selected = function (m) {
 		var v = themes[m] !== undefined ? themes[m] : prefs.colorTheme;
-		return ["classic", "forest", "amber"].indexOf(v) >= 0 ? v : "classic";
+		return ["classic", "forest", "amber"].indexOf(v) >= 0 ? v : m === "general" ? "forest" : "classic";
 	};
 	root.dataset.colorTheme = selected(chatMode);
 	root.dataset.codingColorTheme = selected("coding");

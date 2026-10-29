@@ -68,8 +68,9 @@ try {
    await pickSelect('button.select-like[aria-label="配色主题"]',names[scheme]);await wait(50);
    if(palette()!==color||JSON.parse(localStorage.getItem('myharness.web.prefs')).colorThemes.coding!==scheme) throw Error('theme not applied/persisted '+scheme);
    checkNewTokens('dark '+scheme);
-   const accent={classic:'#79a8f5',forest:'#a7c080',amber:'#d4ae82'}[scheme];checkSwitch(accent,'#79a8f5');
-   setView({chatMode:'general'});await wait(30);checkSwitch(accent,'#79a8f5');if(palette()!=='#1c1d1d'||state.view.colorTheme!=='classic') throw Error('Coding modified General');
+   // General has not been picked yet, so it shows its default, Quiet Forest.
+   const accent={classic:'#79a8f5',forest:'#a7c080',amber:'#d4ae82'}[scheme];checkSwitch(accent,'#a7c080');
+   setView({chatMode:'general'});await wait(30);checkSwitch(accent,'#a7c080');if(palette()!=='#292e2b'||state.view.colorTheme!=='forest') throw Error('Coding modified General');
    setView({chatMode:'coding'});await wait(30);if(palette()!==color||state.view.colorTheme!==scheme) throw Error('Coding theme not restored');
   }
   setView({chatMode:'general',colorTheme:'forest'});await wait(30);checkSwitch('#d4ae82','#a7c080');

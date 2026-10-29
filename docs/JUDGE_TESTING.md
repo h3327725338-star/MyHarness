@@ -68,11 +68,11 @@ Without a Token Factory key the UI still starts and every non-model feature stil
 
 ## Five-minute test script
 
-1. Start the app. A fresh install starts in a workspace named `.myharness`, which is the app's own data folder. Add a project folder (any Git repository, or this one) with **Add workspace**, the **+** in the sidebar.
+1. Start the app. A fresh install starts with a chat under **Default**, which belongs to no project. Add a project folder (any Git repository, or this one) with **Add workspace**, the **+** in the sidebar.
 2. The composer shows **Nemotron 3 Ultra**, which the setup made the main model, with a 1.0M context window.
 3. Ask: `Read package.json and list the packages/ directories, then summarize the repository structure. Do not modify any files.`
    - Expected: the agent calls file and shell tools itself, and the turn header reports elapsed time and operation count.
-   - The answer names version `0.0.3` and the five directories under `packages/`.
+   - The answer names version `0.0.4` and the five directories under `packages/`.
 4. Open the **Changes** panel. The turn's tool operations are listed there, and the same session is on disk under `%USERPROFILE%\.myharness\agent\sessions\`.
 5. Open Settings → **Providers**. **Nebius Token Factory**, first in the list, shows:
    - its Base URL and the Nemotron models;

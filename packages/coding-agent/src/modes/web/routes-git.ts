@@ -831,13 +831,14 @@ export function registerGitRoutes(server: WebHttpServer, host: WebHost): void {
 			commit: {
 				mode: commit.mode,
 				skipHooks: commit.skipHooks,
-				instructions: commit.instructions ?? commitDefault,
+				// The box shows only the user's own text; empty means the built-in instructions are used.
+				instructions: commit.instructions ?? "",
 				isDefault: commit.instructions === undefined,
 				defaultInstructions: commitDefault,
 			},
 			push: {
 				mode: push.mode,
-				instructions: push.instructions ?? pushDefault,
+				instructions: push.instructions ?? "",
 				isDefault: push.instructions === undefined,
 				defaultInstructions: pushDefault,
 			},

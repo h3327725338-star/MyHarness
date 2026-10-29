@@ -286,23 +286,10 @@ function NebiusSetup({ onDone }) {
 	</div>`;
 }
 
-/** Nebius once it is set up: the console (balance, top-up, keys), this computer's estimate, and the jobs set up again. */
-function NebiusExtras({ info, onChanged }) {
-	const [busy, setBusy] = useState(false);
-	const [result, setResult] = useState(null);
+/** Nebius once it is set up: the console (balance, top-up, keys) and this computer's estimate. */
+function NebiusExtras({ info }) {
 	const spend = info?.spend;
 	const amount = spend ? `${spend.currency === "CNY" ? "¥" : "$"}${spend.total.toFixed(spend.total < 1 ? 4 : 2)}` : "";
-	const again = async () => {
-		setBusy(true);
-		try {
-			setResult(await runNebiusSetup());
-			onChanged();
-		} catch (failure) {
-			toast(failure.message, "error");
-		} finally {
-			setBusy(false);
-		}
-	};
 	return html`<section class="set-card nebius-card">
 		<div class="set-card-head"><div class="col grow"><strong>${t("Balance and spending")}</strong><span class="set-card-desc">${t("Token Factory has no balance API: the balance and Top up are in its console. This computer estimates what it spent from the model prices.")}</span></div></div>
 		<div class="set-card-body col">
@@ -310,9 +297,7 @@ function NebiusExtras({ info, onChanged }) {
 			<div class="row nebius-links">
 				<button class="btn sm" onClick=${() => openServicePage(NEBIUS, info?.consoleUrl, { keyStrip: false })}><${Icon} name="externalLink" size=${13} />${t("Balance and top up")}</button>
 				<button class="btn sm" onClick=${() => openServicePage(NEBIUS)}><${Icon} name="key" size=${13} />${t("Get an API key")}</button>
-				<button class="btn sm" disabled=${busy} title=${t("Give Nemotron models to the jobs that have no model of their own")} onClick=${again}>${busy ? html`<${Spinner} size=${12} />` : null}${t("Set up jobs again")}</button>
 			</div>
-			<${NebiusResult} result=${result} />
 		</div>
 	</section>`;
 }
@@ -390,7 +375,7 @@ export function ProvidersPage() {
 						<div class="prov-head"><div class="col grow"><div class="prov-title">${t("Add provider")}</div><div class="dim">${t("Any OpenAI-, Anthropic-, Gemini- or Mistral-compatible endpoint.")}</div></div></div>
 						<${ProviderForm} key="new" initial=${null} apiTypes=${custom.apiTypes} defaults=${custom.connectionDefaults} onSaved=${saved} onDirty=${(d) => (dirty.current = d)} />
 					</div>`
-					: html`${current.id === NEBIUS ? html`<${NebiusResult} result=${nebiusResult} /><${NebiusExtras} info=${nebiusInfo} onChanged=${() => setNebiusNonce((n) => n + 1)} />` : null}<${ProviderDetail} key=${current.id} provider=${current} entry=${entry} apiTypes=${custom.apiTypes} defaults=${custom.connectionDefaults} onSaved=${saved} onDirty=${(d) => (dirty.current = d)} onDeleted=${() => (loadCustom(), setNebiusResult(null), setNebiusNonce((n) => n + 1), setSel(null))} />`}
+					: html`${current.id === NEBIUS ? html`<${NebiusResult} result=${nebiusResult} /><${NebiusExtras} info=${nebiusInfo} />` : null}<${ProviderDetail} key=${current.id} provider=${current} entry=${entry} apiTypes=${custom.apiTypes} defaults=${custom.connectionDefaults} onSaved=${saved} onDirty=${(d) => (dirty.current = d)} onDeleted=${() => (loadCustom(), setNebiusResult(null), setNebiusNonce((n) => n + 1), setSel(null))} />`}
 			${providers?.modelsPath ? html`<div class="dim mono truncate pf-hint prov-path" title=${providers.modelsPath}>${providers.modelsPath}</div>` : null}
 		</div>
 	</div>`;

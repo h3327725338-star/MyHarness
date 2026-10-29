@@ -352,7 +352,13 @@ describe("AgentSession queue characterization", () => {
 		await harness.session.prompt("normal prompt");
 
 		expect(sawCustomMessage).toBe(true);
-		expect(harness.session.messages.map((message) => message.role)).toEqual(["user", "custom", "assistant"]);
+		// The nextTurn message, then the hidden note with the current time.
+		expect(harness.session.messages.map((message) => message.role)).toEqual([
+			"user",
+			"custom",
+			"custom",
+			"assistant",
+		]);
 	});
 
 	it("does not consume nextTurn messages when prompt preflight fails", async () => {

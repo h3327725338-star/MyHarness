@@ -8,6 +8,7 @@ import type { ScheduleRepeat } from "./store.ts";
 
 const DAY_MS = 86_400_000;
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const CLOCK = /^([01]?\d|2[0-3]):([0-5]\d)$/u;
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
@@ -80,6 +81,15 @@ function offsetAt(ms: number, tz: string): number {
 		Date.UTC(clock.year, clock.month - 1, clock.day, clock.hour, clock.minute, clock.second) -
 		Math.floor(ms / 1000) * 1000
 	);
+}
+
+/** The wall clock in `tz` at `ms` for people and models: "2026-10-29 19:58, Thursday (Asia/Kuala_Lumpur, UTC+08:00)". */
+export function describeLocalTime(ms: number, tz: string): string {
+	const clock = wallClock(ms, tz);
+	const pad = (value: number) => String(value).padStart(2, "0");
+	const offset = Math.round(offsetAt(ms, tz) / 60_000);
+	const zone = `UTC${offset < 0 ? "-" : "+"}${pad(Math.floor(Math.abs(offset) / 60))}:${pad(Math.abs(offset) % 60)}`;
+	return `${clock.year}-${pad(clock.month)}-${pad(clock.day)} ${pad(clock.hour)}:${pad(clock.minute)}, ${WEEKDAY_NAMES[clock.weekday]} (${tz}, ${zone})`;
 }
 
 /** The moment the wall clock in `tz` shows the given date and time. */

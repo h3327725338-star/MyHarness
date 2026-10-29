@@ -28,7 +28,12 @@ for (const name of ['main.cjs', 'preload.cjs', 'service-entry.cjs', 'windows-job
 const runtime = join(stage, 'runtime');
 const copied = new Set();
 const installed = new Map();
-const filter = (source) => !/(?:^|[\\/])(?:node_modules|\.git|test|tests|__tests__|coverage)(?:[\\/]|$)/.test(source) && !/\.(?:map|pdb|tsbuildinfo)$/.test(source);
+// Files nothing loads at run time stay out: Windows Defender scans every file the installer writes, so each one costs
+// install time. That is type declarations, TypeScript sources (reached only through export conditions such as "source",
+// which Node never uses), docs and native sources; licence files stay.
+const unused = (source) => /\.(?:map|pdb|tsbuildinfo|d\.[cm]?ts|[cm]?ts|md|markdown|cc|cpp|c|h|hh|gyp|gypi|scss|flow)$/i.test(source) && !/(?:^|[\\/])(?:licen[cs]e|notice|copying)/i.test(source);
+// `.v8-cache` holds compile caches a package wrote for other Node versions on the build machine (2,500-odd files in ag-psd).
+const filter = (source) => !/(?:^|[\\/])(?:node_modules|\.git|\.v8-cache|test|tests|__tests__|coverage)(?:[\\/]|$)/.test(source) && !unused(source);
 function locate(name, from) {
   let folder = from;
   while (true) {
@@ -52,7 +57,7 @@ function copyPackage(name, from, base = join(runtime, 'node_modules')) {
   const pkg = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'));
   mkdirSync(target, { recursive: true });
   if (name.startsWith('@myharness/')) {
-    for (const item of ['package.json', 'dist', 'web', 'README.md', 'CHANGELOG.md']) if (existsSync(join(source, item))) cpSync(join(source, item), join(target, item), { recursive: true, filter: (p) => !/\.(?:map|tsbuildinfo)$/.test(p) });
+    for (const item of ['package.json', 'dist', 'web', 'README.md', 'CHANGELOG.md']) if (existsSync(join(source, item))) cpSync(join(source, item), join(target, item), { recursive: true, filter: (p) => !/\.(?:map|tsbuildinfo|d\.[cm]?ts)$/.test(p) });
   } else {
     // Filter relative paths so the destination's node_modules name isn't itself excluded.
     cpSync(source, target, { recursive: true, filter: (p) => p === source || filter(p.slice(source.length + 1)) });
@@ -71,7 +76,7 @@ copyPackage('koffi', here, join(stage, 'node_modules'));
 }
 cpSync(join(root, 'system-prompts'), join(runtime, 'system-prompts'), { recursive: true });
 writeFileSync(join(stage, 'runtime.json'), JSON.stringify(installer ? {} : { workingDirectory: resolve(process.env.MYHARNESS_DESKTOP_CWD || root) }));
-writeFileSync(join(stage, 'package.json'), JSON.stringify({ name: 'myharness-desktop', productName: 'MyHarness', version: '0.0.3', main: 'main.cjs', author: 'MyHarness', description: 'MyHarness Windows desktop', license: 'Apache-2.0' }));
+writeFileSync(join(stage, 'package.json'), JSON.stringify({ name: 'myharness-desktop', productName: 'MyHarness', version: '0.0.4', main: 'main.cjs', author: 'MyHarness', description: 'MyHarness Windows desktop', license: 'Apache-2.0' }));
 // The SVG is drawn at a high density first: at the default 72 dpi its 32-unit box would be scaled up blurry.
 await sharp(join(root, 'packages/coding-agent/web/favicon.svg'), { density: 600 }).resize(256, 256).png().toFile(join(stage, 'icon.png'));
 // ICO of PNG frames (Windows Vista and later). The taskbar, title bar and tray pick the small frames; with only a
@@ -95,6 +100,8 @@ const icon = join(stage, 'icon.ico');
 const kind = installer
   ? { appId: 'MyHarness', target: 'nsis', nsis: { oneClick: false, allowToChangeInstallationDirectory: true, createDesktopShortcut: true, createStartMenuShortcut: true, shortcutName: 'MyHarness', deleteAppDataOnUninstall: false, installerLanguages: ['en_US', 'zh_CN'], installerIcon: icon, uninstallerIcon: icon, installerHeaderIcon: icon, artifactName: 'MyHarness-Setup-${version}.${ext}' } }
   : { appId: 'com.myharness.desktop', target: 'dir' };
-await build({ projectDir: stage, config: { appId: kind.appId, productName: 'MyHarness', electronVersion, electronDist, asar: false, npmRebuild: false, directories: { output: destination }, files: ['*.cjs', '*.json', '*.png', '*.ico'], extraFiles: [{ from: join(stage, 'runtime/system-prompts'), to: 'resources/app/runtime/system-prompts' }, { from: join(stage, 'runtime/node_modules'), to: 'resources/app/runtime/node_modules' }, { from: join(stage, 'node_modules'), to: 'resources/app/node_modules' }], win: { target: [{ target: kind.target, arch: ['x64'] }], icon, signExecutable: false }, ...(kind.nsis ? { nsis: kind.nsis } : {}) } });
+// Chromium's own strings (form messages, error pages) in the two languages MyHarness speaks; another system language
+// falls back to English there. The other locales are 50-odd files of about 45 MB.
+await build({ projectDir: stage, config: { appId: kind.appId, productName: 'MyHarness', electronVersion, electronDist, electronLanguages: ['en-US', 'zh-CN', 'zh-TW'], asar: false, npmRebuild: false, directories: { output: destination }, files: ['*.cjs', '*.json', '*.png', '*.ico'], extraFiles: [{ from: join(stage, 'runtime/system-prompts'), to: 'resources/app/runtime/system-prompts' }, { from: join(stage, 'runtime/node_modules'), to: 'resources/app/runtime/node_modules' }, { from: join(stage, 'node_modules'), to: 'resources/app/node_modules' }], win: { target: [{ target: kind.target, arch: ['x64'] }], icon, signExecutable: false }, ...(kind.nsis ? { nsis: kind.nsis } : {}) } });
 console.log(`DESKTOP_EXECUTABLE=${join(destination, 'win-unpacked/MyHarness.exe')}`);
 if (installer) console.log(`DESKTOP_INSTALLER=${join(destination, `MyHarness-Setup-${JSON.parse(readFileSync(join(stage, 'package.json'), 'utf8')).version}.exe`)}`);

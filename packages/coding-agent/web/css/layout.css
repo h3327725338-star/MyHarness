@@ -699,6 +699,6 @@ html.ws-morph::view-transition-new(ws-sidebar) { animation: ws-morph-in var(--t-
 :root.desktop-frameless:is([data-chat-peek="ready"], [data-chat-peek="in"], [data-chat-peek="out"]) .app.chat-tucked > .main .main-header { padding-right: 10px; -webkit-app-region: no-drag; }
 /* Its toasts and cards float at the window's top-right corner meanwhile (Toasts in app.js). */
 .app > .app-toasts { position: fixed; top: 0; right: 0; width: 0; height: 0; z-index: 60; }
-.panel-chat.active, .panel-full.active { color: var(--accent); }
+.panel-chat.active { color: var(--accent); }
 /* The workspace head is the top bar at the window's right edge now: it keeps the window buttons' room. */
 .desktop-frameless .app.chat-tucked .panel-head { padding-right: calc(var(--wc-room) + var(--pad-panel)); }

@@ -546,7 +546,7 @@ describe("scheduled tasks: the clock", () => {
 		).toThrow(ScheduleInputError);
 		expect(() =>
 			desk.service.save({ title: "Late", repeat: { type: "once", at: "2026-10-28T06:00:00+08:00" }, tz: TZ }),
-		).toThrow(/already passed/);
+		).toThrow(/already passed .*It is now 2026-10-28 07:00, Wednesday \(Asia\/Kuala_Lumpur, UTC\+08:00\)\.$/);
 		expect(() =>
 			desk.service.save({
 				kind: "agent",

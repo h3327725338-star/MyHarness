@@ -15,8 +15,11 @@ import { AuthStorage } from "../../../src/providers/credentials/auth-storage.ts"
 import { ModelRuntime } from "../../../src/providers/runtime/index.ts";
 import { SessionManager } from "../../../src/session/manager/index.ts";
 
+/** The conversation without the hidden note with the current time that follows each prompt. */
 function sessionMessageLabels(messages: AgentSession["messages"]): string[] {
-	return messages.map((message) => `${message.role}:${getText(message)}`);
+	return messages
+		.filter((message) => message.role !== "custom" || message.customType !== "current-time")
+		.map((message) => `${message.role}:${getText(message)}`);
 }
 
 function getText(message: AgentSession["messages"][number]): string {

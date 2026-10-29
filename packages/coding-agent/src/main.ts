@@ -6,7 +6,7 @@
  */
 
 import { statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type ImageContent, modelsAreEqual } from "@myharness/ai";
 import chalk from "chalk";
 import type { CreateAgentSessionOptions } from "./agent/runtime/sdk.ts";
@@ -17,9 +17,11 @@ import {
 } from "./agent/runtime/services.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./agent/runtime/session-runtime.ts";
 import { type AppMode, resolveProjectTrusted } from "./application/project-trust.ts";
+import { getDefaultWorkingDir } from "./config/paths/index.ts";
 import { SettingsManager } from "./config/settings/index.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./config/trust/index.ts";
 import { ENV_SESSION_DIR, expandTildePath, getAgentDir, getDataDir, VERSION } from "./config.ts";
+import { ensureDefaultWorkingDir } from "./data/workspace-store.ts";
 import type { InlineExtension } from "./extensions/compat/types.ts";
 import { builtInExtensions } from "./extensions/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
@@ -36,7 +38,7 @@ import { processFileArguments } from "./startup/file-processor.ts";
 import { renderWebStartupHelp } from "./startup/help.ts";
 import { buildInitialMessage } from "./startup/initial-message.ts";
 import { createProjectTrustContext } from "./startup/project-trust.ts";
-import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
+import { isLocalPath, normalizePath, pathIdentityKey, resolvePath } from "./utils/paths.ts";
 
 const EXTENSION_LOAD_FAILURE_HINT = 'Hint: Start without extensions using "myharness -ne".';
 
@@ -265,6 +267,13 @@ async function createSessionManager(
 		);
 	}
 
+	// MyHarness's own folders are not projects. Started in its home (~/.myharness, where the installed app runs) or in its
+	// working directory for chats without a Workspace, the first chat belongs to no Workspace: it runs in that working
+	// directory and opens under Default, instead of registering the folder as a Workspace.
+	const agentDir = getAgentDir();
+	const ownFolders = [dirname(resolvePath(agentDir)), getDefaultWorkingDir(agentDir)];
+	if (!sessionDir && ownFolders.some((folder) => pathIdentityKey(folder) === pathIdentityKey(cwd)))
+		return SessionManager.createUnbound(ensureDefaultWorkingDir(agentDir), { id: parsed.sessionId });
 	return SessionManager.create(cwd, sessionDir, { id: parsed.sessionId });
 }
 

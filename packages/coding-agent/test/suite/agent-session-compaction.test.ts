@@ -196,7 +196,9 @@ describe("AgentSession compaction characterization", () => {
 
 		expect(sent.some((text) => text.includes("Goal: migrate the billing database"))).toBe(true);
 		expect(sent.some((text) => text.includes("Rollout codeword: PINEAPPLE"))).toBe(true);
-		expect(sent.at(-1)).toBe("What was the codeword?");
+		// The prompt, then the hidden note with the current time.
+		expect(sent.at(-2)).toBe("What was the codeword?");
+		expect(sent.at(-1)).toContain("The current local time is");
 	});
 
 	it("keeps the context and writes no checkpoint when the compaction model returns no summary text", async () => {

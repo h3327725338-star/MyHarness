@@ -29,6 +29,21 @@ describe("browser color theme preferences", () => {
 			expect(bootPrefs(prefs)).toMatchObject({ codingColorTheme: "classic", generalColorTheme: "amber" });
 		}
 	});
+	it("opens General in Quiet Forest and Coding in Classic Charcoal until a scheme is picked", () => {
+		expect(modeColorThemesOf({})).toEqual({ coding: "classic", general: "forest" });
+		expect(bootPrefs({ chatMode: "general" })).toMatchObject({
+			colorTheme: "forest",
+			codingColorTheme: "classic",
+			generalColorTheme: "forest",
+		});
+		// Before version 2 every save held both modes, so General's "classic" was the old default.
+		const legacy = { chatMode: "general", colorThemes: { coding: "classic", general: "classic" } };
+		expect(modeColorThemesOf(legacy)).toEqual({ coding: "classic", general: "forest" });
+		expect(bootPrefs(legacy).colorTheme).toBe("forest");
+		const picked = { ...legacy, colorThemesVersion: 2 };
+		expect(modeColorThemesOf(picked)).toEqual({ coding: "classic", general: "classic" });
+		expect(bootPrefs(picked).colorTheme).toBe("classic");
+	});
 	it("offers exactly three schemes and defaults old or invalid preferences to classic", () => {
 		expect(COLOR_THEMES.map((theme: { value: string }) => theme.value)).toEqual(["classic", "forest", "amber"]);
 		for (const value of [undefined, null, "unknown", {}, 1]) expect(colorThemeOf(value)).toBe("classic");
@@ -37,7 +52,7 @@ describe("browser color theme preferences", () => {
 	it("applies the saved scheme before first paint in either chat mode", () => {
 		for (const colorTheme of ["classic", "forest", "amber"]) {
 			for (const chatMode of ["coding", "general"]) {
-				expect(bootPrefs({ colorTheme, chatMode, theme: "dark" })).toMatchObject({
+				expect(bootPrefs({ colorTheme, chatMode, theme: "dark", colorThemesVersion: 2 })).toMatchObject({
 					colorTheme,
 					chatMode,
 					theme: "dark",

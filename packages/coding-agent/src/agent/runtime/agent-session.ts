@@ -151,6 +151,7 @@ import {
 	isIncrementalRecall,
 	type MemoryMaintenanceStatus,
 } from "./auto-memory.ts";
+import { currentTimeContext } from "./current-time.ts";
 import type { CustomMessage } from "./messages.ts";
 import { correlatePrompt } from "./prompt-correlation.ts";
 import {
@@ -2543,6 +2544,8 @@ export class AgentSession {
 				).catch(() => undefined);
 				if (route) messages.push({ role: "custom", ...route, display: false, timestamp: Date.now() });
 			}
+			// The current local time, every turn: models otherwise work out dates from their training data.
+			messages.push({ role: "custom", ...currentTimeContext(), display: false, timestamp: Date.now() });
 			// Apply extension-modified system prompt, or reset to base.
 			// The memory safety policy is a stable part of the system prompt whenever Auto Memory
 			// is fully configured, independent of whether this turn actually recalled anything.
