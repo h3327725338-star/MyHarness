@@ -465,6 +465,9 @@ describe("auto memory", () => {
 			expect(runner).toHaveBeenCalledTimes(3);
 		} finally {
 			manager.dispose();
+			// The time skipped above also starts consolidation checks; their writes must end before the folder is removed.
+			await manager.waitForBackgroundTasks();
+			await manager.waitForMaintenancePersistence();
 			vi.useRealTimers();
 		}
 	});
