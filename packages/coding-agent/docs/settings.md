@@ -21,7 +21,7 @@ Web UI 的每个对话都有自己的 `SettingsManager`，共用同一份 settin
 
 ## Web 专属快捷键与代码智能状态
 
-Web 设置新增 Keyboard shortcuts 页面，输入框统一为 120px 宽度，默认 Ctrl+Alt+字符组合，可录入自定义键位；冲突时标红、提示且不保存。配置保存在当前浏览器，不改旧终端 `keybindings.json`。关于页和实际监听共用键位注册表。网络页对 Provider 传输方式提供说明；**自动重试次数**改用紧凑下拉选择（0（不重试）、1–20、无限，超出标准范围的已保存整数仍作为额外选项保留）。原来的单个“HTTP 空闲超时”已拆成“超时与重试”卡片里互相独立的三个时限（建连超时（秒）、首包超时（秒）、静默超时（秒），存储仍是毫秒）加“同一模型最多尝试次数（次，含第一次）”，单位并入标题且使用统一的 96px 窄数字框，去掉了分离的单位方块，详见 [Retry](#retry) 下的“网络超时与网络失败重试”。
+Web 设置的“键盘快捷键”页只列常用动作：新对话 Ctrl+O（在当前对话的工作区里新建，没有工作区时在默认区）、添加文件 Ctrl+I、添加文件夹 Ctrl+U、侧栏 Ctrl+B、右侧面板 Ctrl+J、内置浏览器 Ctrl+E（仅桌面端）、命令面板 Ctrl+K、设置 Ctrl+,。点一下键位再按下任意组合即可改；按 Backspace/Delete 或点 × 删掉（删掉的动作没有快捷键）；与另一个动作、应用或系统已用的键（复制粘贴、撤销、查找、网页标签、缩放、Enter/Esc 等）冲突，或字母数字没带 Ctrl/Alt 时标红写明冲突对象且不保存；“恢复默认”在卡片右上角。配置保存在当前浏览器，不改旧终端 `keybindings.json`。侧栏、命令面板和实际监听共用键位注册表（`web/js/shortcuts.js`）。网络页对 Provider 传输方式提供说明；**自动重试次数**改用紧凑下拉选择（0（不重试）、1–20、无限，超出标准范围的已保存整数仍作为额外选项保留）。原来的单个“HTTP 空闲超时”已拆成“超时与重试”卡片里互相独立的三个时限（建连超时（秒）、首包超时（秒）、静默超时（秒），存储仍是毫秒）加“同一模型最多尝试次数（次，含第一次）”，单位并入标题且使用统一的 96px 窄数字框，去掉了分离的单位方块，详见 [Retry](#retry) 下的“网络超时与网络失败重试”。
 
 代码智能页通过 `codeIntelligence.symbolsEnabled` 控制 Symbols 工具（以及配套的 `apply_rename`），默认关闭；关闭时这两个工具都不会注册，也不会出现在模型可用工具、活动工具或提示词中。开关修改后需重启运行时生效。旧 `codeIntelligence.enabled` 字段仅作为 deprecated 类型兼容保留，读取时忽略、不迁移且不再写出；`disabledLanguages` 和 `servers` 仍用于语言模块配置。工具输入、workspace 路由、诊断/空结果语义、默认超时与分页契约见 [Symbols](symbols.md)。页面把保存的配置与运行时实际状态分开显示，每秒比对；需要重启时提供一键重启本地 Web 服务，运行中的任务必须先停止。详见 [Web UI](web-ui.md)。
 
@@ -192,7 +192,7 @@ Package 资源和 project-local settings 走同一套 Project Trust flow：启�
 | `hideThinkingBlock` | boolean | `true` | 启动时折叠 transcript details。折叠后 thinking 只显示 status line，tools 使用 compact summaries；Ctrl+O 可临时切换 Transcript。 |
 | `showCacheMissNotices` | boolean | `false` | 在发生明显 prompt-cache miss 时显示 Transcript notice |
 | `thinkingBudgets` | object | - | 为每个 thinking level 自定义 token budgets |
-| `autoMemory` | object | `{ "enabled": false }` | Global long-term memory configuration。通过 `/settings` 设置。 |
+| `autoMemory` | object | `{ "enabled": true }` | Global long-term memory configuration。通过 `/settings` 设置。 |
 | `conversationNaming` | object | `{ "enabled": false }` | Global 对话自动命名；设置 → 智能体 → 助手选择模型、思考级别和开关。 |
 | `sessionContinuity` | object | `{ "autoSearch": true, "autoHandoff": true }` | Global 跨会话衔接：查找之前的聊天、后台交接摘要及其模型；见 [sessionContinuity](#sessioncontinuity)。 |
 | `subAgent` | object | `{ "enabled": false, "mode": "read-only" }` | Global built-in exploration-agent 和 workflow configuration，含只读/读写模式。通过 `/settings` 设置。 |
@@ -202,6 +202,8 @@ Package 资源和 project-local settings 走同一套 Project Trust flow：启�
 | `gitCommit` | object | `{}` | Global `/commit` 的运行方式：`mode`（`"instructions"` 默认 / `"direct"`）、`skipHooks`（只在直接模式生效，默认 `false`）、`instructions`（没有这个字段时用内置默认提示词）。设置 → Git。 |
 | `gitPush` | object | `{}` | Global `/push` 的运行方式：`mode`（`"instructions"` 默认 / `"direct"`）、`instructions`（没有这个字段时用内置默认提示词）。设置 → Git。 |
 | `translation` | object | `{}` | Global 划词翻译模型与目标语言：`provider`/`model`/`thinkingLevel` 为空表示使用主模型，`targetLanguage` 默认 `"auto"`（跟随界面语言），可选 `zh-CN`、`zh-TW`、`en`、`ja`、`ko`、`fr`、`de`、`es`、`ru`。设置 → 智能体 → 助手的“翻译”“翻译成”两行设置。 |
+| `scheduledTasks` | object | `{}` | Global 定时 Agent 任务的模型：`provider`/`model`/`thinkingLevel` 为空时用主模型。设置 → 智能体 → 助手的“定时任务”行选择，见 [scheduledTasks](#scheduledtasks定时任务)。 |
+| `bookmarkNotes` | object | `{}` | Global 内置浏览器书签“用途”的写作模型：`provider`/`model`/`thinkingLevel` 为空时用 `conversationNaming` 的模型，再没有就用主模型。设置 → 智能体 → 助手的“书签用途”行选择，行内显示当前实际用的模型。 |
 | `worktreeNaming` | object | `{}` | Global 工作区副本命名模型：为空表示使用主模型。设置 → 智能体 → 助手的“副本命名”行选择独立模型与思考档位。 |
 | `branchSummary` | object | `{}` | Global 分支摘要模型与摘要行为：`provider`/`model`/`thinkingLevel` 为空表示使用主模型，`reserveTokens`/`skipPrompt` 保持原有摘要行为。设置 → 智能体 → 助手的“分支摘要”行选择独立模型与思考档位。 |
 | `fallbackModel` | object | `{ "enabled": false }` | Global 备用模型：主模型重试用完仍失败时自动接管当前任务。通过 `/settings → Fallback Model` 设置，见 [Retry](#retry)。 |
@@ -269,7 +271,7 @@ Global，设置 → 智能体 → “跨对话衔接”分组。三个部分共�
 <a id="automemory"></a>
 #### autoMemory（Auto Memory）
 
-`Auto Memory` 是 global 的，默认关闭。在 `/settings` 中启用后，MyHarness 会要求选择一个可用 model，以及该 model 支持的 thinking level。随后 MyHarness 会：
+`Auto Memory` 是 global 的，默认开启（`settings.json` 里没有 `autoMemory.enabled` 时按开启处理；关掉后保存为 `false`）。没有单独选 model 时用 main model；也可以在 `/settings` 中选择一个可用 model，以及该 model 支持的 thinking level。开启时 MyHarness 会：
 
 1. 在 main model 收到新的 user request 前（包括新 session 的第一次 request），通过本地文本匹配选择相关的已保存 memories（查询全文匹配）。Recall 不会发起 blocking model request；
 2. 将这些 memories 作为 hidden、low-priority context 添加。它们不能覆盖 system、global、project 或当前 user instructions，也不会授予 tool permissions；长期规则归属二分：人维护的、长期有效的规则放项目指令（`AGENTS.md` / `CLAUDE.md` / `.myharness/SYSTEM.md`），AI 从纠正和偏好里学到的放记忆。两者冲突时项目指令优先，记忆只当背景；觉得某条记忆已经是长期铁律时，把它写进项目指令而不是只留在记忆里；
@@ -350,13 +352,13 @@ Memory Markdown files 是 source of truth：
 
 #### webSearch（Web Search）
 
-`Web Search` 默认关闭。在 `/settings` 中启用后，当前 Agent 才会获得 `web_search` 和 `web_fetch`；同一开关也决定它派出的子智能体（Explore / Workflow）能不能联网（开启时子智能体的工具集里同样有这两个只读工具）。关闭只移除工具，不删除已有 Session、Tool Result 或历史记录。
+`Web Search` 默认打开（`enabled` 没有保存过时按开；保存过的选择保持不变）。打开时当前 Agent 获得 `web_search` 和 `web_fetch`；同一开关也决定它派出的子智能体（Explore / Workflow）能不能联网（开启时子智能体的工具集里同样有这两个只读工具）。关闭只移除工具，不删除已有 Session、Tool Result 或历史记录。
 
 搜索和网页读取都由 MyHarness 内置完成，不需要部署或填写任何外部服务地址。用户可以选择搜索引擎、浏览器兜底和四个数量：
 
 | 字段 | 含义 | 范围 | 默认 |
 | --- | --- | --- | --- |
-| `engines` | 启用的搜索引擎：`google`、`bing`、`duckduckgo`、`brave`、`tavily`（需要 API Key） | 任意组合 | `["google", "bing"]` |
+| `engines` | 启用的搜索引擎：`google`、`bing`、`duckduckgo`、`brave`、`tavily`（没有 API Key 时走 Tavily 免费的免 Key 通道） | 任意组合 | `["tavily", "google"]` |
 | `browserFallback` | 轻量请求被拦截时，是否允许用本机浏览器（MyHarness 专用配置）打开真实的搜索页或网页 | On / Off | `true` |
 | `browser` | 兜底用哪个浏览器；`auto` = Firefox、Chrome、Edge 中第一个已安装的 | `auto` / `firefox` / `chrome` / `edge` | `"auto"` |
 | `useBrowserCookies` | 是否把日常浏览器的 Cookie 复制一份到专用配置，用来读取已登录的网站 | On / Off | `false` |
@@ -369,7 +371,7 @@ Memory Markdown files 是 source of truth：
 {
   "webSearch": {
     "enabled": true,
-    "engines": ["google", "bing"],
+    "engines": ["tavily", "google"],
     "browserFallback": true,
     "browser": "auto",
     "useBrowserCookies": false,
@@ -478,11 +480,31 @@ Memory Markdown files 是 source of truth：
 
 #### translation（划词翻译）
 
-Global 设置，模型部分与上面两项规则相同：默认为空即“使用主模型”（并继承主对话当前的 Thinking Effort），显式配置 `provider` + `model` 后改用独立模型，删除 Provider/模型时清理引用。`targetLanguage` 为 `"auto"` 时按请求带来的界面语言决定（中文界面译成简体中文，否则英语；桌面端网页里的请求不带界面语言，用 Web UI 偏好里保存的语言）。翻译卡片顶栏的语言菜单改的也是 `targetLanguage`。用于 Web UI 和桌面端内置浏览器的划词翻译（`POST /api/translate`），见 [Web UI](web-ui.md)。
+Global 设置，模型部分与上面两项规则相同：默认为空即“使用主模型”（并继承主对话当前的 Thinking Effort），显式配置 `provider` + `model` 后改用独立模型，删除 Provider/模型时清理引用。`targetLanguage` 为 `"auto"` 时按请求带来的界面语言决定（中文界面译成简体中文，否则英语；桌面端网页里的请求不带界面语言，用 Web UI 偏好里保存的语言，还没保存时用桌面宿主传来的 Windows 语言）。翻译卡片顶栏的语言菜单改的也是 `targetLanguage`。用于 Web UI 和桌面端内置浏览器的划词翻译（`POST /api/translate`），见 [Web UI](web-ui.md)。
 
 ```json
 {
   "translation": { "provider": "my-provider", "model": "my-fast-model", "thinkingLevel": "off", "targetLanguage": "zh-CN" }
+}
+```
+
+#### bookmarkNotes（书签用途）
+
+Global 设置。内置浏览器书签的“用途”由这个模型写（`POST /api/bookmarks/purpose`）：为空时先用 `conversationNaming`（对话自动命名）配置的模型，那里也没配时用主模型及其 Thinking Effort；显式配置 `provider` + `model` 后用独立模型。删除 Provider/模型时清理引用。写用途时会带上网页资料、Auto Memory 开着时的全局记忆（用户画像和相关记忆）以及用户自己写过的其他用途，见 [Web UI](web-ui.md)。
+
+```json
+{
+  "bookmarkNotes": { "provider": "my-provider", "model": "my-fast-model", "thinkingLevel": "off" }
+}
+```
+
+#### scheduledTasks（定时任务）
+
+Global 设置。定时的 Agent 任务到点时在新对话里运行，用这里的模型和 Thinking Effort（只用于那次运行开的对话，不改全局默认模型）；`provider`/`model` 为空时用主模型。设置 → 智能体 → 助手的“定时任务”行选择，行内显示当前实际用的模型。选的模型不可用时这次运行失败并在卡片上说明，不会悄悄换成别的模型。删除 Provider/模型时清理引用。
+
+```json
+{
+  "scheduledTasks": { "provider": "my-provider", "model": "my-model", "thinkingLevel": "medium" }
 }
 ```
 

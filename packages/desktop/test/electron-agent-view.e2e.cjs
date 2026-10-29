@@ -6,10 +6,11 @@
  *
  * The view only behaves like the app's when the window is composited, so the window is shown, but inactive,
  * unfocusable, off the taskbar and far outside every screen: nothing appears and nothing takes the focus. It checks that
- * a tab the Agent drives in a 426 px wide panel keeps exactly the panel's size (never a scaled-down desktop picture),
- * that the Agent's click at a page point lands there, that a click between two controls names the nearest one, that a
- * background tab is laid out at the desktop size, and that a click on a download link reports the saved file. It prints
- * a JSON report and exits 1 at any broken invariant.
+ * a tab the Agent drives in a 426 px wide panel is laid out at the desktop size while the panel shows the part that fits
+ * (never a scaled-down picture), that the Agent's screenshot is the whole page, that a person's click gives the page the
+ * panel's size back, that the Agent's click at a page point lands there, that a click between two controls names the
+ * nearest one, that a background tab is laid out at the desktop size, and that a click on a download link reports the
+ * saved file. It prints a JSON report and exits 1 at any broken invariant.
  */
 const { app, BrowserWindow, nativeImage } = require('electron');
 const http = require('node:http');
@@ -52,16 +53,23 @@ const until = async (fn, ms = 10000) => {
   return undefined;
 };
 
-// A button, two links with a gap between them, a red mark in the top-right corner of a 426 px viewport, and a download link.
+// A button, two links with a gap between them, a red mark in the top-right corner of a 426 px viewport, a blue one at the
+// right edge of whatever width the page has, and a download link.
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Agent View</title></head>
 <body style="margin:0;font:14px sans-serif">
 <button id="far" style="position:absolute;left:300px;top:30px;width:60px;height:40px">Far</button>
 <canvas id="mark" width="10" height="10" style="position:absolute;left:416px;top:0;width:10px;height:10px"></canvas>
+<canvas id="edge" width="10" height="10" style="position:absolute;right:0;top:20px;width:10px;height:10px"></canvas>
 <script>
-// Painted pixels, not a CSS background: dark mode (Dark Reader, when installed) recolors styles but not drawings.
-const markPen = document.getElementById('mark').getContext('2d');
+// Painted pixels, not a CSS background: dark mode (Dark Reader, when installed) recolors styles but not drawings. The
+// canvases are drawn by the CPU (willReadFrequently): a GPU-backed canvas loses its drawing when the GPU process restarts,
+// which happens on a desktop nobody looks at, and the marks were then missing from the pictures.
+const markPen = document.getElementById('mark').getContext('2d', { willReadFrequently: true });
 markPen.fillStyle = 'rgb(255,0,0)';
 markPen.fillRect(0, 0, 10, 10);
+const edgePen = document.getElementById('edge').getContext('2d', { willReadFrequently: true });
+edgePen.fillStyle = 'rgb(0,0,255)';
+edgePen.fillRect(0, 0, 10, 10);
 </script>
 <div id="pages" style="position:absolute;left:40px;top:160px;width:120px;height:30px"><a href="#1" style="position:absolute;left:0;top:6px">1</a><a href="#2" style="position:absolute;left:40px;top:6px">2</a></div>
 <a id="file" href="/files/notes.docx" style="position:absolute;left:40px;top:120px">Download notes.docx</a>
@@ -105,33 +113,47 @@ async function main() {
   const before = await size('narrow');
   check(before?.w === 426, 'before the Agent acts, the page has the panel size', before);
 
-  // --- the Agent drives the visible tab: it keeps the panel size --------------------------------------------------
+  // --- the Agent drives the visible tab: the page gets the desktop size, the panel shows the part that fits --------
   const shot = await agent({ action: 'snapshot', tabId: 'narrow' });
   const state = await page({ action: 'state', tabId: 'narrow' });
-  check(state.agentView === undefined && state.bounds?.width === 426 && state.bounds?.height === 900, 'the view keeps exactly the panel box', state.bounds);
+  check(state.bounds?.x === panel.x && state.bounds?.width === 1280 && state.bounds?.height === 900, "the view is laid out at the desktop width from the panel's left edge", state.bounds);
+  const narrowView = browser.tabs.find((tab) => tab.id === 'narrow').view;
+  const stageBox = window.contentView.children.find((child) => child.children?.includes(narrowView))?.getBounds();
+  check(stageBox?.x === panel.x && stageBox?.y === panel.y && stageBox?.width === panel.width && stageBox?.height === panel.height, 'what shows is still only the panel: the wider page is cut at its edge', stageBox);
   const during = await size('narrow');
-  check(during?.w === 426 && during?.h === 900, 'the page stays laid out at the panel size while the Agent acts', during);
-  check(shot.width === 426 && shot.height === 900, 'the Agent screenshot is the panel-size page', { width: shot.width, height: shot.height });
+  check(during?.w === 1280 && during?.h === 900, 'the page is laid out at the desktop size while the Agent acts', during);
+  check(shot.width === 1280 && shot.height === 900, 'the Agent screenshot is the whole page', { width: shot.width, height: shot.height });
   const picture = nativeImage.createFromDataURL(shot.snapshot);
   const pixels = picture.toBitmap();
   const at = (x, y) => { const index = (y * picture.getSize().width + x) * 4; return [pixels[index + 2], pixels[index + 1], pixels[index]]; };
   const corner = at(421, 4);
-  check(corner[0] > 200 && corner[1] < 60 && corner[2] < 60, 'the right edge of the page is in the picture at full resolution', corner);
+  check(corner[0] > 200 && corner[1] < 60 && corner[2] < 60, 'a page point is in the picture where it is on the page, at full resolution', corner);
+  const edge = at(1275, 24);
+  check(edge[2] > 200 && edge[0] < 60 && edge[1] < 60, "the page's right edge beyond the panel is in the picture too", edge);
 
   pictures.length = 0;
-  const fallback = await until(() => pictures.find((event) => event.width === 426), 4000);
+  const fallback = await until(() => pictures.find((event) => event.width === 1280), 4000);
   const fallbackSize = fallback && nativeImage.createFromDataURL(fallback.snapshot).getSize();
-  check(fallback?.height === 900 && fallbackSize?.width === 426 && fallbackSize?.height === 900, 'the fallback picture covers the view', { event: fallback && { width: fallback.width, height: fallback.height }, image: fallbackSize });
+  check(fallback?.height === 900 && fallbackSize?.width === 1280 && fallbackSize?.height === 900, 'the fallback picture is the whole view, cut by the panel like the view', { event: fallback && { width: fallback.width, height: fallback.height }, image: fallbackSize });
 
   const clicked = await agent({ action: 'mouse', tabId: 'narrow', kind: 'click', x: 330, y: 50 });
   check(clicked.target?.text === 'Far', 'the click reports the control at that point', clicked.target);
   await until(async () => (await log('narrow')).includes('far:'));
   check((await log('narrow')).includes('far:330,50:true'), 'the Agent click lands on the exact page point', await log('narrow'));
+  check((await size('narrow'))?.w === 1280, "the Agent's own click does not give the page back", await size('narrow'));
 
   // Between link "1" (ends near x=48) and link "2" (starts at x=80): the result names "2" or "1" as the nearest control.
   const gap = await agent({ action: 'mouse', tabId: 'narrow', kind: 'move', x: 70, y: 175 });
   const near = await agent({ action: 'mouse', tabId: 'narrow', kind: 'click', x: 74, y: 175 });
   check(gap.ok && near.target?.missed === true && near.target.nearest?.text === '2' && near.target.nearest.distance <= 24, 'a click on the gap next to a link names the nearest control and its centre', near.target);
+
+  // A person's click in the panel gives the page the panel's size back.
+  await wait(1700);
+  const contents = narrowView.webContents;
+  contents.sendInputEvent({ type: 'mouseDown', x: 20, y: 400, button: 'left', clickCount: 1 });
+  contents.sendInputEvent({ type: 'mouseUp', x: 20, y: 400, button: 'left', clickCount: 1 });
+  const back = await until(async () => { const value = await size('narrow'); return value?.w === 426 ? value : undefined; }, 4000);
+  check(back?.w === 426 && back?.h === 900, 'a person clicking in the page gives it the panel size back', back || (await size('narrow')));
 
   // --- background tabs --------------------------------------------------------------------------------------------
   await page({ action: 'ensure', tabId: 'back', url: `${origin}/` });

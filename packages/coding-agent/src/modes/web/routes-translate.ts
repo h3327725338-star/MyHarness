@@ -14,7 +14,7 @@ import {
 	TRANSLATION_TARGETS,
 	translationTarget,
 } from "../../agent/runtime/selection-translation.ts";
-import { readWebPrefs } from "../../config/web-prefs.ts";
+import { readWebPrefs, systemInterfaceLanguage } from "../../config/web-prefs.ts";
 import { completeWithNetworkPolicy } from "../../providers/recovery/network-retry.ts";
 import { mergeProviderAttributionHeaders } from "../../providers/runtime/attribution.ts";
 import { reasoningOf, resolveHelperModel } from "./helper-model.ts";
@@ -23,13 +23,13 @@ import { HttpError, type WebHttpServer } from "./http-server.ts";
 
 /**
  * `agentDir`: where the page keeps its preferences. A request without `uiLanguage` (a website tab of the desktop host)
- * uses the interface language saved there.
+ * uses the interface language saved there, or the language of Windows while none is saved (as the page does).
  */
 export function registerTranslateRoutes(server: WebHttpServer, host: WebHost, agentDir: () => string): void {
 	// The saved language, so a new card shows it at once instead of the interface language until the answer arrives.
 	server.route("GET", "/api/translate", ({ url }) => {
 		const { targetLanguage } = host.session.settingsManager.getTranslationSettings();
-		const uiLanguage = url.searchParams.get("uiLanguage") || savedInterfaceLanguage(agentDir());
+		const uiLanguage = url.searchParams.get("uiLanguage") || interfaceLanguage(agentDir());
 		return { preference: targetLanguage, target: translationTarget(targetLanguage, uiLanguage) };
 	});
 	// British or American pronunciation of an English word card (used even when Windows has a voice of that accent:
@@ -77,7 +77,7 @@ export function registerTranslateRoutes(server: WebHttpServer, host: WebHost, ag
 		const settings = host.session.settingsManager.getTranslationSettings();
 		const target = translationTarget(
 			requested ?? settings.targetLanguage,
-			typeof payload.uiLanguage === "string" ? payload.uiLanguage : savedInterfaceLanguage(agentDir()),
+			typeof payload.uiLanguage === "string" ? payload.uiLanguage : interfaceLanguage(agentDir()),
 		);
 		const { model, thinkingLevel } = resolveHelperModel(host, settings, "Select a main Agent model first.");
 		const reasoning = reasoningOf(thinkingLevel);
@@ -123,7 +123,7 @@ export function registerTranslateRoutes(server: WebHttpServer, host: WebHost, ag
 const ENGLISH_WORD = /^[A-Za-z][A-Za-z' -]{0,59}$/;
 const MAX_VOICE_BYTES = 1024 * 1024;
 
-function savedInterfaceLanguage(dir: string): string | undefined {
+function interfaceLanguage(dir: string): string | undefined {
 	const lang = readWebPrefs(dir)?.prefs.lang;
-	return typeof lang === "string" ? lang : undefined;
+	return typeof lang === "string" ? lang : systemInterfaceLanguage();
 }

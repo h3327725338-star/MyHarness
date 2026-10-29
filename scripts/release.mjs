@@ -15,7 +15,8 @@
  * 6. Commit and tag the release
  * 7. Add new [Unreleased] section to changelogs
  * 8. Commit next-cycle changelog updates
- * 9. Push main and the tag to trigger CI publishing
+ * 9. Push main and the tag (nothing is published by the push: binaries come only from a manual
+ *    run of the Build Binaries workflow)
  */
 
 import { execSync } from "child_process";
@@ -228,4 +229,6 @@ runGit(["push", "origin", "main"]);
 runGit(["push", "origin", `v${version}`]);
 console.log();
 
-console.log(`=== Prepared release v${version}; CI publishing starts after the tag push ===`);
+console.log(
+	`=== Pushed release v${version}; the tag publishes nothing by itself. Run the Build Binaries workflow by hand if binaries are wanted ===`,
+);

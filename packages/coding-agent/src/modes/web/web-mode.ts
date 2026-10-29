@@ -25,12 +25,14 @@ import { WebHttpServer } from "./http-server.ts";
 import { WebHostHub } from "./hub.ts";
 import { WebLifecycle } from "./lifecycle.ts";
 import { registerAccountRoutes } from "./routes-accounts.ts";
+import { registerBookmarkRoutes } from "./routes-bookmarks.ts";
 import { registerCoreRoutes } from "./routes-core.ts";
 import { registerFileRoutes, registerFolderBrowser } from "./routes-files.ts";
 import { registerGitRoutes } from "./routes-git.ts";
 import { registerMailRoutes } from "./routes-mail.ts";
 import { registerModeRoutes } from "./routes-modes.ts";
 import { registerProviderRoutes } from "./routes-providers.ts";
+import { registerScheduleRoutes } from "./routes-schedules.ts";
 import { registerSessionRoutes } from "./routes-sessions.ts";
 import { registerSettingsRoutes } from "./routes-settings.ts";
 import { registerSyncRoutes } from "./routes-sync.ts";
@@ -223,6 +225,7 @@ export async function runWebMode(
 	registerProviderRoutes(server, host, hub);
 	registerAccountRoutes(server);
 	registerMailRoutes(server);
+	registerBookmarkRoutes(server, host);
 	// Google Drive sync: the engine polls in the background; the routes only expose status and configuration.
 	const syncService = SyncService.create({
 		agentDir: runtimeHost.services.agentDir,
@@ -259,6 +262,13 @@ export async function runWebMode(
 	});
 	registerSyncRoutes(server, syncService);
 	void syncService.start();
+	// Scheduled tasks: reminders and Agent tasks at set times, synced like the rest. A launch copy shows them but never
+	// fires them; the source instance does.
+	const scheduleService = registerScheduleRoutes(server, hub, {
+		agentDir: runtimeHost.services.agentDir,
+		fire: !copyIdentity,
+	});
+	scheduleService.start();
 	// The Terminal panel's shells belong to the server, not to a chat: they outlive the chats that show them.
 	const terminals = new WebTerminals((event, data) => server.broadcast(event, data));
 	registerTerminalRoutes(server, host, terminals);
@@ -291,6 +301,7 @@ export async function runWebMode(
 		if (nameTimer) clearInterval(nameTimer);
 		server.broadcast(restarting ? "restarting" : "shutdown", {});
 		try {
+			scheduleService.dispose();
 			dialogs.dismissAll();
 			terminals.dispose();
 			await hub.dispose();

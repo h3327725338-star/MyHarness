@@ -159,8 +159,8 @@
 .sidebar.is-collapsed + .main { margin-left: 6px; }
 .app.panel-open .main { margin-right: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 
-.main-header { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px 0 14px; flex: none; border-bottom: 1px solid transparent; }
-.main-header.scrolled, .app.panel-open .main-header { border-bottom-color: var(--border); }
+/* The line under the chat title is always there, whether the chat is scrolled, empty or has the panel beside it. */
+.main-header { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px 0 14px; flex: none; border-bottom: 1px solid var(--border); }
 /* Project sources page (sources-page.js): covers the conversation area, which stays mounted (and running) below it. */
 .sources-page { position: absolute; inset: 0; z-index: 50; display: flex; flex-direction: column; background: var(--bg-panel); animation: fade-only var(--t-base) var(--ease) both; }
 .sources-head { padding-left: 8px; border-bottom-color: var(--border); }
@@ -241,6 +241,20 @@
 .toast { pointer-events: auto; padding: 9px 12px; border-radius: var(--r-md); background: var(--bg-raised); border: 1px solid var(--border-strong); box-shadow: var(--shadow-pop); display: flex; gap: 8px; align-items: flex-start; font-size: var(--fs-md); animation: fade-in var(--t-base) var(--ease); }
 /* An error or warning toast keeps the neutral frame: its glyph alone carries the colour (see Toasts in app.js). */
 .toast .msg { white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; }
+/* Cards above the toasts (attention-cards.js): a scheduled task whose time came, a request of the Agent for the user's
+   help. They keep the toast's frame and plain glyph; a little wider, the title with its context, the text, then the
+   answers as text buttons (closing is the × of every toast). */
+.toast.attention-card { width: 320px; max-width: calc(100vw - 32px); }
+.attention-glyph { flex: none; margin-top: 2px; }
+/* The kind of a task in the Settings list (schedules.js). */
+.attention-icon { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r-md); background: var(--bg-inset); color: var(--text-2); }
+.attention-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.attention-head { display: flex; flex-direction: column; min-width: 0; }
+.attention-title { font-weight: 500; }
+.attention-meta { font-size: var(--fs-sm); }
+.attention-text { font-size: var(--fs-sm); color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: auto; }
+.attention-actions { gap: 12px; margin-top: 3px; flex-wrap: wrap; }
+.attention-actions .link-btn:not(.primary) { color: var(--text-2); }
 
 .splash { height: 100%; display: grid; place-items: center; color: var(--text-3); }
 .splash-card { width: 420px; max-width: calc(100% - 32px); display: flex; flex-direction: column; gap: 12px; align-items: center; text-align: center; }
@@ -405,6 +419,66 @@ html.mode-revealing .app, html.mode-revealing .main, html.mode-revealing .panel-
 .ws-permissions.ws-bookmark-editor { min-width: 260px; }
 .ws-bookmark-field { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-sm); }
 .ws-bookmark-actions { gap: 6px; padding-top: 2px; }
+/* What a bookmark is for (browser-bookmarks.js): a short note the Agent reads; the sparkle writes it from the page. */
+.ws-bookmark-note-head { gap: 4px; min-height: 20px; }
+.ws-bookmark-note { resize: vertical; min-height: 54px; font-size: var(--fs-sm); line-height: 1.45; }
+.ws-bookmark-note-hint { font-size: var(--fs-xs, 11px); line-height: 1.35; }
+/* Which model writes the notes, with the way to change it; the write button says what it does in words. */
+.ws-bookmark-model { font-size: var(--fs-xs, 11px); line-height: 1.35; }
+.ws-bookmark-model .link-btn { font-size: inherit; }
+.ws-bookmark-write { gap: 4px; padding-inline: 6px; }
+.ws-bookmark-by { font-size: var(--fs-xs, 11px); color: var(--text-3); }
+/* The bar keeps its list button at the right end, outside the sideways-scrolling row. */
+.ws-bookmarks-row { display: flex; align-items: center; }
+.ws-bookmarks-row > .ws-bookmarks { flex: 1; min-width: 0; }
+.ws-bookmarks-manage { flex: none; margin-right: 6px; color: var(--text-3); }
+/* Every bookmark with its note: a searchable list under the bar's list button, scrolling inside the bubble. */
+.ws-side-pop > .ws-permissions.ws-bookmark-manager { width: min(380px, 100%); max-width: min(380px, 100%); }
+/* The downloads list (browser-downloads.js): one row per file with its icon, name and status, the row's own action at
+   the right, and the folder and clear buttons under a line. Only the rows scroll. */
+.ws-side-pop > .ws-permissions.ws-downloads { width: 340px; max-width: 100%; padding: 4px; gap: 0; overflow: hidden; }
+.ws-dl-list { display: flex; flex-direction: column; gap: 1px; max-height: min(420px, calc(100vh - 200px)); overflow-y: auto; overscroll-behavior: contain; }
+.ws-dl-row { display: flex; align-items: center; gap: 2px; border-radius: var(--r-md); }
+.ws-dl-row:hover { background: var(--surface-hover); }
+.ws-dl-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 7px 6px; text-align: left; border-radius: var(--r-md); color: var(--text); }
+.ws-dl-main:disabled { cursor: default; opacity: 1; }
+.ws-dl-icon { flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; color: var(--text-2); }
+.ws-dl-icon img { width: 20px; height: 20px; object-fit: contain; }
+.ws-dl-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ws-dl-name { font-size: var(--fs-sm); line-height: 1.3; }
+.ws-dl-status { font-size: var(--fs-xs, 11px); line-height: 1.3; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.ws-dl-row.failed .ws-dl-status { color: var(--danger); }
+.ws-dl-row.missing .ws-dl-name, .ws-dl-row.cancelled .ws-dl-name, .ws-dl-row.failed .ws-dl-name { color: var(--text-3); }
+.ws-dl-row.missing .ws-dl-name { text-decoration: line-through; }
+.ws-dl-bar { position: relative; height: 3px; margin-top: 2px; border-radius: 2px; background: var(--surface-active); overflow: hidden; }
+.ws-dl-bar > span { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--accent); transition: width 0.3s ease; }
+.ws-dl-bar.unknown > span, .ws-dl-progress.unknown > span { width: 35%; animation: ws-dl-slide 1.2s ease-in-out infinite; }
+.ws-dl-act { flex: none; margin-right: 4px; color: var(--text-3); }
+.ws-dl-empty { padding: 14px 10px; font-size: var(--fs-sm); text-align: center; }
+.ws-dl-foot { gap: 4px; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
+.ws-dl-foot .btn { justify-content: flex-start; gap: 6px; }
+/* The toolbar button: the arrow drops in when a download starts, a thin bar under it fills while files arrive, and a dot
+   says a download ended (red when it failed) until the list is opened. */
+.ws-dl-button { position: relative; }
+.ws-dl-arrow { display: inline-grid; place-items: center; }
+.ws-dl-arrow.drop { animation: ws-dl-drop 0.6s var(--ease-out) both; }
+.ws-dl-progress { position: absolute; left: 5px; right: 5px; bottom: 2px; height: 2px; border-radius: 1px; background: var(--surface-active); overflow: hidden; }
+.ws-dl-progress > span { position: absolute; inset: 0 auto 0 0; background: var(--accent); transition: width 0.3s ease; }
+.ws-dl-button.running { color: var(--accent); }
+.ws-dl-mark { position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1.5px var(--bg-panel); }
+.ws-dl-mark.failed { background: var(--danger); }
+@keyframes ws-dl-drop { 0% { transform: translateY(-7px); opacity: 0; } 55% { transform: translateY(2px); opacity: 1; } 100% { transform: none; } }
+@keyframes ws-dl-slide { from { left: -35%; } to { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .ws-dl-arrow.drop, .ws-dl-bar.unknown > span, .ws-dl-progress.unknown > span { animation: none; } }
+.ws-bookmark-list { display: flex; flex-direction: column; gap: 1px; margin: 0 -4px; }
+.ws-bookmark-item { display: flex; align-items: center; gap: 2px; border-radius: var(--r-md); }
+.ws-bookmark-item:hover { background: var(--surface-hover); }
+.ws-bookmark-open { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 8px; padding: 6px 4px; text-align: left; border-radius: var(--r-md); }
+.ws-bookmark-open > .ws-bookmark-icon { margin-top: 2px; }
+.ws-bookmark-lines { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ws-bookmark-name { font-size: var(--fs-sm); color: var(--text); }
+.ws-bookmark-what { font-size: var(--fs-sm); color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ws-bookmark-what.missing { color: var(--text-3); font-style: italic; }
 .ws-logins-head { padding-top: 6px; border-top: 1px solid var(--border); margin-top: 2px; }
 /* The search engine belongs to the bar it searches with: a caret at the address field's right edge opens Google / Bing,
    and the toolbar has no magnifier at all: find in page is Ctrl+F (a magnifier next to a search field reads as "search"). */
@@ -430,8 +504,11 @@ html.mode-revealing .app, html.mode-revealing .main, html.mode-revealing .panel-
 .text-editor textarea { flex: 1 1 auto; min-height: 50vh; padding: 10px; resize: none; overflow: auto; font-size: var(--fs-sm); line-height: 1.5; white-space: pre; tab-size: 2; }
 /* Site permission decisions: a request is a question in the tab, never an automatic grant; the list is a compact bubble
    under the shield that shows the session-scoped decisions, colours each answer and can revoke it. */
-.ws-permission-ask { margin: 0 0 6px; }
-.ws-permission-ask p { margin: 0 0 8px; }
+/* The question above its buttons, which wrap: in a narrow panel the row beside the text pushed "Deny" out of sight. */
+.notice.ws-permission-ask { margin: 0 0 6px; flex-direction: column; align-items: stretch; }
+.ws-permission-ask p { margin: 0; }
+.ws-permission-ask > .row { flex-wrap: wrap; gap: 6px; }
+.ws-permission-name::first-letter { text-transform: uppercase; }
 .ws-permissions { display: flex; flex-direction: column; gap: 6px; align-self: flex-end; box-sizing: border-box; width: fit-content; min-width: 200px; max-width: min(320px, calc(100% - var(--pad-panel) - var(--pad-panel))); margin: 0 var(--pad-panel) 8px 0; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-raised); box-shadow: var(--shadow-pop); }
 .ws-permissions-head { gap: 4px; }
 .ws-permissions-head strong { font-size: var(--fs-sm); }
@@ -463,6 +540,12 @@ html.mode-revealing .app, html.mode-revealing .main, html.mode-revealing .panel-
 .app.ws-switching, .app.ws-switching *, html.ws-morph .app, html.ws-morph .app * { transition: none !important; }
 .app.ws-max .panel-slot { order: 1; box-shadow: none; }
 .app.ws-max .main { order: 2; margin: 6px 6px 6px 6px; border-radius: var(--r-lg); }
+/* The conversation keeps its width whatever its column's: right-aligned in it, so a column that closes as the
+   conversation is tucked away (or opens as it comes back) never squeezes it. The column widths are not inherited (the
+   @property rules at the top), so it takes its width from `.app` explicitly: the column less its 6px gaps, or the whole
+   column on the frameless window. */
+.app.ws-max > .main { --chat-col: inherit; width: calc(var(--chat-col) - 12px); justify-self: end; }
+.desktop-frameless .app.ws-max > .main { width: var(--chat-col); }
 .app.ws-max .panel { --panel-width: 100%; width: 100%; margin: 6px 0 6px 0; border-left: 1px solid var(--border); border-radius: var(--r-lg); }
 .app.ws-max:has(> .sidebar.is-collapsed) .panel { margin-left: 6px; }
 /* The conversation's left edge is its border line: the handle straddles it like the panel's does, and the line it lights
@@ -566,6 +649,15 @@ html.ws-morph::view-transition-new(ws-sidebar) { animation: ws-morph-in var(--t-
 .desktop-frameless :is(.main-header, .panel-head, .sidebar-top .brand) > :not(.grow, .ws-tabs, .ws-nav),
 .desktop-frameless :is(.main-header, .panel-head, .ws-tabs, .sidebar-top .brand) :is(button, input, textarea, select, a, [role="button"], [role="tab"], [contenteditable]),
 .desktop-frameless :is(.resizer, .desktop-browser-target, .ws-menu, .scrim, .composer-scrim, .composer.expanded, .quote-edit-scrim, .quote-edit-pop, .lightbox-scrim, .personal-fullscreen-scrim, .popover, .local-file-menu, .floating-quote-bar, .quote-note-card, .tooltip) { -webkit-app-region: no-drag; }
+/* The tabs of the head reach the top edge of the window, as in a browser: a pointer pushed against the top of the screen
+   still lands on a tab, not on the window's drag area. The strip and each tab's slot fill the head's height (both clip,
+   so they have to hold the taller hit area) and each tab, and the "+" after them, gets an invisible no-drag area up to
+   the top. */
+.desktop-frameless .panel-head :is(.ws-nav, .ws-nav-strip, .ws-nav-strip > .ws-tabs, .ws-tabs > .ws-tab-slot) { align-self: stretch; }
+.desktop-frameless .panel-head .ws-nav-strip > .ws-tabs { padding: 0; }
+.desktop-frameless .panel-head .ws-tabs > .ws-tab-slot { align-items: center; }
+.desktop-frameless .panel-head :is(.ws-tab-slot > .ws-tab, .ws-new-tab) { position: relative; }
+.desktop-frameless .panel-head :is(.ws-tab-slot > .ws-tab, .ws-new-tab)::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 22px; -webkit-app-region: no-drag; }
 /* A column resizer comes before the top bar it overlaps, and a later drag area wins over an earlier no-drag one; these
    strips come after the top bars and give the resizer's top end back to the resizer. */
 .desktop-frameless .app.panel-open .main::after, .desktop-frameless .app.ws-max .main::after { content: ""; position: absolute; left: 0; top: 0; width: 8px; height: 44px; pointer-events: none; -webkit-app-region: no-drag; }
@@ -578,3 +670,35 @@ html.ws-morph::view-transition-new(ws-sidebar) { animation: ws-morph-in var(--t-
 .ws-zoom { font-variant-numeric: tabular-nums; padding: 0 6px; }
 .ws-dark.on, .ws-language.on { color: var(--accent); }
 .menu-caption { padding: 6px 10px 2px; font-size: var(--fs-sm); color: var(--text-3); }
+
+/* The conversation tucked away at the window's right edge (`.chat-tucked`, store.js chatTucked), as the sidebar hides at
+   the left: browser fullscreen (actions.toggleBrowserFull) unless the conversation is kept (`.full-chat`), and
+   collaboration mode after the conversation header's "Hide the conversation". Its column is 0px wide and the workspace
+   takes the room; the conversation peeks in over it (chat-peek.js, <html data-chat-peek>) the way the sidebar does from
+   the left: a lifted card below the top bar, so the head's button stays clickable, and a click during the peek moves the
+   card into its column. browser-view-sync.js cuts a website's view a gutter before the card's edge. */
+.app.ws-max.chat-tucked.panel-open { grid-template-columns: var(--sidebar-w) minmax(0, 1fr) 0px; }
+.app.ws-max.chat-tucked.panel-open:has(> .sidebar.is-collapsed) { grid-template-columns: 0px minmax(0, 1fr) 0px; }
+/* Browser fullscreen: the website tab fills the window edge to edge. */
+.app.ws-max.browser-full .panel, .app.ws-max.browser-full:has(> .sidebar.is-collapsed) .panel { margin: 0; border-radius: 0; border-width: 0; }
+/* Collaboration mode in a browser tab: the workspace that now reaches the right edge keeps its gap to it (its slot ends
+   the panel at the slot's end, so the gap comes off the width). */
+:root:not(.desktop-frameless) .app.ws-max.chat-tucked:not(.browser-full) .panel { width: calc(100% - 6px); margin-right: 6px; }
+/* Tucked away it waits beyond the right edge; tucked away from its column, it slides out there as the column closes. */
+.app.chat-tucked > .main { visibility: hidden; opacity: 0; transform: translateX(calc(100% + 24px)); transition: transform var(--t-slow) var(--ease), opacity var(--t-slow) var(--ease), visibility 0s linear var(--t-slow); }
+:root:is([data-chat-peek="ready"], [data-chat-peek="in"], [data-chat-peek="out"]) .app.chat-tucked > .main { margin: 50px 6px 6px 0; z-index: 90; border: 0; border-radius: var(--r-lg); box-shadow: 0 0 0 1px var(--border-strong), var(--shadow-pop); }
+:root[data-chat-peek="ready"] .app.chat-tucked > .main { visibility: visible; opacity: 0.01; will-change: transform; transition: none; }
+:root[data-chat-peek="in"] .app.chat-tucked > .main { visibility: visible; opacity: 1; transform: none; transition: transform 200ms var(--ease-out), opacity 120ms var(--ease-out), visibility 0s; }
+:root[data-chat-peek="out"] .app.chat-tucked > .main { transition: transform 180ms cubic-bezier(0.4, 0, 1, 1), opacity 180ms cubic-bezier(0.4, 0, 1, 1), visibility 0s linear 180ms; }
+/* Brought back during a peek: the card moves into the column that opens for it (both over --t-slow), as the sidebar
+   docks. The rule holds before the layout re-renders without `.chat-tucked` too, so a frame drawn in between cannot
+   start it from the tucked-away state. */
+:root[data-chat-peek="dock"] .app.ws-max > .main { z-index: 90; visibility: visible; opacity: 1; transform: none; transition: margin var(--t-slow) var(--ease), border-radius var(--t-slow) var(--ease), box-shadow var(--t-slow) var(--ease), transform var(--t-slow) var(--ease), opacity var(--t-slow) var(--ease), visibility 0s; }
+:root[data-chat-peek="dock"] .app.ws-max > .main .main-header { transition: padding var(--t-slow) var(--ease); }
+/* A peeking card lies below the top row: its header needs no room for the window buttons and does not drag the window. */
+:root.desktop-frameless:is([data-chat-peek="ready"], [data-chat-peek="in"], [data-chat-peek="out"]) .app.chat-tucked > .main .main-header { padding-right: 10px; -webkit-app-region: no-drag; }
+/* Its toasts and cards float at the window's top-right corner meanwhile (Toasts in app.js). */
+.app > .app-toasts { position: fixed; top: 0; right: 0; width: 0; height: 0; z-index: 60; }
+.panel-chat.active, .panel-full.active { color: var(--accent); }
+/* The workspace head is the top bar at the window's right edge now: it keeps the window buttons' room. */
+.desktop-frameless .app.chat-tucked .panel-head { padding-right: calc(var(--wc-room) + var(--pad-panel)); }

@@ -31,10 +31,21 @@
 	} catch {
 		// Keep the defaults below.
 	}
+	// The interface language until the user picks one: the language of Windows when the desktop host gives it
+	// (/api/web-prefs.js), else the browser's own. Simplified Chinese starts in Chinese, every other language in English.
+	boot.defaultLang = "en";
+	try {
+		const system = globalThis.__MYHARNESS_SYSTEM_LANGUAGE__;
+		const browser = String(globalThis.navigator?.languages?.[0] || globalThis.navigator?.language || "");
+		if (system === "zh-CN" || system === "en") boot.defaultLang = system;
+		else if (/^zh(?:-hans(?:-[a-z0-9]+)*|-(?:cn|sg|my))?$/i.test(browser)) boot.defaultLang = "zh-CN";
+	} catch {
+		// English.
+	}
 	globalThis.__MYHARNESS_BOOT_PREFS__ = boot;
 	try {
 		const prefs = boot.prefs;
-		document.documentElement.lang = prefs.lang === "zh-CN" ? "zh-CN" : "en";
+		document.documentElement.lang = typeof prefs.lang === "string" ? (prefs.lang === "zh-CN" ? "zh-CN" : "en") : boot.defaultLang;
 		const mode = prefs.theme || "system";
 		const dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
 		document.documentElement.dataset.theme = dark ? "dark" : "light";

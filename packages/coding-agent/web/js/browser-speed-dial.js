@@ -51,6 +51,15 @@ const siteHost = (url) => {
 	}
 };
 
+/** The site of an address ("" when it is not one), to find a shortcut's bookmark on another page of the same site. */
+const siteOrigin = (url) => {
+	try {
+		return new URL(url).origin;
+	} catch {
+		return "";
+	}
+};
+
 function SiteIcon({ site, size = "" }) {
 	const [failed, setFailed] = useState(null);
 	if (site.icon && failed !== site.icon) return html`<img class=${`sd-favicon ${size}`} src=${site.icon} alt="" draggable="false" onError=${() => setFailed(site.icon)} />`;
@@ -64,7 +73,7 @@ function dropZone(event) {
 	return offset < 0.28 ? "before" : offset > 0.72 ? "after" : "into";
 }
 
-function Tile({ entry, groupId, drag, setDrag, onDropOn, onOpen, onMenu, onOpenGroup }) {
+function Tile({ entry, groupId, drag, setDrag, onDropOn, onOpen, onMenu, onOpenGroup, noteOf }) {
 	const isGroup = entry.type === "group";
 	const zone = drag && drag.over === entry.id && drag.id !== entry.id ? drag.zone : "";
 	const title = isGroup ? entry.title || t("Group") : entry.title;
@@ -93,7 +102,7 @@ function Tile({ entry, groupId, drag, setDrag, onDropOn, onOpen, onMenu, onOpenG
 			if (drag && drag.id !== entry.id) onDropOn(drag, entry, drag.zone || "before");
 			setDrag(null);
 		}}>
-		<button type="button" class="sd-button" title=${isGroup ? title : `${name}\n${entry.url}`} aria-label=${name}
+		<button type="button" class="sd-button" title=${isGroup ? title : [name, noteOf?.(entry.url), entry.url].filter(Boolean).join("\n")} aria-label=${name}
 			onClick=${() => (isGroup ? onOpenGroup(entry.id) : onOpen(entry.url, false))}
 			onAuxClick=${(event) => {
 				if (event.button !== 1 || isGroup) return;
@@ -159,13 +168,20 @@ function ShortcutEditor({ draft, bookmarks, present, onSave, onCancel }) {
  * middle of another to make a group (or onto a group to join it), onto an edge to move it; a group opens in place,
  * where its name can be changed and its shortcuts reordered or taken out.
  */
-export function SpeedDial({ items, bookmarks = [], onOpen, onSave }) {
+export function SpeedDial({ items, bookmarks = [], onOpen, onSave, onPurpose }) {
 	const [drag, setDrag] = useState(null);
 	const [menu, setMenu] = useState(null);
 	const [draft, setDraft] = useState(null);
 	const [openGroup, setOpenGroup] = useState(null);
 	const group = openGroup ? items.find((item) => item.id === openGroup && item.type === "group") : null;
 	const present = new Set(items.flatMap((item) => (item.type === "group" ? item.items : [item])).map((site) => site.url));
+	// What a shortcut's site is for: the note of its bookmark (same address, else the same site), shown in its tooltip.
+	const noteOf = (url) => {
+		const exact = bookmarks.find((bookmark) => bookmark.url === url && bookmark.note);
+		if (exact) return exact.note;
+		const origin = siteOrigin(url);
+		return (origin && bookmarks.find((bookmark) => bookmark.note && siteOrigin(bookmark.url) === origin)?.note) || "";
+	};
 	const backdropRef = useRef(null);
 	const panelRef = useRef(null);
 	const closing = useRef(false);
@@ -234,6 +250,7 @@ export function SpeedDial({ items, bookmarks = [], onOpen, onSave }) {
 					[t("Open"), () => onOpen(menu.entry.url, false)],
 					[t("Open in new tab"), () => onOpen(menu.entry.url, true)],
 					[t("Edit"), () => setDraft({ id: menu.entry.id, title: menu.entry.title, url: menu.entry.url })],
+					...(onPurpose ? [[t("What it is for…"), () => onPurpose(menu.entry)]] : []),
 					...(menu.groupId ? [[t("Remove from group"), () => save(ungroupSite(items, menu.entry.id))]] : []),
 					[t("Delete"), () => save(removeEntry(items, menu.entry.id))],
 				]
@@ -252,7 +269,7 @@ export function SpeedDial({ items, bookmarks = [], onOpen, onSave }) {
 				save(ungroupSite(items, drag.id));
 				setDrag(null);
 			}}>
-			${items.map((entry) => html`<${Tile} key=${entry.id} entry=${entry} drag=${drag} setDrag=${setDrag} onDropOn=${dropOn} onOpen=${onOpen} onMenu=${setMenu} onOpenGroup=${setOpenGroup} />`)}
+			${items.map((entry) => html`<${Tile} key=${entry.id} entry=${entry} drag=${drag} setDrag=${setDrag} onDropOn=${dropOn} onOpen=${onOpen} onMenu=${setMenu} onOpenGroup=${setOpenGroup} noteOf=${noteOf} />`)}
 			<div class="sd-tile">
 				<button type="button" class="sd-button" title=${t("Add shortcut")} onClick=${() => setDraft({ title: "", url: "" })}>
 					<span class="sd-icon add"><${Icon} name="plus" size=${20} /></span>
@@ -281,7 +298,7 @@ export function SpeedDial({ items, bookmarks = [], onOpen, onSave }) {
 							if (event.key === "Enter") event.currentTarget.blur();
 						}} />
 					<div class="sd-grid">
-						${group.items.map((site) => html`<${Tile} key=${site.id} entry=${site} groupId=${group.id} drag=${drag} setDrag=${setDrag} onDropOn=${dropInGroup(group.id)} onOpen=${onOpen} onMenu=${setMenu} onOpenGroup=${() => undefined} />`)}
+						${group.items.map((site) => html`<${Tile} key=${site.id} entry=${site} groupId=${group.id} drag=${drag} setDrag=${setDrag} onDropOn=${dropInGroup(group.id)} onOpen=${onOpen} onMenu=${setMenu} onOpenGroup=${() => undefined} noteOf=${noteOf} />`)}
 						<div class="sd-tile">
 							<button type="button" class="sd-button" title=${t("Add shortcut")} onClick=${() => setDraft({ title: "", url: "", groupId: group.id })}>
 								<span class="sd-icon add"><${Icon} name="plus" size=${20} /></span>

@@ -1,6 +1,6 @@
 # Web Search
 
-MyHarness 自带联网搜索和网页读取，不需要部署 SearXNG、Crawl4AI、Docker 或任何其他服务。默认关闭；打开后 main Agent 和它派出的子智能体（Explore / Workflow）都会获得 `web_search` 和 `web_fetch` 两个工具。
+MyHarness 自带联网搜索和网页读取，不需要部署 SearXNG、Crawl4AI、Docker 或任何其他服务。默认打开，默认引擎是 Tavily API 和 Google；打开时 main Agent 和它派出的子智能体（Explore / Workflow）都会获得 `web_search` 和 `web_fetch` 两个工具。
 
 Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求搜索；只有当搜索引擎明确拦截了这种请求（验证码、限流、403、需要 JavaScript、降级结果）时，才用本机已安装的浏览器（Firefox、Chrome 或 Edge）打开真实的搜索页读取结果。读网页正文也一样：直接请求被网站拒绝（403、人机验证、要求登录等）时改用这个浏览器打开。浏览器是可选的：一个都没装时 MyHarness 照常启动，轻量请求照常工作，只是被拦截时没有兜底，工具结果会写明原因。
 
@@ -12,8 +12,8 @@ Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求�
 
 | 选项 | 含义 | 范围 | 默认 |
 | --- | --- | --- | --- |
-| **Web Search** | 总开关。关闭时两个工具不会出现在 Agent 的工具列表和系统提示中；已有 Session 和工具结果不会被删除 | On / Off | Off |
-| **Search Engines** | 允许使用哪些搜索引擎，可以同时开多个 | 见下表 | Google、Bing |
+| **Web Search** | 总开关。关闭时两个工具不会出现在 Agent 的工具列表和系统提示中；已有 Session 和工具结果不会被删除 | On / Off | On |
+| **Search Engines** | 允许使用哪些搜索引擎，可以同时开多个 | 见下表 | Tavily API、Google |
 | **Browser Fallback** | 轻量请求被拦截时，是否允许用本机浏览器打开真实的搜索页或网页。这一行同时显示实际会用哪个浏览器，或为什么不可用 | On / Off | On |
 | **Browser** | 兜底用哪个浏览器。Auto = 按 Firefox、Chrome、Edge 的顺序用第一个已安装的 | Auto / Firefox / Chrome / Edge | Auto |
 | **Use My Browser's Cookies** | 打开后，把你日常使用的同一种浏览器里的 Cookie 复制一份到 MyHarness 专用的浏览器配置里，这样你已经登录的网站可以直接读取。见下方"复用日常浏览器的 Cookie" | On / Off | Off |
@@ -32,7 +32,7 @@ Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求�
 | Bing | `www.bing.com/search` 普通页面 | 同一个页面在 Firefox 中打开 | 无 |
 | DuckDuckGo | `lite.duckduckgo.com/lite` | `html.duckduckgo.com/html` | 无 |
 | Brave | `search.brave.com/search` | 同一个页面在 Firefox 中打开 | 无 |
-| Tavily API | 官方 API `POST api.tavily.com/search`（`search_depth: basic`，每次 1 credit） | 没有（不作为 Google/Bing 的兜底） | API Key |
+| Tavily API | 官方 API `POST api.tavily.com/search`（`search_depth: basic`，每次 1 credit） | 没有（不作为 Google/Bing 的兜底） | 可选：没有 Key 时走免费的免 Key 通道 |
 
 除 Tavily API 外都不是公开 API，页面结构或反自动化策略改变时可能需要更新解析器；解析失败会明确报告为 `invalid_response`，不会被当成"被拦截"去启动浏览器掩盖掉。
 
@@ -42,7 +42,11 @@ Google 和 Bing 不需要 API Key：MyHarness 先用轻量的普通 HTTP 请求�
 - Bing 轻量方式经常返回 HTTP 200 但结果与问题无关（例如搜 `rust tokio select` 返回游戏《Rust》）。MyHarness 检查结果里是否完全没有出现问题中的某个词，出现这种情况就把它当作被拦截，改用 Firefox；Firefox 中的 Bing 结果正常。
 - 本网络下 DuckDuckGo 轻量方式基本总是返回人机验证（HTTP 202），Firefox 方式可用；Brave 在请求较多时返回 429。
 
-**Tavily API Key**：在设置页的 Web search 中选中 Tavily API 后，搜索引擎下方出现 Tavily API Key 一行，展开后可以添加（名称可选，Key 用密码框输入，点“保存”或回车）、重命名和删除 Key，可以保存多个。搜索时按列表顺序使用：一个 Key 被拒绝（401/403）、请求过频（429）或额度用完（432/433）时自动换下一个；全部失败时报告每个 Key 的原因（不含 Key 本身）。取消选中 Tavily 只隐藏这一行，不删除已保存的 Key。Key 保存在 agent 目录下的 `web-search-keys.json`（仅当前用户可读写，带文件锁），不会写进 `settings.json`；早期的单 Key 格式会读成一个名为 “Key 1” 的 Key。没有保存任何 Key 时会读取环境变量 `TAVILY_API_KEY`。旧版本的 `brave_api` 引擎已移除，`settings.json` 中残留的 `brave_api` 会被忽略，不会转成 Tavily。
+**不填 Key 也能用**：没有任何 Tavily Key（也没有 `TAVILY_API_KEY`）时，请求带上 `X-Tavily-Access-Mode: keyless`、不带 `Authorization`，走 Tavily 的免费免 Key 通道（结果与有 Key 时相同，由 Tavily 限速，见 [Keyless access](https://docs.tavily.com/documentation/keyless.md)）。免 Key 通道到上限（HTTP 429/432/433，或 401/403）时，这一引擎的失败码是 `keyless_limit`，说明里写明填一个免费 Key 就能继续；搜索步骤的“问题”里同时出现“获取免费 Tavily Key”链接。和其他被拦截的引擎一样，Tavily 随后暂停一段时间，期间不再请求。
+
+**获取免费 Key**：Tavily API Key 一行的“获取免费 Key”在内置浏览器里打开 `https://app.tavily.com/`（设置会先关上，否则网页被设置挡住看不见），网页上方出现一条细栏，登录并创建 Key 后直接粘贴到细栏里保存，不用回到设置；免费 Key 每月 1000 次，不用信用卡（[API credits](https://docs.tavily.com/documentation/api-credits.md)）。没有内置浏览器（纯网页版）或链接设为用系统浏览器打开时，改在系统浏览器里打开，Key 仍在设置里粘贴。
+
+**Tavily API Key**：在设置页的 Web search 中选中 Tavily API 后，搜索引擎下方出现 Tavily API Key 一行（没有 Key 时显示“免费通道（无需 Key，有限速）”），展开后可以添加（名称可选，Key 用密码框输入，点“保存”或回车）、重命名和删除 Key，可以保存多个。搜索时按列表顺序使用：一个 Key 被拒绝（401/403）、请求过频（429）或额度用完（432/433）时自动换下一个；全部失败时报告每个 Key 的原因（不含 Key 本身）。取消选中 Tavily 只隐藏这一行，不删除已保存的 Key。Key 保存在 agent 目录下的 `web-search-keys.json`（仅当前用户可读写，带文件锁），不会写进 `settings.json`；早期的单 Key 格式会读成一个名为 “Key 1” 的 Key。没有保存任何 Key 时会读取环境变量 `TAVILY_API_KEY`。旧版本的 `brave_api` 引擎已移除，`settings.json` 中残留的 `brave_api` 会被忽略，不会转成 Tavily。
 
 剩余次数来自 Tavily 官方 `GET api.tavily.com/usage`：每个 Key 取 Key 与所属账户剩余额度中较小者（basic 搜索每次 1 credit）。展开后每个 Key 显示自己的剩余次数，行上显示所有 Key 的合计；某个 Key 查询失败时合计只加能读到的 Key，并注明几个 Key 无法获取。同一账户下的多个 Key 共享账户额度，合计会把账户额度按 Key 重复计算。设置页打开、增删 Key 后、每次 Tavily 搜索完成后会自动重新查询，也可点刷新按钮。打开时先显示上一次真实读到的数值（保存在页面 `localStorage` 的 `myharness.tavilyUsage.v1`，按当前 Key 列表签名区分，Key 列表一变就丢弃），后台查询返回后替换为新值；等待期间只在刷新按钮里转圈，不出现整行“查询中…”占位，也不改变行高。查询失败时保留上次数值并标注“未更新”（鼠标悬停可看原因）；从未成功读到过才显示“无法获取”。不会显示 0，也不会用本地计数估算。
 
@@ -54,7 +58,7 @@ Search Engines 页面的 **Test Selected Engines** 会用每个已启用的引�
 {
   "webSearch": {
     "enabled": true,
-    "engines": ["google", "bing"],
+    "engines": ["tavily", "google"],
     "browserFallback": true,
     "browser": "auto",
     "useBrowserCookies": false,
@@ -68,7 +72,7 @@ Search Engines 页面的 **Test Selected Engines** 会用每个已启用的引�
 
 ### 旧配置迁移
 
-- 上一版本的默认引擎列表 `["duckduckgo", "brave"]`，如果是由没有 `browserFallback` 字段的旧版本保存的，视为"从未改过的默认值"，迁移为新的默认 `["google", "bing"]`。其他旧列表（例如只选了 `brave`）是用户自己的选择，保持不变；以新格式保存过的 `["duckduckgo", "brave"]` 也保持不变。
+- 上一版本的默认引擎列表 `["duckduckgo", "brave"]`，如果是由没有 `browserFallback` 字段的旧版本保存的，视为"从未改过的默认值"，迁移为当前的默认 `["tavily", "google"]`。其他旧列表（例如只选了 `brave`）是用户自己的选择，保持不变；以新格式保存过的 `["duckduckgo", "brave"]` 也保持不变。
 - 没有 `browserFallback` 字段时按 On 处理；没有 `browser` 时按 `auto`，没有 `useBrowserCookies` 时按 Off。
 - 基于 SearXNG/Crawl4AI 的旧字段不再使用，读取时按下面方式处理，下一次在设置页修改 Web Search 时从文件中删除：`enabled` 保留；`parallelPages` 为手动数值时迁移为 `maxUrlsPerFetch`；旧 `engines` 中与内置引擎同名的（现在包括 `google`、`bing`）保留，一个都不匹配时使用默认引擎；`searxngUrl`、`crawl4aiUrl`、`engineMode`、`scope`、`allowedDomains`、`searchRounds`、`searchCacheTtlMs`、`fetchCacheTtlMs` 被忽略。需要限定网站时可以在搜索词中使用 `site:example.com`。
 
@@ -85,7 +89,8 @@ web_search / web_fetch（tool.ts，Agent 只看到这两个工具）
                         ├─ Firefox：扩展 + 远程调试协议（browser/firefox.ts、extension.ts、bridge.ts、rdp.ts）
                         └─ Chrome / Edge：DevTools 协议，走管道（browser/chromium.ts）
       → readPage（page.ts）：web_fetch 和搜索后读网页，与搜索引擎无关
-          └─ 被网站拒绝时 → BrowserPageReader（page-browser.ts）：用同一个浏览器读正文
+          └─ 被网站拒绝时 → 桌面版：内置浏览器（workspace.ts 的 readInBuiltInBrowser → page-browser.ts 的 signedInPageResult）
+                          → 其他情况：BrowserPageReader（page-browser.ts）：用同一个浏览器读正文
 ```
 
 `browser/` 目录里还有 `launch.ts`（两种浏览器共用的页面接口）、`foreground.ts`（Windows 人工验证窗口的临时置顶与激活）、`import-cookies.ts`（复制日常浏览器的 Cookie）和 `profile-cookies.ts`（在 MyHarness 自己的几个专用配置之间合并 Cookie）。
@@ -186,7 +191,13 @@ Agent 调用 web_search
 - 支持 gzip/br/deflate；按 `Content-Type` 或 `<meta charset>` 解码（支持 GBK 等中文编码）；HTML 会去掉脚本、样式、导航、侧栏、表单和页眉页脚，优先取 `<main>`/`<article>`，保留标题、代码、表格、列表和链接；纯文本、JSON、XML 原样返回；PDF、DOCX/XLSX/PPTX、ODT/ODS/ODP、RTF 和 EPUB 复用已有 officeparser 从下载字节提取可读正文（也能识别常见文件签名，避免错误 MIME 阻止解析）；扫描 PDF 明确提示没有文字层、需 OCR，密码保护或损坏文档返回原因提示，不因解析失败中断整批 URL。超过下载上限时不解析不完整文档。旧 DOC/XLS/PPT 无法解析时提示转换为现代格式；
 - 直接请求不执行 JavaScript，也不带登录状态。
 
-直接请求被网站拒绝时（HTTP 401/403/407/429/451/503，或返回的是人机验证、登录、Cookie 同意页，或页面没有可读正文），并且 Browser Fallback 打开、找到了浏览器，就改用兜底浏览器打开同一个网址：
+直接请求被网站拒绝时（HTTP 401/403/407/429/451/503，或返回的是人机验证、登录、Cookie 同意页，或页面没有可读正文），在桌面版里先用 MyHarness 自己的内置浏览器读同一个网址（`readSignedIn`：宿主的 `readUrl`，在内置浏览器的会话里开一个不显示的阅读页，带着用户在内置浏览器里的登录，取回页面 HTML 后同样转成 Markdown）：
+
+- 页面正常就直接返回，不再动用外部浏览器；落地网址同样做公网地址和 DNS 检查。
+- 内置浏览器里也是验证、登录或同意页时，返回 `challenge_required`，并告诉 Agent 用 `workspace` 在内置浏览器里打开这个网址、用 `handoff` 请用户在那里完成，再用 `workspace` 读取；不弹出外部浏览器窗口，内置浏览器会记住这次登录或验证。
+- 宿主没有回答（读取出错）时，才改用下面的兜底浏览器，而且只用无界面方式，不弹窗。
+
+不在桌面版里运行（没有内置浏览器）时，并且 Browser Fallback 打开、找到了浏览器，就改用兜底浏览器打开同一个网址：
 
 - 先无界面打开，沿用专用配置里已有的 Cookie 和登录状态；页面正常就直接转成 Markdown 返回。
 - 在浏览器里仍然是验证码、登录或同意页时：`web_fetch` 在 Web UI 交互界面下打开可见窗口（`web_search` 搜完后的读网页不弹窗，直接返回 `challenge_required`），工具进度提示你去完成，最长等 3 分钟，Esc 取消；完成后自动读取正文并继续，不需要重新发起任务。无人值守的 SDK/后台任务不弹窗，返回 `challenge_required`。
@@ -220,7 +231,7 @@ npm.cmd run test:web-search:e2e
 - 强制走 Firefox 通道，用真实 Firefox 读取真实的 Google/Bing 结果页；
 - 在 Agent 工具循环里真实调用 `web_search` 和 `web_fetch`。
 
-每次搜索会输出一行 `[e2e]` 日志，写明每个引擎实际走的是 HTTP 还是 Firefox。可用 `MYHARNESS_WEB_SEARCH_E2E_ENGINES=google,bing,duckduckgo` 等方式指定引擎（`tavily` 需要 `TAVILY_API_KEY`）。
+每次搜索会输出一行 `[e2e]` 日志，写明每个引擎实际走的是 HTTP 还是 Firefox。可用 `MYHARNESS_WEB_SEARCH_E2E_ENGINES=google,bing,duckduckgo` 等方式指定引擎（`tavily` 有 `TAVILY_API_KEY` 时用它，没有时走免 Key 通道）。
 
 参考：[Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search)、[Tavily Usage API](https://docs.tavily.com/documentation/api-reference/endpoint/usage)。
 

@@ -9,8 +9,9 @@ binary, the missing runtime evidence is called out explicitly.
 
 MyHarness is **actively developed and usable on Windows x64**. The maintained
 paths are the Windows desktop app (Electron plus a loopback-only Web UI) and a
-source checkout of the same code. The default Provider catalog is empty by
-design, so a Provider, model and credential must be configured before the first
+source checkout of the same code. The `@myharness/ai` Provider catalog is empty
+by design; the app offers Nebius Token Factory ready-made, so one Token Factory
+API key (or another Provider configured by hand) is needed before the first
 model-backed session. Claims that still need runtime evidence are called out
 below.
 
@@ -44,9 +45,10 @@ below.
 
 - `agent`, `workflow` and `ultracode` are optional exploration tools. They are
   disabled by default and their child Bash guard is not a security sandbox.
-- Web Search is optional and disabled by default. Its default built-in engines are Google and Bing.
-  Optional selections include DuckDuckGo, Brave and Tavily API. Google/Bing use lightweight HTTP first and may
-  fall back to a MyHarness-owned Firefox profile when access is blocked; Tavily API needs a user API key. Real
+- Web Search is on by default with Tavily API and Google. Without a user key Tavily is called through its free
+  keyless access (`X-Tavily-Access-Mode: keyless`, rate limited by Tavily); a free key adds 1,000 searches a month.
+  Optional selections include Bing, DuckDuckGo and Brave. Google/Bing use lightweight HTTP first and may
+  fall back to a MyHarness-owned Firefox profile when access is blocked. Real
   CAPTCHA/consent handling may require the user to complete verification in the
   visible Firefox window, while unattended modes return `challenge_required`
   instead of treating the challenge page as a result.
@@ -66,6 +68,12 @@ below.
 - A real Provider-backed first conversation cannot be verified without a user
   supplied Provider/model and credential. No credential is stored in this
   repository.
+- The built-in Nebius Token Factory setup is tested against a local stub
+  endpoint. A real Token Factory key, the real low-balance error and whether
+  accounts list the Nano model have not been verified.
+- The Windows installer (`npm run desktop:installer`, NSIS, not code-signed)
+  was installed, started and uninstalled on the development machine with an
+  isolated profile. A fresh install on another PC has not been run yet.
 - A fresh Linux/macOS checkout was not run in this Windows audit.
 - The local public-release validation covered the Windows Coding Agent suite and
   the targeted recovery tests. Hosted runner results and path spelling behavior
@@ -89,9 +97,11 @@ below.
   installed per language using the checked-in runtime manifest.
 - Runtime modules and Code Intelligence workspace data are kept outside the
   source checkout and outside project Session data.
-- The public repository is served from a separate one-commit orphan history;
-  the local `main` branch still retains its private history. Public-history
-  updates must continue to be audited separately from private development.
+- The public repository started from a one-commit orphan history ("MyHarness
+  public release candidate", 2026-09-21), so earlier private history is not part
+  of it. Development has continued on that history since: the local `main` is
+  the same branch as the public `main`, and every push is audited by the
+  pre-push hook's full-tree release audit.
 
 ## Next project-level work
 

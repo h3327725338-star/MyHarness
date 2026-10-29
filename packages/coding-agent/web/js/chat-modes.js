@@ -63,24 +63,26 @@ export function draftFromServer(draft) {
 
 /**
  * What one open chat shows to the mode switch: "running" while it works, "waiting" when it needs an answer, or its
- * unread result ("completed", "partial", "failed", "cancelled"). Null when there is nothing to tell.
+ * unread result ("completed", "partial", "failed", "cancelled"). Null when there is nothing to tell. A run that an
+ * interrupting message redirected went on to answer that message, so for the switch it is a finished reply.
  */
 export function slotSignal(slot) {
 	if (!slot) return null;
 	if (slot.waiting) return "waiting";
 	if (slot.active || slot.completion) return "running";
-	if (slot.unread && slot.lastOutcome) return slot.lastOutcome;
+	if (slot.unread && slot.lastOutcome) return slot.lastOutcome === "redirected" ? "completed" : slot.lastOutcome;
 	return null;
 }
 
-const SIGNAL_RANK = { waiting: 0, failed: 1, running: 2, partial: 3, completed: 4, cancelled: 5, redirected: 5 };
+const SIGNAL_RANK = { waiting: 0, failed: 1, running: 2, partial: 3, completed: 4, cancelled: 5 };
 
 /** Open chats of one mode that have something to tell, most urgent first; `exclude` is the slot on screen. */
 export function modeTasks(slots, mode, exclude) {
 	return (slots || [])
 		.filter((slot) => chatModeOf(slot.mode) === mode && slot.slot !== exclude)
 		.map((slot) => ({ slot, signal: slotSignal(slot) }))
-		.filter((task) => task.signal)
+		// A result the switch has no mark for (a newer server's) is left out: it took the whole page down before.
+		.filter((task) => Object.hasOwn(SIGNAL_RANK, task.signal))
 		.sort((a, b) => SIGNAL_RANK[a.signal] - SIGNAL_RANK[b.signal] || (b.slot.lastActivityAt || 0) - (a.slot.lastActivityAt || 0));
 }
 

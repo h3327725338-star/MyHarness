@@ -76,9 +76,13 @@ test('desktop preferences: close action defaults to ask, saves valid choices and
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-prefs-'));
   try {
     const prefs = createAppPrefs(dir);
-    assert.deepEqual(prefs.get(), { closeAction: 'ask', appZoom: 1 });
-    assert.deepEqual(prefs.set({ closeAction: 'tray' }), { closeAction: 'tray', appZoom: 1 });
+    assert.deepEqual(prefs.get(), { closeAction: 'ask', appZoom: 1, lastStartMs: null });
+    assert.deepEqual(prefs.set({ closeAction: 'tray' }), { closeAction: 'tray', appZoom: 1, lastStartMs: null });
     assert.equal(prefs.set({ appZoom: 1.25 }).appZoom, 1.25);
+    // How long the last start took, for the starting page's hint: whole milliseconds, nothing unreasonable.
+    assert.equal(prefs.set({ lastStartMs: 12345.6 }).lastStartMs, 12346);
+    assert.equal(createAppPrefs(dir).get().lastStartMs, 12346, 'the start time survives a restart');
+    for (const bad of [-1, 0, Number.NaN, 'soon', 999999]) assert.equal(prefs.set({ lastStartMs: bad }).lastStartMs, null, String(bad));
     assert.equal(prefs.set({ appZoom: 99 }).appZoom, 5, 'the app zoom is kept within the supported range');
     assert.throws(() => prefs.set({ closeAction: 'explode' }), /未知的关闭方式/);
     assert.equal(createAppPrefs(dir).get().closeAction, 'tray', 'the choice survives a restart');

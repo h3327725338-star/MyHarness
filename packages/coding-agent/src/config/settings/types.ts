@@ -59,6 +59,26 @@ export interface TranslationSettings {
 	targetLanguage?: string;
 }
 
+/**
+ * The helper model that writes the notes of the built-in browser's bookmarks (what the user uses each site for): empty
+ * provider/model means the Conversation naming model, and the main model when that is unset too.
+ */
+export interface BookmarkNotesSettings {
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+}
+
+/**
+ * The model and thinking level that run scheduled Agent tasks, in the chat each run starts: empty provider/model means
+ * the main model with its thinking level (what a new chat would use).
+ */
+export interface ScheduledTasksSettings {
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+}
+
 /** Worktree copy naming helper model: empty provider/model means "use the main model". */
 export interface WorktreeNamingSettings {
 	provider?: string;
@@ -340,6 +360,8 @@ export interface Settings {
 	gitCommit?: GitCommitSettings; // Global only: how /commit runs
 	gitPush?: GitPushSettings; // Global only: how /push runs
 	translation?: TranslationSettings;
+	bookmarkNotes?: BookmarkNotesSettings;
+	scheduledTasks?: ScheduledTasksSettings; // Global only: the model of scheduled Agent tasks
 	worktreeNaming?: WorktreeNamingSettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean; // default: true; collapse transcript details until expanded with Ctrl+O

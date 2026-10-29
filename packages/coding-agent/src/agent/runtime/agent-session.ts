@@ -80,6 +80,7 @@ import type { RuntimeTrace, RuntimeTraceScope } from "../../observability/runtim
 import { collectSessionUsageStats } from "../../observability/session-stats.ts";
 import { AgentSessionTraceCoordinator } from "../../observability/session-trace.ts";
 import { expandPromptTemplate, type PromptTemplate } from "../../prompts/loader/index.ts";
+import { MailConnections } from "../../providers/credentials/mail-connections.ts";
 import { ModelRegistry } from "../../providers/models/registry.ts";
 import { ProviderRecoveryCoordinator } from "../../providers/recovery/coordinator.ts";
 import { explainProviderError } from "../../providers/recovery/error-explanation.ts";
@@ -118,6 +119,7 @@ import {
 	personalizationBlock,
 } from "../../system-prompts/composer/index.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
+import { MAIL_ROUTE_CONTEXT_TYPE, mailRouteContext } from "../../tools/mail/route-context.ts";
 import { SessionToolRegistry } from "../../tools/session-tool-registry.ts";
 import type { BashOperations } from "../../tools/shell/bash.ts";
 import type { BashResult } from "../../tools/shell/executor.ts";
@@ -125,6 +127,8 @@ import { SessionBashRunner } from "../../tools/shell/session-bash.ts";
 import type { SubAgentBackgroundProgress, SubAgentBackgroundTask } from "../../tools/sub-agent.ts";
 import type { SymbolsCodeIntelligenceServices } from "../../tools/symbols-runtime.ts";
 import { cleanupOrphanedToolResults } from "../../tools/tool-result-persistence.ts";
+import { desktopWorkspaceChannel } from "../../tools/workspace.ts";
+import { BOOKMARK_CONTEXT_TYPE, bookmarkContext } from "../../tools/workspace-bookmarks.ts";
 import { killChildProcessesForSignal } from "../../utils/child-process.ts";
 import { sleep } from "../../utils/sleep.ts";
 import type { WorkflowToolControls } from "../../workflow/tool.ts";
@@ -753,6 +757,8 @@ export class AgentSession {
 		});
 		this._autoMemory = new AutoMemoryManager({
 			cwd: config.cwd,
+			// Old memory is copied in from this session's own Agent directory, not always the default one.
+			agentDir: this._agentDir,
 			sessionId: config.sessionManager.getSessionId(),
 			dataRoot: config.sessionManager.getDataRoot(),
 			workspaceId: config.sessionManager.getWorkspaceId(),
@@ -2515,6 +2521,28 @@ export class AgentSession {
 			} catch {
 				// Memory lookup is optional context and must never block a user request.
 			}
+			// The user's bookmarks with what each one is for, in a chat that can use the built-in browser: added again only
+			// when the list changed since the copy this conversation already has.
+			if (this.getActiveToolNames().includes("workspace")) {
+				const earlierLists = this.agent.state.messages
+					.filter((message) => message.role === "custom" && message.customType === BOOKMARK_CONTEXT_TYPE)
+					.map((message) => (message as CustomMessage).details);
+				const bookmarks = await bookmarkContext(earlierLists, desktopWorkspaceChannel()).catch(() => undefined);
+				if (bookmarks) messages.push({ role: "custom", ...bookmarks, display: false, timestamp: Date.now() });
+			}
+			// Which way the user's email goes: the mail tool's API mailboxes, or else the web mail of the built-in browser.
+			// Added again only when the route changed since the note this conversation already has.
+			if (this.getActiveToolNames().includes("workspace") && this.getActiveToolNames().includes("mail")) {
+				const earlierRoutes = this.agent.state.messages
+					.filter((message) => message.role === "custom" && message.customType === MAIL_ROUTE_CONTEXT_TYPE)
+					.map((message) => (message as CustomMessage).details);
+				const route = await mailRouteContext(
+					earlierRoutes,
+					() => new MailConnections().listAccounts(),
+					desktopWorkspaceChannel(),
+				).catch(() => undefined);
+				if (route) messages.push({ role: "custom", ...route, display: false, timestamp: Date.now() });
+			}
 			// Apply extension-modified system prompt, or reset to base.
 			// The memory safety policy is a stable part of the system prompt whenever Auto Memory
 			// is fully configured, independent of whether this turn actually recalled anything.
@@ -2979,6 +3007,14 @@ export class AgentSession {
 	 */
 	async setModel(model: Model<any>): Promise<void> {
 		await this._models.setModel(model);
+	}
+
+	/**
+	 * Use a model and thinking level in this session only (a scheduled Agent task's own model): the session records
+	 * the change, but the default model and thinking level in settings stay what the person chose.
+	 */
+	async useModelInThisSession(model: Model<any>, thinkingLevel: ThinkingLevel): Promise<void> {
+		await this._models.switchForRun(model, thinkingLevel, { compact: false });
 	}
 
 	private async _compactBeforeModelDownshift(nextModel: Model<any>): Promise<void> {

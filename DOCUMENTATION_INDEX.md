@@ -50,7 +50,7 @@
 | 项目自动化 | [脚本说明](scripts/README.md)、[Release Gate](docs/RELEASE_GATE.md) | [Git 工作流](docs/maintenance/git-workflow.md)、[脚本维护](scripts/maintenance.md) | [脚本后续开发](scripts/roadmap.md) | Git 写操作、`scripts/`、`.husky`、隐私与发布审计 |
 | CI / GitHub | [GitHub 自动化](docs/maintenance/github-automation.md) | [CI 维护](.github/maintenance.md) | [CI 后续开发](.github/roadmap.md) | workflows、issue gate、audit、binary build |
 | 项目配置 | [.myharness 说明](.myharness/README.md) | [配置维护](.myharness/maintenance.md) | [配置后续开发](.myharness/roadmap.md) | 项目级设置和被忽略的运行时数据 |
-| 外部评估与演示 | [评委测试指南](docs/JUDGE_TESTING.md)、[Nebius Token Factory 配置](packages/coding-agent/docs/nebius-token-factory.md) | — | — | 构建或解压路径、Provider 凭据、五分钟测试脚本、已知限制 |
+| 外部评估与演示 | [评委测试指南](docs/JUDGE_TESTING.md)、[Nebius Token Factory 配置](packages/coding-agent/docs/nebius-token-factory.md) | — | — | 安装包或源码构建路径、Provider 凭据、五分钟测试脚本、已知限制 |
 
 ## 说明、维护、后续开发分别解决什么
 

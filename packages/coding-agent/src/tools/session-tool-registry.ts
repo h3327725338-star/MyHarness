@@ -29,7 +29,7 @@ import type { SymbolsCodeIntelligenceServices } from "./symbols-runtime.ts";
 import { createToolDefinitionFromAgentTool } from "./tool-definition-wrapper.ts";
 import { wrapToolWithResultPersistence } from "./tool-result-persistence.ts";
 import { createWebSearchService, type WebSearchService } from "./web-search/service.ts";
-import { desktopWorkspaceAvailable } from "./workspace.ts";
+import { desktopWorkspaceAvailable, readInBuiltInBrowser } from "./workspace.ts";
 
 const SUB_AGENT_TOOL_NAMES = ["agent", "workflow", "ultracode", "agent_tasks"];
 const WEB_TOOL_NAMES = ["web_search", "web_fetch"];
@@ -224,6 +224,7 @@ export class SessionToolRegistry {
 					"session_get",
 					"ask_user_question",
 					"todo_write",
+					"schedule",
 					...(settings.getWebSearchSettings().enabled ? WEB_TOOL_NAMES : []),
 					...(desktopWorkspaceAvailable() ? ["workspace"] : []),
 				]);
@@ -261,6 +262,8 @@ export class SessionToolRegistry {
 				sessionManager,
 				// Only the terminal UI has a person who can pass a CAPTCHA in Firefox.
 				interactiveChallenges: this._options.interactiveChallenges,
+				// In the desktop app a refused page is read in the built-in browser first, with the user's sign-ins there.
+				signedInBrowser: readInBuiltInBrowser,
 			});
 		}
 		const baseToolDefinitions = baseToolsOverride
@@ -296,6 +299,12 @@ export class SessionToolRegistry {
 					},
 					webSearch: {
 						service: this._webSearchService,
+					},
+					schedule: {
+						chat: () => ({
+							mode: sessionManager.getMode() === "coding" ? "coding" : "general",
+							workspaceId: sessionManager.getWorkspaceId(),
+						}),
 					},
 					workspace: { sessionId: () => sessionManager.getSessionId() },
 				});

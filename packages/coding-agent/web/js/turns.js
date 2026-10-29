@@ -203,6 +203,10 @@ export function describeAction(call, result, run, cwd) {
 			detail = name;
 			break;
 		}
+		case "schedule":
+			target = clip(firstLine(str(args.title || args.text || args.id || t("Scheduled tasks"))), 120);
+			detail = str(args.action) || name;
+			break;
 		case "session_search":
 			kind = "history";
 			target = str(args.query) || t("recent chats");
@@ -407,6 +411,8 @@ export function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
 	const turns = [];
 	let turn = null;
 	let repair;
+	// A scheduled Agent task's marker: the user message after it is the task's, shown as its card (UserMessage).
+	let scheduled;
 	// A key identifies its entry, never its position: an older page prepended above or the preview-to-full swap must keep
 	// the same key, or Preact remounts the node (the entry animation replays, open folds and the reader's scroll reset).
 	// The entry id wins because it is what a reload projects back; ts is the fallback for items the server has not named
@@ -458,8 +464,14 @@ export function* buildTurnsWork(items, ctx = { toolRuns: {} }, previous) {
 				return;
 			}
 		}
+		if (item.kind === "custom" && item.customType === "scheduled-run") {
+			scheduled = item.details && typeof item.details === "object" ? item.details : {};
+			return;
+		}
 		if (item.kind === "user") {
 			startTurn(item, index);
+			if (scheduled) turn.scheduled = scheduled;
+			scheduled = undefined;
 			turn.items.push(item);
 			return;
 		}

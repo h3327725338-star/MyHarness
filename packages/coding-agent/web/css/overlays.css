@@ -43,6 +43,19 @@
 .settings-nav button { display: flex; align-items: center; white-space: nowrap; gap: 8px; height: var(--h-control); padding: 0 10px; border-radius: var(--r-md); color: var(--text-2); text-align: left; flex: none; }
 .settings-nav button:hover { background: var(--surface-hover); color: var(--text); }
 .settings-nav button.on { background: var(--surface-select); color: var(--text); font-weight: 600; }
+/* Search over every page's settings, at the top of the page list; the results take the page's place (SearchResults). */
+.settings-search { position: relative; display: block; flex: none; margin-bottom: 6px; }
+.settings-search > svg { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }
+.settings-search > .field { width: 100%; padding-left: 29px; }
+.settings-search > .field::-webkit-search-cancel-button { cursor: pointer; }
+.settings-results { display: flex; flex-direction: column; padding: 4px; }
+.settings-result { display: flex; align-items: center; gap: 16px; min-height: 46px; padding: 6px 12px; border-radius: var(--r-md); text-align: left; }
+.settings-result:hover, .settings-result:focus-visible { background: var(--surface-hover); outline: none; }
+.settings-result-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.settings-result-text > .set-desc { max-width: none; font-size: var(--fs-xs); line-height: 16px; }
+.settings-result-page { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; }
+/* The row a search result opened, marked for a moment (removed by revealSetting), also with animations off. */
+.set-hit { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 14%, transparent); border-radius: var(--r-sm); }
 /* The scrollbar has its own place at the right whether a page is long enough to need it or not (the padding beside it
    is smaller by its width), so every page's controls end on the same line. */
 .settings-body { padding: 0 14px 24px 24px; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain; }
@@ -52,6 +65,10 @@
 .stack > .set-card { margin-bottom: 0; }
 .set-card-head { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 .set-card-toggle { display: flex; align-items: center; gap: 8px; text-align: left; color: var(--text); }
+/* A folded card is only its head: the line under the head belongs to the body and folds away with it, instead of running
+   straight across the card's rounded bottom corners. */
+.set-card.collapsible > .set-card-head { border-bottom: 0; }
+.set-card.collapsible .set-card-body { border-top: 1px solid var(--border); }
 .set-card-head strong { font-size: var(--fs-body); font-weight: 650; }
 .set-notes { padding: 8px 14px 10px; border-top: 1px solid var(--border-soft); }
 .set-note { margin: 2px 0; font-size: var(--fs-sm); color: var(--text-3); white-space: normal; }
@@ -101,6 +118,16 @@
    so every streamed reply piece and every mounted turn (2026-10-27). */
 .set-row:not(.wide) > .set-control > :not(.select-like, .select-sizer, .saving, .popover):has(~ .select-sizer) { grid-area: 1 / 1; margin-right: 8px; }
 .set-row:not(.wide) > .set-control > .select-sizer { display: grid; justify-self: stretch; height: 0; overflow: hidden; visibility: hidden; }
+/* Keyboard shortcuts: the keys as key caps in a field-like button (focus it and press keys), and × to remove them. */
+.shortcut-field { display: flex; align-items: center; gap: 2px; width: 100%; min-width: 0; }
+.shortcut-keys { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; flex: 1 1 auto; min-width: 0; height: var(--h-control); padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-inset); cursor: pointer; transition: border-color var(--t-fast), box-shadow var(--t-fast); }
+.shortcut-keys:hover:not(:focus) { border-color: var(--border-hover); }
+.shortcut-keys:focus { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--border-focus) 22%, transparent); }
+.shortcut-keys .kbd { padding: 3px 6px; font-size: var(--fs-xs); color: var(--text-2); background: var(--bg-raised); }
+.shortcut-hint { font-size: var(--fs-sm); color: var(--text-3); }
+.shortcut-field.invalid .shortcut-keys { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+.shortcut-field.invalid .kbd { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.shortcut-clear:disabled { visibility: hidden; }
 .set-control > .field.num, .set-control > input[type="number"] { flex: none; width: var(--set-num-w); min-width: 0; text-align: right; }
 .set-control > .field, .set-control > .model-ref, .set-control > .segmented, .set-control > .input-group, .set-control > .mref, .set-control > .set-multiselect { flex: 1 1 auto; width: 100%; min-width: 0; max-width: none; }
 /* The shortcut editors all share one width: the longest key string plus the field padding ("Ctrl+Alt+Shift+K"). */
@@ -203,6 +230,15 @@
 .prov-item:hover { background: var(--surface-hover); color: var(--text); }
 .prov-item.on { background: var(--surface-select); color: var(--text); }
 .prov-item-sub { font-size: var(--fs-xs); }
+/* Nebius Token Factory is offered ready-made (providers-page.js): first in the list, with its job plan and console links. */
+.prov-title .badge { vertical-align: middle; margin-left: 6px; font-weight: 500; }
+.nebius-get { gap: 10px; flex-wrap: wrap; }
+.nebius-plan { display: flex; flex-direction: column; padding: 4px 16px 10px; }
+.nebius-plan-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 12px; padding: 7px 0; border-top: 1px solid var(--border); font-size: var(--fs-sm); }
+.nebius-plan-row:first-child { border-top: 0; }
+.nebius-plan-model { font-weight: 600; color: var(--text); }
+.nebius-spend { color: var(--text-2); font-size: var(--fs-sm); }
+.nebius-links { gap: 6px; flex-wrap: wrap; }
 .prov-add { min-height: 36px; margin-top: 4px; color: var(--accent); }
 .prov-empty { padding: 8px 10px; }
 .prov-head { display: flex; align-items: center; gap: 12px; padding: 2px 2px 0; }
@@ -489,4 +525,25 @@
 .del-list .dim { margin-left: 6px; }
 .del-hint { margin: 2px 2px 0; color: var(--text-3); font-size: var(--fs-sm); line-height: 1.45; }
 /* Settings → Git: an instructions box fills its wide row, with "Restore default" under it. */
-.git-instructions { flex: 1 1 auto; width: 100%; min-width: 0; gap: 6px; }
+.git-instructions { flex: 1 1 auto; width: 100%; min-width: 0; gap: 6px; padding-bottom: 12px; }
+/* Settings → Git: an instruction box folds under its name, like the personal prompts. */
+.git-instr { border-top: 1px solid var(--border); }
+.git-instr-toggle { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 46px; padding: 7px 0; text-align: left; color: var(--text); }
+.git-instr-toggle:hover .disclose { color: var(--text); }
+.git-instr.off .set-text { opacity: 0.55; }
+
+/* Settings → Scheduled tasks (schedules.js): a row per task (kind, what and when, its switches), the editor in place. */
+.set-row.schedule-row { grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 12px; }
+.set-row.schedule-row.off .set-control { opacity: 1; }
+.set-row.schedule-row.off .schedule-kind { opacity: 0.55; }
+.schedule-controls { width: auto; gap: 4px; }
+.schedule-editor { display: flex; flex-direction: column; gap: 12px; padding: 12px 0 14px; border-top: 1px solid var(--border); }
+.schedule-field { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.schedule-field > .field { width: 100%; }
+.schedule-when, .schedule-where { gap: 8px; flex-wrap: wrap; align-items: center; }
+.schedule-days { display: inline-flex; gap: 4px; }
+.schedule-day { min-width: 30px; height: 28px; padding: 0 6px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--bg-inset); color: var(--text-2); font-size: var(--fs-sm); cursor: pointer; }
+.schedule-day.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.schedule-time { width: 110px; }
+.schedule-minutes { width: 80px; }
+.schedule-actions { gap: 8px; }

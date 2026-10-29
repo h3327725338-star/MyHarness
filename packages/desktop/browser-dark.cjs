@@ -127,6 +127,18 @@ function pageText(colors) {
   return app && toHsl(app).l > 0.5 ? app : '#e3e3e3';
 }
 
+/**
+ * The rules a page that will be dark wears while it loads, before the engine runs (see browser-view.cjs): Dark Reader's
+ * own loading style. Not only the root and the body: a web app paints white panels of its own long before its scripts
+ * are done (Gmail stayed white for a second or two), so every element gets the dark background, a light text color and
+ * a muted border until the engine has recolored the page.
+ */
+function loadingCanvas(colors) {
+  const background = pageBackground(colors);
+  const border = fromHsl({ ...toHsl(background), l: Math.min(1, toHsl(background).l + 0.16) });
+  return `html, body, body :not(iframe) { background-color: ${background} !important; border-color: ${border} !important; color: ${pageText(colors)} !important; } html { color-scheme: dark !important; }`;
+}
+
 /** Dark Reader's theme at the engine's own contrast: a lower one moved a page's surfaces closer still. */
 function themeFor(colors) {
   return {
@@ -137,6 +149,213 @@ function themeFor(colors) {
     darkSchemeBackgroundColor: pageBackground(colors),
     darkSchemeTextColor: pageText(colors),
   };
+}
+
+/**
+ * Icons drawn through a mask (`mask-image`) take their color from `background-color`. The engine treats that color as
+ * ink only when the mask and the color are in the same CSS rule; a site that sets them in two rules (Gmail's side bar,
+ * many icon sets) had its icons darkened like a background, dark gray on the dark page. This pass looks at the masked
+ * elements of the page, and an icon with too little contrast against what lies behind it gets its color with the
+ * lightness turned around (the hue kept) from a stylesheet the engine neither recolors nor keeps once it is turned off.
+ * It runs again while the page changes. It runs in the engine's isolated world as the source of this function, so the
+ * site cannot see it.
+ */
+function iconInk() {
+  const existing = globalThis.__myharnessIconInk;
+  if (existing) return existing.start();
+  const MAX_ICON = 96;
+  const MIN_CONTRAST = 3;
+  const ATTRIBUTES = { '': 'data-mh-ink', '::before': 'data-mh-ink-before', '::after': 'data-mh-ink-after' };
+  const style = document.createElement('style');
+  style.className = 'darkreader darkreader--myharness-ink';
+  const paint = new OffscreenCanvas(1, 1).getContext('2d', { willReadFrequently: true });
+  const rgba = (value) => {
+    if (!value || value === 'transparent') return null;
+    paint.clearRect(0, 0, 1, 1);
+    paint.fillStyle = '#00000000';
+    paint.fillStyle = value;
+    paint.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = paint.getImageData(0, 0, 1, 1).data;
+    return a ? { r, g, b, a: a / 255 } : null;
+  };
+  const luminance = ({ r, g, b }) => {
+    const channel = (v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+  };
+  const contrast = (one, two) => {
+    const [high, low] = [luminance(one), luminance(two)].sort((a, b) => b - a);
+    return (high + 0.05) / (low + 0.05);
+  };
+  let page = { r: 24, g: 26, b: 27, a: 1 };
+  /** The dark page color of the engine's theme (set by darkScript before this runs). */
+  const readPage = () => {
+    try { page = rgba(JSON.parse(globalThis.__myharnessDarkTheme || 'null')?.darkSchemeBackgroundColor) || page; } catch { /* keep the last one */ }
+  };
+  /** The color an icon is drawn over: the nearest box from `element` up with a background of its own, else the page. */
+  const behind = (element) => {
+    for (let node = element; node && node.nodeType === 1; node = node.parentElement) {
+      const color = rgba(getComputedStyle(node).backgroundColor);
+      if (color && color.a >= 0.5) return color;
+    }
+    return page;
+  };
+  /** The icon's color with its lightness turned around, light over a dark backdrop and dark over a light one. */
+  const turned = ({ r, g, b }, backdrop) => {
+    const [x, y, z] = [r / 255, g / 255, b / 255];
+    const max = Math.max(x, y, z);
+    const min = Math.min(x, y, z);
+    const l = (max + min) / 2;
+    const chroma = max - min;
+    let h = 0;
+    if (chroma) h = (max === x ? ((y - z) / chroma) % 6 : max === y ? (z - x) / chroma + 2 : (x - y) / chroma + 4) * 60;
+    if (h < 0) h += 360;
+    const s = chroma ? chroma / (1 - Math.abs(2 * l - 1)) : 0;
+    const dark = luminance(backdrop) < 0.5;
+    const next = dark ? Math.min(0.85, Math.max(0.62, 1 - l)) : Math.min(0.4, Math.max(0.15, 1 - l));
+    const c = (1 - Math.abs(2 * next - 1)) * s;
+    const k = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    const m = next - c / 2;
+    const [p, q, w] = h < 60 ? [c, k, 0] : h < 120 ? [k, c, 0] : h < 180 ? [0, c, k] : h < 240 ? [0, k, c] : h < 300 ? [k, 0, c] : [c, 0, k];
+    return `#${[p, q, w].map((v) => Math.round((v + m) * 255).toString(16).padStart(2, '0')).join('')}`;
+  };
+  /** A selector list cut at its top-level commas. */
+  const split = (list) => {
+    const parts = [];
+    let depth = 0;
+    let start = 0;
+    let quote = '';
+    for (let i = 0; i < list.length; i++) {
+      const ch = list[i];
+      if (quote) {
+        if (ch === '\\') i++;
+        else if (ch === quote) quote = '';
+      } else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth--;
+      else if (ch === ',' && depth === 0) {
+        parts.push(list.slice(start, i));
+        start = i + 1;
+      }
+    }
+    parts.push(list.slice(start));
+    return parts.map((part) => part.trim()).filter(Boolean);
+  };
+  const isMasked = (declarations) => /url\(|image-set\(/.test(`${declarations.maskImage || ''} ${declarations.webkitMaskImage || ''}`);
+  /** What the page's style rules mask: the elements (and their ::before / ::after) to look at. */
+  const collect = () => {
+    const selectors = new Set();
+    const visit = (rules) => {
+      for (const rule of rules) {
+        if (rule.selectorText !== undefined && rule.style && isMasked(rule.style)) selectors.add(rule.selectorText);
+        if (rule.cssRules?.length) visit(rule.cssRules);
+      }
+    };
+    for (const sheet of [...document.styleSheets, ...(document.adoptedStyleSheets || [])]) {
+      if (sheet.ownerNode === style) continue;
+      // A stylesheet of another origin cannot be read here; the engine's own readable copy of it is in the list too.
+      try { visit(sheet.cssRules); } catch { /* not readable */ }
+    }
+    const targets = [{ selector: '[style*="mask"]', pseudo: '' }];
+    for (const list of selectors) {
+      for (const part of split(list)) {
+        const match = /::?(before|after)\s*$/iu.exec(part);
+        const host = match ? part.slice(0, match.index).trim() || '*' : part;
+        if (!host.includes('::')) targets.push({ selector: host, pseudo: match ? `::${match[1].toLowerCase()}` : '' });
+      }
+    }
+    return targets;
+  };
+  let targets = [];
+  let sheetsKey = '';
+  let marks = new Map();
+  const apply = (found) => {
+    const next = new Map();
+    for (const [element, attribute, color] of found) {
+      const entry = next.get(element) || {};
+      entry[attribute] = color;
+      next.set(element, entry);
+    }
+    for (const [element, entry] of marks) {
+      for (const attribute of Object.keys(entry)) if (next.get(element)?.[attribute] === undefined) element.removeAttribute(attribute);
+    }
+    const rules = new Set();
+    for (const [element, entry] of next) {
+      for (const [attribute, color] of Object.entries(entry)) {
+        if (element.getAttribute(attribute) !== color) element.setAttribute(attribute, color);
+        const pseudo = attribute.endsWith('-before') ? '::before' : attribute.endsWith('-after') ? '::after' : '';
+        // Two id parts outweigh the site's own class rules, `!important` ones included.
+        rules.add(`[${attribute}="${color}"]:not(#mh-ink-none):not(#mh-ink-none)${pseudo} { background-color: ${color} !important; }`);
+      }
+    }
+    marks = next;
+    const css = [...rules].sort().join('\n');
+    if (style.textContent !== css) style.textContent = css;
+  };
+  let timer = 0;
+  let last = 0;
+  let observer = null;
+  const kicks = [];
+  const run = () => {
+    timer = 0;
+    last = performance.now();
+    if (!globalThis.DarkReader?.isEnabled()) return;
+    if (!style.isConnected) (document.head || document.documentElement).append(style);
+    const key = `${document.styleSheets.length}:${document.adoptedStyleSheets?.length || 0}`;
+    if (key !== sheetsKey) {
+      sheetsKey = key;
+      targets = collect();
+    }
+    // The colors are read without this pass's own rules (one style recalculation, no frame painted in between).
+    const sheet = style.sheet;
+    if (sheet) sheet.disabled = true;
+    const found = [];
+    try {
+      for (const { selector, pseudo } of targets) {
+        let elements;
+        try { elements = document.querySelectorAll(selector); } catch { continue; }
+        for (const element of elements) {
+          const computed = getComputedStyle(element, pseudo || null);
+          if (!isMasked(computed)) continue;
+          const box = pseudo ? { width: parseFloat(computed.width), height: parseFloat(computed.height) } : element.getBoundingClientRect();
+          if (!(box.width > 0 && box.height > 0 && box.width <= MAX_ICON && box.height <= MAX_ICON)) continue;
+          const color = rgba(computed.backgroundColor);
+          if (!color || color.a < 0.3) continue;
+          const backdrop = behind(pseudo ? element : element.parentElement);
+          if (contrast(color, backdrop) < MIN_CONTRAST) found.push([element, ATTRIBUTES[pseudo], turned(color, backdrop)]);
+        }
+      }
+    } finally {
+      if (sheet) sheet.disabled = false;
+    }
+    apply(found);
+  };
+  /** At most one pass a second while the page keeps changing. */
+  const schedule = () => {
+    if (!timer) timer = setTimeout(run, Math.max(0, 1000 - (performance.now() - last)));
+  };
+  const start = () => {
+    readPage();
+    if (!observer) {
+      observer = new MutationObserver(schedule);
+      observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+    }
+    // The engine reads stylesheets of other origins later; the first passes follow it.
+    for (const delay of [0, 500, 1500, 4000]) kicks.push(setTimeout(run, delay));
+    return true;
+  };
+  const stop = () => {
+    observer?.disconnect();
+    observer = null;
+    clearTimeout(timer);
+    timer = 0;
+    for (const kick of kicks.splice(0)) clearTimeout(kick);
+    apply([]);
+    style.remove();
+    sheetsKey = '';
+    return true;
+  };
+  globalThis.__myharnessIconInk = { start, stop, run };
+  return start();
 }
 
 /** The script that turns the engine on (in these colors) or off in one document, the top one or a frame. */
@@ -168,9 +387,10 @@ function darkScript(enabled, colors) {
         }
         DarkReader.enable(${theme});
         globalThis.__myharnessDarkTheme = ${JSON.stringify(theme)};
+        if (DarkReader.isEnabled()) (${iconInk.toString()})();
         return DarkReader.isEnabled();
       })()`
-    : `(() => { if (globalThis.DarkReader) DarkReader.disable(); globalThis.__myharnessDarkTheme = null; return false; })()`;
+    : `(() => { globalThis.__myharnessIconInk?.stop(); if (globalThis.DarkReader) DarkReader.disable(); globalThis.__myharnessDarkTheme = null; return false; })()`;
   // One script: the engine is defined once per document, then turned on or off; its value is the script's result.
   return enabled ? `if (!globalThis.DarkReader) {
 ${engineSource()}
@@ -225,7 +445,11 @@ async function applyDarkToFrames(contents, enabled, colors) {
  * Whether the page, told that the reader prefers dark (`prefers-color-scheme: dark`, emulated per tab by the host), now
  * shows its own dark theme. Then the site's design is kept and Dark Reader stays off. It waits briefly for stylesheets
  * that are still loading, sets the preload's dark canvas aside for one synchronous read (no frame is painted in between)
- * and looks at the color behind the middle of the page and the top bar, falling back to the root's `color-scheme`.
+ * and looks at the page's surface at five points: the top bar, the middle and three points lower down. The surface at a
+ * point is the nearest box with a background of its own that is wide (a third of the page), not a button or a badge,
+ * and it counts as dark only below the lightness of the dark themes sites use (about #454545). A light page with a
+ * blue banner and a blue button in the middle (Devpost) once passed as dark that way and stayed light. With no surface
+ * of its own anywhere, the root's `color-scheme` decides.
  */
 const NATIVE_DARK = `(async () => {
   const sheets = [...document.querySelectorAll('link[rel~="stylesheet"]')].filter((link) => !link.sheet && !link.disabled);
@@ -252,24 +476,26 @@ const NATIVE_DARK = `(async () => {
       const channel = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
       return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
     };
-    const behind = (element) => {
+    const root = document.documentElement;
+    const width = innerWidth || root.clientWidth;
+    const height = innerHeight || root.clientHeight;
+    const surface = (element) => {
       for (let node = element; node && node.nodeType === 1; node = node.parentElement) {
         const color = rgba(getComputedStyle(node).backgroundColor);
-        if (color) return color;
+        if (!color) continue;
+        if (node === root || node === document.body) return color;
+        const box = node.getBoundingClientRect();
+        if (box.width >= width / 3 && box.height >= 40) return color;
       }
       return null;
     };
-    const root = document.documentElement;
     const scheme = ((getComputedStyle(root).colorScheme || '') + ' ' + (document.querySelector('meta[name="color-scheme"]')?.content || '')).replace(/,/g, ' ');
     const canvasDark = scheme.split(' ').includes('dark');
-    const width = innerWidth || root.clientWidth;
-    const height = innerHeight || root.clientHeight;
-    const probes = [[width / 2, height / 2], [width / 2, Math.min(24, height / 4)]]
-      .map(([x, y]) => document.elementFromPoint(x, y))
+    const probes = [[0.5, Math.min(24, height / 4) / height], [0.5, 0.5], [0.25, 0.7], [0.75, 0.7], [0.5, 0.88]]
+      .map(([x, y]) => document.elementFromPoint(width * x, height * y))
       .filter(Boolean);
-    const colors = probes.map(behind);
-    const votes = colors.map((color) => (color ? luminance(color) < 0.2 : canvasDark));
-    if (!votes.length) votes.push(behind(document.body) ? luminance(behind(document.body)) < 0.2 : canvasDark);
+    const votes = probes.map(surface).map((color) => (color ? luminance(color) < 0.06 : canvasDark));
+    if (!votes.length) votes.push(surface(document.body) ? luminance(surface(document.body)) < 0.06 : canvasDark);
     return votes.every(Boolean);
   } catch {
     return false;
@@ -340,4 +566,4 @@ async function darkFetch(session, url) {
   }
 }
 
-module.exports = { MODES, createDarkStore, applyDark, applyDarkToFrames, detectNativeDark, putCanvas, dropCanvas, darkFetch, engineSource, pageBackground, themeFor };
+module.exports = { MODES, createDarkStore, applyDark, applyDarkToFrames, detectNativeDark, putCanvas, dropCanvas, darkFetch, engineSource, pageBackground, themeFor, loadingCanvas };

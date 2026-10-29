@@ -603,6 +603,19 @@ export function Composer() {
 
 	const importing = useRef(false);
 	const [loadingFiles, setLoadingFiles] = useState(false);
+	// The Add files / Add folder shortcuts (app.js): the same pickers as the + menu, and like it not while files load.
+	const loadingRef = useRef(false);
+	loadingRef.current = loadingFiles;
+	useEffect(() => {
+		const onPick = (event) => {
+			const input = event.detail?.folder ? folderInput.current : fileInput.current;
+			if (!input || loadingRef.current) return;
+			if (!event.detail?.folder) input.accept = "";
+			input.click();
+		};
+		window.addEventListener("myharness:composer-pick", onPick);
+		return () => window.removeEventListener("myharness:composer-pick", onPick);
+	}, []);
 	const addFiles = async (fileList) => {
 		if (!draftReady) { toast(t("Loading…")); return; }
 		const picked = [...fileList];
@@ -818,9 +831,9 @@ const send = async (mode) => {
 	const showStop = active && !text.trim() && images.length === 0 && quotes.length === 0;
 	// The input box's stop ends everything, the sub-agents included; the activity bar's stop ends only sub-agents.
 	const stopTitle = subAgentsRunning ? t("Stop the run and all sub-agents (Esc)") : t("Stop the current run (Esc)");
-	const placeholder = noModel ? t("Add a provider in Settings to start…") : active ? t("Add to the running task… (Enter: {action})", { action: t(RUN_MODES[runMode].label) }) : t("Ask MyHarness to work on something…  / commands · @ files · ! shell");
-	// A narrow input box shows the short form, so the / @ ! hints stay readable (composer.css, @container composer-input).
-	const placeholderShort = noModel || active ? undefined : t("Ask MyHarness…  / commands · @ files · ! shell");
+	const placeholder = noModel ? t("Add a provider in Settings to start…") : active ? t("Add to the running task… (Enter: {action})", { action: t(RUN_MODES[runMode].label) }) : t("Ask MyHarness to work on something…  / commands · @ files");
+	// A narrow input box shows the short form, so the / @ hints stay readable (composer.css, @container composer-input).
+	const placeholderShort = noModel || active ? undefined : t("Ask MyHarness…  / commands · @ files");
 
 	return html`<div class="composer-zone">
 		<div class="composer-col">

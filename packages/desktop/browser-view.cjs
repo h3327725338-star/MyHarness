@@ -6,12 +6,16 @@ const { createSpeedDialStore } = require(require('node:path').join(__dirname, 'b
 const { keyEvents } = require(require('node:path').join(__dirname, 'browser-input.cjs'));
 const { createPasswordStore, attachPasswordManager } = require(require('node:path').join(__dirname, 'browser-passwords.cjs'));
 const { createPermissionStore } = require(require('node:path').join(__dirname, 'browser-permissions.cjs'));
+const { createDownloadHistory } = require(require('node:path').join(__dirname, 'browser-downloads.cjs'));
 const page = require(require('node:path').join(__dirname, 'browser-page-helpers.cjs'));
 const { attachZoom, cleanZoom, createSiteZoomStore, stepZoom } = require(require('node:path').join(__dirname, 'zoom.cjs'));
 const dark = require(require('node:path').join(__dirname, 'browser-dark.cjs'));
 const { acceptLanguage, createLanguageStore, languageList } = require(require('node:path').join(__dirname, 'browser-language.cjs'));
 const { createBrowserSync } = require(require('node:path').join(__dirname, 'browser-sync.cjs'));
 const { createWebMailState } = require(require('node:path').join(__dirname, 'browser-web-mail.cjs'));
+const { sendThroughPage, bareAddress } = require(require('node:path').join(__dirname, 'browser-web-mail-send.cjs'));
+const { createHelpDesk, signInAddress } = require(require('node:path').join(__dirname, 'browser-help.cjs'));
+const { translator } = require(require('node:path').join(__dirname, 'ui-language.cjs'));
 const { INTERACTIVE_QUERY } = page;
 
 exports.httpUrl = (value) => {
@@ -65,13 +69,20 @@ const CURSOR_WORLD = 1207;
 // A hidden page is throttled by Chromium and then ignores input events (a wheel event never even completes). While the
 // Agent acts on a tab it is kept awake, and throttled again after this long without an Agent action.
 const AGENT_AWAKE_MS = 20000;
-// A background tab is laid out at least this large, so sites give the Agent their desktop layout there. The tab on
-// screen always has exactly the panel's size: what the user sees is never a scaled-down picture of a bigger page.
+// A background tab is laid out at least this large, so sites give the Agent their desktop layout there. So is the tab
+// on screen while the Agent works on it in a smaller panel: the page gets this size and the panel shows the part of it
+// that fits (never a scaled-down picture), so the Agent sees the whole page while the user keeps a narrow panel.
 const AGENT_VIEWPORT = { width: 1280, height: 800 };
+// The tab on screen goes back to the panel's size this long after the Agent's last action on it, or at once when a
+// person clicks or types in it.
+const AGENT_WIDE_IDLE_MS = 45000;
 // A clicked control whose text or link names a download or a file: the click waits a few seconds for a download to start.
 const DOWNLOAD_HINT = /download|下载|下載|\.(pdf|docx?|xlsx?|pptx?|csv|txt|zip|rar|7z|gz|png|jpe?g|gif|mp3|mp4|mov|apk|exe|msi)\b/i;
 // Agent commands that read or act on a page's layout; each keeps the tab awake first.
 const AGENT_TAB_ACTIONS = new Set(['snapshot', 'read', 'mouse', 'keys', 'insertText', 'exec', 'ax', 'dom', 'interactive', 'click', 'type', 'text', 'scroll', 'find', 'upload', 'login', 'download', 'locate', 'wait']);
+// Agent commands that answer a page. On a human check (a `challenge` page) none of them runs: the check is the user's,
+// and the Agent asks for it with `handoff` instead of pressing, typing or scripting its way past it.
+const CHALLENGE_REFUSED = new Set(['mouse', 'keys', 'insertText', 'exec', 'click', 'type', 'upload', 'login']);
 
 /** Whether `candidate` is the same as, or inside, `root` (Windows paths are case-insensitive). */
 const insideRoot = (root, candidate) => {
@@ -108,6 +119,8 @@ const cleanRect = (value) => {
  */
 exports.createBrowser = (window, log, options = {}) => {
   const workspaceRoot = options.workspaceRoot ? require('node:path').resolve(options.workspaceRoot) : undefined;
+  // What the host shows in a tab itself speaks the interface language (options.uiLanguage, ui-language.cjs; English without it).
+  const say = translator(options.uiLanguage);
   const tabs = new Map();
   let activeTabId = null;
   let rectangle = null;
@@ -115,11 +128,12 @@ exports.createBrowser = (window, log, options = {}) => {
   // the whole box is. The view keeps its full size and is cut at the edge, so a playing video stays live beside it.
   let clipRectangle = null;
   let lastViewport = DEFAULT_VIEWPORT;
-  // What the pages did while the workspace watched: recent downloads and request metadata. Both stay small and are
-  // only read by the workspace command surface (never persisted), so a page cannot grow them without bound.
-  const downloadLog = [];
+  // What the pages did while the workspace watched: recent downloads and request metadata. Both stay small. Request
+  // metadata is never persisted; finished downloads are, so the toolbar's downloads list still has them after a restart.
+  const downloadHistory = createDownloadHistory(options.profileDir ? require('node:path').join(require('node:path').resolve(options.profileDir), 'browser-downloads.json') : undefined, log);
+  const downloadLog = downloadHistory.records;
   const networkLog = [];
-  let downloadSeq = 0;
+  let downloadSeq = downloadLog.reduce((most, entry) => Math.max(most, entry.seq || 0), 0);
   let permissionSeq = 0;
   // Site permission decisions: the first request for an origin/permission is shown in the workspace, a decision (by the
   // user, or by the Agent through the workspace tool) is kept in the desktop profile until the user revokes it, and a
@@ -283,6 +297,9 @@ exports.createBrowser = (window, log, options = {}) => {
     const tab = tabFor(webContents);
     const origin = safeOrigin(details?.requestingUrl || (tab ? tab.url : ''));
     if (!tab) { callback(false); return; }
+    // Going full screen is not asked, as in a browser: it takes a click in the page, fills only the website's place in
+    // the workspace and ends with Esc. Asked, a video's fullscreen button did nothing until the question was answered.
+    if (permission === 'fullscreen') { callback(true); return; }
     if (permissionFor(origin, permission) === undefined && bookmarkedOrigin(origin)) {
       permissionDecisions.set(permissionKey(origin, permission), true);
       emit(tab.id, { type: 'permission', permission, origin, allowed: true, remembered: true, by: 'bookmark' });
@@ -344,7 +361,7 @@ exports.createBrowser = (window, log, options = {}) => {
       record.at = Date.now();
       if (tab.destroyed) return;
       downloadLog.push(record);
-      if (downloadLog.length > 50) downloadLog.shift();
+      downloadHistory.save();
       if (tabs.has(tab.id)) emit(tab.id, { type: 'download', ...record });
     });
   });
@@ -379,10 +396,11 @@ exports.createBrowser = (window, log, options = {}) => {
   let appColors;
   // A dark page must not flash white while it loads. Until the engine runs, the document gets a dark canvas: the preload
   // puts it in before the first paint (`mh-browser:dark-early`), and the host puts the same rules in once the page has
-  // committed if the preload did not (browser-dark.cjs putCanvas / dropCanvas). `body` too, since most pages paint a white body over the html background; `color-scheme` makes the
-  // default text and form controls light meanwhile. The native view itself starts in that color, not white.
+  // committed if the preload did not (browser-dark.cjs putCanvas / dropCanvas). Every element of the page is in it, not
+  // only the body: a web app paints white panels of its own before the engine runs (browser-dark.cjs loadingCanvas). The
+  // native view itself starts in that color, not white.
   const canvasColor = () => dark.pageBackground(appColors);
-  const darkCanvas = () => `html, body { background-color: ${canvasColor()} !important; } html { color-scheme: dark !important; }`;
+  const darkCanvas = () => dark.loadingCanvas(appColors);
   /** The color a tab's view shows before its page paints: the dark canvas when the page will be dark. */
   const paintViewBackground = (tab, url = tab.url) => {
     if (tab.destroyed || !tab.view) return;
@@ -415,32 +433,67 @@ exports.createBrowser = (window, log, options = {}) => {
       return false;
     }
   };
-  const syncDark = async (tab) => {
+  /**
+   * One pass that brings a tab's page to what is wanted now. A pass stops where it is when the tab leaves the document
+   * it started on (`darkDocument`, counted by did-navigate): the new document gets its own pass from dom-ready.
+   */
+  const syncDarkOnce = async (tab) => {
     if (tab.destroyed || !tab.view || tab.view.webContents.isDestroyed()) return;
     const contents = tab.view.webContents;
+    const documentAt = tab.darkDocument;
+    const gone = () => tab.destroyed || contents.isDestroyed() || tab.darkDocument !== documentAt;
     const wanted = darkStore.wanted(tab.url, appDark);
     // The site's own dark theme comes first: with the preference told, a page that turns dark by itself keeps its design
     // and the engine stays off. Asked once per document (and again when the preference changes), before the engine runs;
     // the check sets the loading canvas aside for its one read.
     if (await setPrefersDark(tab, wanted)) tab.nativeDark = undefined;
+    if (gone()) return;
     if (wanted && tab.nativeDark === undefined && !tab.darkEngine) {
-      tab.nativeDark = await dark.detectNativeDark(contents);
-      if (tab.destroyed || contents.isDestroyed()) return;
+      const nativeDark = await dark.detectNativeDark(contents);
+      if (gone()) return;
+      tab.nativeDark = nativeDark;
     }
     const engine = wanted && tab.nativeDark !== true;
     // `darkTried`: the engine may run in this document even when it did not report back, so turning off always asks it.
     if (engine || tab.darkEngine || tab.darkTried) {
       tab.darkTried = engine;
-      tab.darkEngine = await dark.applyDark(contents, engine, appColors);
+      const running = await dark.applyDark(contents, engine, appColors);
+      if (gone()) return;
+      tab.darkEngine = running;
       // Frames of the same site follow the page (browser-dark.cjs applyDarkToFrames).
       await dark.applyDarkToFrames(contents, engine && tab.darkEngine, appColors);
+      if (gone()) return;
     }
     tab.dark = engine ? tab.darkEngine : wanted && tab.nativeDark === true;
     // The loading canvas goes: the engine or the site's own theme colors the page now (or it stays in its own colors).
     await dark.dropCanvas(contents);
+    if (gone()) return;
     try { contents.send('mh-browser:dark-settled'); } catch { /* view is going away */ }
     paintViewBackground(tab);
-    if (!tab.destroyed) emit(tab.id, { type: 'dark', ...darkState(tab) });
+    emit(tab.id, { type: 'dark', ...darkState(tab) });
+  };
+  /**
+   * Bring a tab's page to the wanted state. Passes of one tab never overlap: two at once (the mode turned off and on
+   * again quickly, a site choice while a page loads) each read the other's half-done state, and the last one to finish
+   * could leave the engine off while dark was wanted. A request during a pass makes one more pass after it; the promise
+   * settles when the tab has caught up with every request made before it.
+   */
+  const syncDark = (tab) => {
+    if (tab.darkSyncing) {
+      tab.darkAgain = true;
+      return tab.darkSyncing;
+    }
+    tab.darkSyncing = (async () => {
+      try {
+        do {
+          tab.darkAgain = false;
+          await syncDarkOnce(tab);
+        } while (tab.darkAgain && !tab.destroyed);
+      } finally {
+        tab.darkSyncing = undefined;
+      }
+    })();
+    return tab.darkSyncing;
   };
   const syncDarkAll = () => { for (const tab of tabs.values()) void syncDark(tab); };
   /**
@@ -487,6 +540,20 @@ exports.createBrowser = (window, log, options = {}) => {
     return browserSync;
   };
   if (ipcMain) {
+    // A tab's preload reports whether its page shows a password field (state `signIn`; a sign-in the user was asked for
+    // ends when the page leaves the sign-in pages). Main frame only.
+    ipcMain.removeAllListeners('mh-browser:password-fields');
+    ipcMain.on('mh-browser:password-fields', (event, value) => {
+      const tab = tabFor(event.sender);
+      if (!tab || tab.destroyed || event.senderFrame?.parent) return;
+      const visible = value?.visible === true;
+      if (!!tab.passwordVisible !== visible) commit(tab, { passwordVisible: visible });
+    });
+    // Asked by a tab's preload when the user selects text: the interface language of the translator's button and card.
+    ipcMain.removeAllListeners('mh-browser:ui-language');
+    ipcMain.on('mh-browser:ui-language', (event) => {
+      event.returnValue = tabFor(event.sender) && options.uiLanguage?.() === 'zh-CN' ? 'zh-CN' : 'en';
+    });
     // Asked by a tab's preload as its document starts: navigator.languages for the chosen language (null: the engine's).
     ipcMain.removeAllListeners('mh-browser:languages');
     ipcMain.on('mh-browser:languages', (event) => {
@@ -538,11 +605,11 @@ exports.createBrowser = (window, log, options = {}) => {
     // `request`: the selected text, or { text, target, remember } when the card's language menu picked a language.
     ipcMain.handle('mh-browser:translate', async (event, request) => {
       const tab = tabFor(event.sender);
-      if (!tab || tab.destroyed) return { ok: false, error: '拒绝非网页标签的请求' };
-      if (typeof options.translate !== 'function') return { ok: false, error: '翻译服务还没有就绪' };
+      if (!tab || tab.destroyed) return { ok: false, error: say('Only a website tab can ask for a translation', '拒绝非网页标签的请求') };
+      if (typeof options.translate !== 'function') return { ok: false, error: say('The translation service is not ready yet', '翻译服务还没有就绪') };
       const asked = request && typeof request === 'object' ? request : { text: request };
       const value = String(asked.text || '').trim().slice(0, 6000);
-      if (!value) return { ok: false, error: '请先选中要翻译的文字。' };
+      if (!value) return { ok: false, error: say('Select the text to translate first.', '请先选中要翻译的文字。') };
       const target = typeof asked.target === 'string' && /^[A-Za-z-]{2,8}$/.test(asked.target) ? asked.target : undefined;
       try {
         const answer = await options.translate(value, target ? { target, remember: asked.remember === true } : {});
@@ -673,6 +740,10 @@ exports.createBrowser = (window, log, options = {}) => {
       // The page looks like a bot check (Cloudflare's interstitial or its failed variant). The workspace then offers the
       // way out: try again, or finish the check in the normal browser. Nothing here answers a challenge itself.
       challenge: !!tab.challenge,
+      // The page asks the user to sign in: a password field on screen, or an address of a sign-in page.
+      signIn: !!tab.passwordVisible || signInAddress(tab.url),
+      // The Agent's open request for the user's help on this tab (browser-help.cjs), or null.
+      help: tab.help || null,
       // The page's zoom (1 = 100 %), shown on the toolbar while it is not 100 %.
       zoom: tab.zoom ?? 1,
       // Dark mode: whether the page is recolored now, the general mode and this site's own choice (null: follows it).
@@ -829,9 +900,23 @@ exports.createBrowser = (window, log, options = {}) => {
         try {
           stage.setBounds(shown);
           stageOrigin = { x: shown.x, y: shown.y };
-          tab.view.setBounds({ x: bounds.x - shown.x, y: bounds.y - shown.y, width: bounds.width, height: bounds.height });
+          // While the Agent works on the tab in a panel smaller than its desktop size, the page is laid out at that size
+          // and the stage shows the part of it that fits the panel (widenForAgent).
+          const width = tab.agentWide ? Math.max(bounds.width, AGENT_VIEWPORT.width) : bounds.width;
+          const height = tab.agentWide ? Math.max(bounds.height, AGENT_VIEWPORT.height) : bounds.height;
+          tab.view.setBounds({ x: bounds.x - shown.x, y: bounds.y - shown.y, width, height });
         } catch { /* view is going away */ }
         try { tab.view.setVisible(true); } catch { /* view is going away */ }
+        // The page had the keyboard when its view was hidden for a moment (the layout moving, a menu over it): it gets it
+        // back, unless the app page or another tab took it meanwhile. Without this, Esc after a video went full screen
+        // (the workspace moves into browser fullscreen around it) reached nothing.
+        if (tab.refocus) {
+          tab.refocus = false;
+          try {
+            const taken = window.webContents.isFocused() || [...tabs.values()].some((other) => other !== tab && other.view && !other.destroyed && other.view.webContents.isFocused());
+            if (window.isFocused() && !taken) tab.view.webContents.focus();
+          } catch { /* view is going away */ }
+        }
       }
       updatePictureTimer(tab);
     }
@@ -845,6 +930,8 @@ exports.createBrowser = (window, log, options = {}) => {
 
   /** Hide one view. A view leaving the screen first gets the background size: a hidden view ignores new bounds. */
   const conceal = (tab, { keepSize = false } = {}) => {
+    // The keyboard leaves with the view and comes back by itself nowhere: placeActive gives it back.
+    try { if (tab.view.getVisible() && tab.view.webContents.isFocused()) tab.refocus = true; } catch { /* view is going away */ }
     try {
       if (tab.view.getVisible() && !keepSize) tab.view.setBounds({ x: 0, y: 0, ...backgroundViewport() });
       tab.view.setVisible(false);
@@ -867,7 +954,10 @@ exports.createBrowser = (window, log, options = {}) => {
     if (tab.destroyed || tabs.get(tab.id) !== tab) return;
     Object.assign(tab, patch);
     emit(tab.id, { type: 'state', state: stateOf(tab) });
+    helpDesk.observe(tab);
   };
+  // The Agent's requests for the user's help (sign in, a human check); one per tab, answered from the tab's own bar.
+  const helpDesk = createHelpDesk({ commit: (tab, patch) => commit(tab, patch), stateOf: (tab) => stateOf(tab) });
 
   /** A timer that is cleared when the tab is closed, so a slow load cannot touch a dead view. */
   const later = (tab, fn, ms) => {
@@ -927,9 +1017,9 @@ exports.createBrowser = (window, log, options = {}) => {
       { role: 'paste', enabled: params.isEditable }, { role: 'selectAll' },
       { type: 'separator' },
       ...(params.selectionText?.trim() && !params.isEditable
-        ? [{ label: '翻译所选文字', click: () => { if (live()) contents.send('mh-browser:translate-selection', { text: params.selectionText, x: params.x, y: params.y }); } }, { type: 'separator' }]
+        ? [{ label: say('Translate selection', '翻译所选文字'), click: () => { if (live()) contents.send('mh-browser:translate-selection', { text: params.selectionText, x: params.x, y: params.y }); } }, { type: 'separator' }]
         : []),
-      { label: '用系统浏览器打开', click: () => void shell.openExternal(tab.url) },
+      { label: say('Open in system browser', '用系统浏览器打开'), click: () => void shell.openExternal(tab.url) },
     ]).popup({ window }));
     // The first real page is the moment the engine's own client-hint list can be read (it needs a secure context).
     contents.on('dom-ready', () => learnClientHints(contents));
@@ -944,7 +1034,7 @@ exports.createBrowser = (window, log, options = {}) => {
       // A new load starts with no known challenge: the page that is gone must not leave its flag behind.
       commit(tab, { loading: true, challenge: false });
       clearTimeout(tab.timer);
-      tab.timer = later(tab, () => fail(tab, '加载超时（45 秒）', tab.url), 45000);
+      tab.timer = later(tab, () => fail(tab, say('timed out after 45 seconds', '加载超时（45 秒）'), tab.url), 45000);
     });
     contents.on('did-stop-loading', () => {
       if (!live()) return;
@@ -959,6 +1049,8 @@ exports.createBrowser = (window, log, options = {}) => {
       if (!live()) return;
       // A site opens at the zoom the user chose for it last time.
       setTabZoom(tab, siteZoom.get(target), false);
+      // A dark-mode pass still working on the page that is gone stops (syncDarkOnce).
+      tab.darkDocument = (tab.darkDocument || 0) + 1;
       tab.dark = false;
       tab.darkEngine = false;
       tab.darkTried = false;
@@ -968,7 +1060,8 @@ exports.createBrowser = (window, log, options = {}) => {
       tab.favicon = undefined;
       tab.iconKey = undefined;
       const from = tab.url;
-      commit(tab, { url: target, error: '' });
+      // A new document has no password field until its preload reports one (mh-browser:password-fields).
+      commit(tab, { url: target, error: '', passwordVisible: false });
       // A move from a mailbox to its sign-in page is a sign-out; the new page's title comes later.
       webMailSeen(target, '', from);
     });
@@ -995,12 +1088,18 @@ exports.createBrowser = (window, log, options = {}) => {
       // -3 is a client-side abort (a navigation replaced by another one), not a page error.
       if (isMainFrame && code !== -3 && live()) fail(tab, `${description} (${code})`, target || tab.url);
     });
-    contents.on('render-process-gone', (_event, detail) => { if (live()) fail(tab, `页面进程退出：${detail.reason}`, tab.url); });
+    contents.on('render-process-gone', (_event, detail) => { if (live()) fail(tab, `${say('its process ended: ', '页面进程退出：')}${detail.reason}`, tab.url); });
     // The workspace owns the find bar, the new-tab button and the tab strip (the native view has none of its own).
     // Ctrl+F inside the page asks the page to open its find bar; Ctrl+T / Ctrl+W ask for a new tab or to close this one,
     // so those shortcuts do the same thing whether the keyboard is in the panel or in the page.
     contents.on('before-input-event', (event, input) => {
       const key = String(input.key || '').toLowerCase();
+      // F11 inside a website switches the browser fullscreen of the workspace, as it does in a browser.
+      if (input.type === 'keyDown' && key === 'f11' && !input.control && !input.alt && !input.meta && !input.shift) {
+        event.preventDefault();
+        if (live()) emit(tab.id, { type: 'shortcut', shortcut: 'fullscreen' });
+        return;
+      }
       if (input.type !== 'keyDown' || !input.control || input.alt) return;
       if (input.shift) {
         // Ctrl+Shift+B shows or hides the workspace's bookmarks bar, as in Chrome.
@@ -1017,6 +1116,23 @@ exports.createBrowser = (window, log, options = {}) => {
         event.preventDefault();
         if (live()) emit(tab.id, { type: 'shortcut', shortcut: key === 't' ? 'new-tab' : 'close-tab' });
       }
+    });
+    // A person clicking or typing in a page laid out for the Agent takes it back at the panel's size (widenForAgent). The
+    // Agent's own input passes here too: input right after one of its actions is the Agent's.
+    contents.on('input-event', (_event, input) => {
+      if (!tab.agentWide || !live()) return;
+      if (input.type !== 'mouseDown' && input.type !== 'keyDown' && input.type !== 'rawKeyDown') return;
+      if (Date.now() - (tab.agentInputAt || 0) < 1500) return;
+      narrowAfterAgent(tab);
+    });
+    // A site that goes full screen itself (a video's fullscreen button) takes the workspace into browser fullscreen with it.
+    contents.on('enter-html-full-screen', () => {
+      tab.siteFullscreen = true;
+      if (live()) emit(tab.id, { type: 'shortcut', shortcut: 'site-fullscreen', on: true });
+    });
+    contents.on('leave-html-full-screen', () => {
+      tab.siteFullscreen = false;
+      if (live()) emit(tab.id, { type: 'shortcut', shortcut: 'site-fullscreen', on: false });
     });
     contents.on('found-in-page', (_event, result) => {
       const found = { requestId: result.requestId, activeMatch: result.activeMatchOrdinal || 0, matches: result.matches || 0, finalUpdate: !!result.finalUpdate };
@@ -1059,7 +1175,7 @@ exports.createBrowser = (window, log, options = {}) => {
   const fail = (tab, message, url) => {
     if (tab.destroyed || tabs.get(tab.id) !== tab) return;
     log(message);
-    commit(tab, { error: `网页加载失败：${message}`, url: url || tab.url, loading: false });
+    commit(tab, { error: `${say('The page failed to load: ', '网页加载失败：')}${message}`, url: url || tab.url, loading: false });
     emit(tab.id, { type: 'snapshot', snapshot: null });
   };
 
@@ -1073,9 +1189,11 @@ exports.createBrowser = (window, log, options = {}) => {
     // The sign-in helper runs in the page's isolated world and only when saved logins are available on this host.
     // It is attached to every tab: besides saved sign-ins it aligns the engine's client hints (see its header).
     const preload = require('node:path').join(__dirname, 'browser-tab-preload.cjs');
+    // A site that goes full screen (a video's button) fills its own view, never the window or the screen: the workspace
+    // takes it into browser fullscreen instead ('enter-html-full-screen' below), and the taskbar stays.
     const view = adopted
       ? new WebContentsView({ webContents: adopted })
-      : new WebContentsView({ webPreferences: { session: partition, contextIsolation: true, nodeIntegration: false, sandbox: true, preload } });
+      : new WebContentsView({ webPreferences: { session: partition, contextIsolation: true, nodeIntegration: false, sandbox: true, preload, disableHtmlFullscreenWindowResize: true } });
     const tab = { id, view, url: initialUrl || '', title: '', loading: false, error: '', challenge: false, timer: undefined, pictures: undefined, timers: new Set(), downloads: new Map(), findPending: new Map(), destroyed: false };
     tabs.set(id, tab);
     // A hidden view keeps a real viewport: background tabs lay out, take input and can be captured like the visible one.
@@ -1124,11 +1242,15 @@ exports.createBrowser = (window, log, options = {}) => {
       entry.resolve({ activeMatch: 0, matches: 0, closed: true });
     }
     tab.findPending.clear();
+    // An Agent waiting for the user on this tab hears that the tab is gone.
+    helpDesk.closed(tab);
     tabs.delete(tab.id);
     passwordManager?.forget(tab);
     if (activeTabId === tab.id) { activeTabId = null; rectangle = null; }
     for (let index = networkLog.length - 1; index >= 0; index--) if (networkLog[index].tabId === tab.id) networkLog.splice(index, 1);
+    const downloadsBefore = downloadLog.length;
     for (let index = downloadLog.length - 1; index >= 0; index--) if (downloadLog[index].tabId === tab.id && downloadLog[index].state !== 'completed') downloadLog.splice(index, 1);
+    if (downloadLog.length !== downloadsBefore) downloadHistory.save();
     try {
       if (tab.view && !tab.view.webContents.isDestroyed()) tab.view.webContents.close({ waitForBeforeUnload: false });
     } catch (error) { log(`关闭网页失败：${error.message}`); }
@@ -1221,6 +1343,46 @@ exports.createBrowser = (window, log, options = {}) => {
       tab.awake = false;
       try { contentsOf(tab).setBackgroundThrottling(true); } catch { /* view is going away */ }
     }, AGENT_AWAKE_MS);
+  };
+
+  /**
+   * The Agent works on the tab on screen while its panel is smaller than the desktop size: the page is laid out at that
+   * size for as long as the Agent keeps at it, and the panel shows the part that fits. The Agent then reads, sees and
+   * clicks the whole page the site gives a desktop (a chat's full conversation, not the narrow layout of the panel).
+   * The panel's size comes back AGENT_WIDE_IDLE_MS after the Agent's last action or when a person clicks or types in the
+   * page (narrowAfterAgent). Resolves once the page has its new size, so the Agent's next look sees the new layout.
+   */
+  const widenForAgent = async (tab) => {
+    clearTimeout(tab.agentWideTimer);
+    tab.agentWideTimer = later(tab, () => narrowAfterAgent(tab), AGENT_WIDE_IDLE_MS);
+    if (tab.agentWide || tab.id !== activeTabId || !tab.view?.getVisible()) return;
+    const bounds = boundsForRectangle();
+    if (!bounds || (bounds.width >= AGENT_VIEWPORT.width && bounds.height >= AGENT_VIEWPORT.height)) return;
+    tab.agentWide = true;
+    placeActive();
+    const wanted = Math.max(bounds.width, AGENT_VIEWPORT.width);
+    for (let waited = 0; waited < 1500; waited += 100) {
+      const size = await viewportOf(tab).catch(() => null);
+      if (!size || Math.abs(size.width * (tab.zoom ?? 1) - wanted) <= 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    // The site redraws for its new width (a chat app moves its panes) before the Agent looks: two frames of the page at
+    // that size, at least 150 ms, at most half a second for a page that draws none. A fixed pause alone was sometimes too
+    // short on a busy computer, and the Agent's first screenshot came back blank.
+    await Promise.all([
+      Promise.race([
+        runInPage(tab, 'new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))').catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, 500)),
+      ]),
+      new Promise((resolve) => setTimeout(resolve, 150)),
+    ]);
+  };
+  /** The tab on screen takes the panel's size again (see widenForAgent). */
+  const narrowAfterAgent = (tab) => {
+    clearTimeout(tab.agentWideTimer);
+    if (!tab.agentWide) return;
+    tab.agentWide = false;
+    if (!tab.destroyed && tab.id === activeTabId) placeActive();
   };
 
   /** What sits at a point of the page: enough for the Agent to know what it is about to click. */
@@ -1797,6 +1959,8 @@ exports.createBrowser = (window, log, options = {}) => {
 
   /** Reader pages open at once (readAddress); more wait for a free one. */
   const READERS_MAX = 6;
+  /** The most markup a reading hands back (`html`), in characters. */
+  const READ_HTML_MAX = 4_000_000;
   let readersOpen = 0;
   const readerQueue = [];
   /**
@@ -1829,8 +1993,21 @@ exports.createBrowser = (window, log, options = {}) => {
       });
       await Promise.race([loaded, new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); })]).finally(() => clearTimeout(timer));
       await new Promise((resolve) => setTimeout(resolve, bounded(value.settleMs, 100, 3000, 600)));
-      const reading = await contents.executeJavaScript(page.inPage(page.pageRead, readOptions(value)), true);
-      return reading && typeof reading === 'object' ? reading : { ok: false, error: '阅读页没有返回内容' };
+      // `html`: the page's markup as it is now, for the web reader of the Agent (web_fetch / web_search), which turns it
+      // into Markdown itself; otherwise its text, links and tables (pageRead).
+      const reading = value.html === true
+        ? { ok: true, html: String(await contents.executeJavaScript('document.documentElement ? document.documentElement.outerHTML : ""', true) || '').slice(0, READ_HTML_MAX) }
+        : await contents.executeJavaScript(page.inPage(page.pageRead, readOptions(value)), true);
+      if (!reading || typeof reading !== 'object') return { ok: false, error: '阅读页没有返回内容' };
+      // A reader that landed on a sign-in page or a human check says so: the Agent then opens the address as a tab and
+      // asks the user there, instead of taking the sign-in page for the content.
+      let passwordFields = 0;
+      try { passwordFields = Number(await contents.executeJavaScript('document.querySelectorAll(\'input[type="password"]\').length', true)) || 0; } catch { /* page went away */ }
+      let title = '';
+      try { title = contents.getTitle() || ''; } catch { /* page went away */ }
+      let landed = url;
+      try { landed = contents.getURL() || url; } catch { /* page went away */ }
+      return { ...reading, url: landed, title, signIn: passwordFields > 0 || signInAddress(landed), challenge: VERIFY_PAGE.test(title) };
     } finally {
       // The page closes before its window: an off-screen page whose window is already gone crashes Electron's
       // webContents.getFocusedWebContents() (used by menu roles such as Copy) until the page itself is destroyed.
@@ -1846,6 +2023,61 @@ exports.createBrowser = (window, log, options = {}) => {
   };
 
   /**
+   * Send one email through the Gmail or Outlook website the tabs are signed in to (browser-web-mail-send.cjs), for a
+   * scheduled email and the Agent's `mail` tool when no mailbox is connected through its API. The compose page is a page
+   * of its own in the tabs' session, off-screen like a reader page and never part of the workspace; it draws and takes
+   * input at full rate and closes when the send is done. One send at a time, so two emails due together do not race.
+   */
+  let mailQueue = Promise.resolve();
+  const sendWebMailNow = async (value) => {
+    const account = typeof value.account === 'string' ? value.account.trim() : '';
+    let provider = value.provider === 'google' || value.provider === 'microsoft' ? value.provider : '';
+    let signedIn = {};
+    if (!provider) {
+      signedIn = await webMail.state();
+      const gmail = signedIn.google?.signedIn ? signedIn.google : undefined;
+      const outlook = signedIn.microsoft?.signedIn ? signedIn.microsoft : undefined;
+      // Gmail names its address; Outlook only a name, so an address that is not the Gmail one goes to Outlook.
+      if (account && gmail && bareAddress(gmail.account) === bareAddress(account)) provider = 'google';
+      else if (account && outlook) provider = 'microsoft';
+      else provider = gmail ? 'google' : outlook ? 'microsoft' : '';
+      if (!provider) throw new Error('内置浏览器里没有登录 Gmail 或 Outlook 网页版：请先在内置浏览器登录，或在 设置 → 连接 里连接邮箱');
+    }
+    const strings = (list) => (Array.isArray(list) ? list.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim()).slice(0, 50) : []);
+    const message = { to: strings(value.to), cc: strings(value.cc), bcc: strings(value.bcc), subject: String(value.subject || ''), text: String(value.text || '') };
+    const sender = new BrowserWindow({
+      show: false,
+      width: AGENT_VIEWPORT.width,
+      height: AGENT_VIEWPORT.height,
+      webPreferences: { offscreen: true, session: partition, sandbox: true, contextIsolation: true, nodeIntegration: false, disableDialogs: true, backgroundThrottling: false },
+    });
+    const contents = sender.webContents;
+    try {
+      contents.setAudioMuted(true);
+      contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+      setAgent(contents, provider === 'google' ? 'https://mail.google.com/' : 'https://outlook.live.com/');
+      const sent = await sendThroughPage(contents, { provider, message, account, timeoutMs: bounded(value.timeoutMs, 10000, 120000, 60000), log });
+      log(`已通过 ${provider === 'google' ? 'Gmail' : 'Outlook'} 网页发出邮件（${sent.ms} ms）`);
+      const from = signedIn[provider]?.account;
+      return { ...sent, ...(from ? { account: from } : {}) };
+    } finally {
+      // As with a reader page: the page closes before its window (an off-screen page outliving its window crashes
+      // getFocusedWebContents), and without asking whether to leave a form that was filled in.
+      if (!contents.isDestroyed()) {
+        const gone = new Promise((resolve) => { contents.once('destroyed', resolve); setTimeout(resolve, 2000); });
+        try { contents.close({ waitForBeforeUnload: false }); } catch { /* already closing */ }
+        await gone;
+      }
+      try { if (!sender.isDestroyed()) sender.destroy(); } catch { /* already gone */ }
+    }
+  };
+  const sendWebMail = (value) => {
+    const run = mailQueue.then(() => sendWebMailNow(value));
+    mailQueue = run.catch(() => undefined);
+    return run;
+  };
+
+  /**
    * One browser command. `context.agent` marks a command from the Agent's workspace tool: before it reads or acts on a
    * tab, that tab is kept awake (a background tab would otherwise ignore its input).
    */
@@ -1854,9 +2086,31 @@ exports.createBrowser = (window, log, options = {}) => {
     const action = String(value.action || '');
     if (context.agent === true && AGENT_TAB_ACTIONS.has(action)) {
       const tab = tabs.get(value.tabId || activeTabId || DEFAULT_TAB);
-      if (tab && !tab.destroyed) keepAwake(tab);
+      if (tab && !tab.destroyed) {
+        keepAwake(tab);
+        await widenForAgent(tab);
+      }
+    }
+    if (context.agent === true && CHALLENGE_REFUSED.has(action)) {
+      const tab = tabs.get(value.tabId || activeTabId || DEFAULT_TAB);
+      if (tab && !tab.destroyed && tab.challenge) {
+        throw new Error(`这个页面是网站的人机验证（${tab.title || tab.url}），Agent 不能点击、输入或运行脚本去通过它，也不要绕开它；请用 workspace 的 handoff（reason: "verify"）请用户完成`);
+      }
     }
     switch (action) {
+      case 'handoff': {
+        // The Agent asks the user for a step only a person may take on this tab (sign in, a human check); the answer
+        // comes from the tab's own bar, or from the page finishing the step by itself (browser-help.cjs).
+        const tab = requireTab(value.tabId);
+        try { if (!window.isDestroyed() && !window.isFocused()) window.flashFrame(true); } catch { /* window going away */ }
+        return helpDesk.ask(tab, value);
+      }
+      case 'handoff-answer': {
+        if (context.agent === true) throw new Error('只有用户能回答 Agent 的求助');
+        return { ok: helpDesk.answer(requireTab(value.tabId), String(value.helpId || ''), String(value.outcome || '')) };
+      }
+      case 'handoff-cancel':
+        return { ok: helpDesk.cancel(requireTab(value.tabId)) };
       case 'open': {
         // The page owns the tab id (`browser:<url>`); the host view is created under that id so both sides agree, and a
         // later `ensure` from the panel finds the same tab instead of opening another one.
@@ -1972,6 +2226,8 @@ exports.createBrowser = (window, log, options = {}) => {
         return [...tabs.values()].map(stateOf);
       case 'webMail':
         return webMail.state();
+      case 'webMailSend':
+        return sendWebMail(value);
       case 'state':
         return stateOf(requireTab(value.tabId));
       case 'navigate':
@@ -1980,6 +2236,12 @@ exports.createBrowser = (window, log, options = {}) => {
       case 'forward': { const target = requireTab(value.tabId); contentsOf(target).navigationHistory.goForward(); return { ok: true }; }
       case 'reload': { const target = requireTab(value.tabId); contentsOf(target).reload(); return { ok: true }; }
       case 'stop': { const target = requireTab(value.tabId); contentsOf(target).stop(); return { ok: true }; }
+      // Browser fullscreen ended in the workspace (its button, F11, Esc): a site still full screen leaves it too.
+      case 'exitFullscreen': {
+        const target = requireTab(value.tabId);
+        if (target.siteFullscreen) await contentsOf(target).executeJavaScript('document.fullscreenElement ? document.exitFullscreen().catch(() => {}) : undefined', true).catch(() => undefined);
+        return { ok: true };
+      }
       case 'mute': {
         // The speaker on a website tab (or the Agent): sound on or off for this tab only.
         const target = requireTab(value.tabId);
@@ -1988,13 +2250,35 @@ exports.createBrowser = (window, log, options = {}) => {
         return stateOf(target);
       }
       case 'darkMode': {
-        // From the app page: whether it is dark and its colors (for "auto"), and/or a new general `mode`.
-        if (typeof value.appDark === 'boolean') appDark = value.appDark;
-        if (value.colors && typeof value.colors === 'object') appColors = { background: value.colors.background, text: value.colors.text };
-        if (value.mode !== undefined) darkStore.setMode(value.mode);
-        for (const tab of tabs.values()) paintViewBackground(tab);
-        syncDarkAll();
-        return { ok: true, ...darkStore.get(), appDark };
+        // From the app page: whether it is dark and its colors (for "auto"), and/or a new general `mode`. Without any of
+        // them it only answers with the current choice (a website tab's menu asks before it opens).
+        let changed = false;
+        if (typeof value.appDark === 'boolean' && value.appDark !== appDark) {
+          appDark = value.appDark;
+          changed = true;
+        }
+        if (value.colors && typeof value.colors === 'object') {
+          const colors = { background: value.colors.background, text: value.colors.text };
+          if (colors.background !== appColors?.background || colors.text !== appColors?.text) changed = true;
+          appColors = colors;
+        }
+        if (value.mode !== undefined && value.mode !== darkStore.get().mode) {
+          darkStore.setMode(value.mode);
+          changed = true;
+        }
+        // The general mode chosen from a tab's menu is meant for that tab's site too: a choice of its own for that site
+        // ("never dark on this site") would otherwise keep it as it was, while the menu showed the new mode ticked.
+        const from = typeof value.tabId === 'string' ? tabs.get(value.tabId) : undefined;
+        if (value.mode !== undefined && value.clearSite === true && from?.url && darkStore.get().sites[darkStore.hostOf(from.url)]) {
+          darkStore.setSite(from.url, undefined);
+          changed = true;
+        }
+        if (changed) {
+          for (const tab of tabs.values()) paintViewBackground(tab);
+          syncDarkAll();
+        }
+        const site = from?.url ? darkStore.get().sites[darkStore.hostOf(from.url)] || null : null;
+        return { ok: true, ...darkStore.get(), appDark, darkMode: darkStore.get().mode, darkSite: site };
       }
       case 'language': {
         // The browser's language for every site. The active tab loads again so its site answers in that language at
@@ -2107,9 +2391,25 @@ exports.createBrowser = (window, log, options = {}) => {
       case 'readUrl':
         return readAddress(value);
       case 'downloads': {
-        // Finished downloads and the ones still running, so a long download is visible while it happens.
+        // Finished downloads and the ones still running, so a long download is visible while it happens. A finished file
+        // that is no longer where it was saved is marked `missing` (the list offers no "open" for it).
         const running = [...tabs.values()].flatMap((tab) => [...tab.downloads.values()].map((entry) => ({ ...entry.record, state: 'progressing' })));
-        return { folder: app.getPath('downloads'), downloads: [...downloadLog.slice(-50), ...running].filter((entry) => !value.tabId || entry.tabId === value.tabId) };
+        const finished = downloadLog.map((entry) => (entry.state === 'completed' && !require('node:fs').existsSync(entry.savePath) ? { ...entry, missing: true } : entry));
+        return { folder: app.getPath('downloads'), downloads: [...finished, ...running].filter((entry) => !value.tabId || entry.tabId === value.tabId) };
+      }
+      case 'download-icon': {
+        // The system's icon of a downloaded file (its type's icon, or a program's own), small, for the downloads list.
+        const target = String(value.path || '');
+        if (!require('node:path').isAbsolute(target)) throw new Error('需要绝对路径');
+        const image = await app.getFileIcon(target, { size: 'normal' });
+        return { icon: image.isEmpty() ? '' : image.toDataURL() };
+      }
+      case 'downloads-clear': {
+        // The downloads list's "Clear list": finished downloads leave the list (one by id, or all). Files stay on disk.
+        const before = downloadLog.length;
+        for (let index = downloadLog.length - 1; index >= 0; index--) if (!value.id || downloadLog[index].id === value.id) downloadLog.splice(index, 1);
+        if (downloadLog.length !== before) downloadHistory.save();
+        return { ok: true, removed: before - downloadLog.length };
       }
       case 'download': {
         // Fetch one link as a download in the tab's own session (its cookies and sign-in), the way "Save link as" does.
@@ -2133,8 +2433,9 @@ exports.createBrowser = (window, log, options = {}) => {
         throw new Error(`没有正在进行的下载 ${value.id || ''}`);
       }
       case 'download-retry': {
+        // In the tab it came from, or else in the asking tab (a download from an earlier run belongs to no tab).
         const record = downloadLog.find((entry) => entry.id === value.id && entry.url);
-        const tab = record ? tabs.get(record.tabId) : undefined;
+        const tab = record ? tabs.get(record.tabId) || tabs.get(value.tabId) : undefined;
         if (!record || !tab) throw new Error(`没有可重试的下载 ${value.id || ''}`);
         contentsOf(tab).downloadURL(record.url);
         return { ok: true, id: record.id, url: record.url };
@@ -2160,10 +2461,23 @@ exports.createBrowser = (window, log, options = {}) => {
         const store = requireBookmarks();
         const tab = value.tabId ? tabs.get(value.tabId) : undefined;
         const icon = tab && tab.url && safeOrigin(tab.url) === safeOrigin(value.url) ? await fetchIcon(tab) : undefined;
-        return { bookmarks: bookmarksChanged(store.add({ url: value.url, title: value.title, icon })) };
+        return { bookmarks: bookmarksChanged(store.add({ url: value.url, title: value.title, icon, note: value.note, noteAuto: value.noteAuto === true, noteBy: value.noteBy })) };
       }
       case 'bookmark-update':
-        return { bookmarks: bookmarksChanged(requireBookmarks().update(String(value.id || ''), { url: value.url, title: value.title })) };
+        return { bookmarks: bookmarksChanged(requireBookmarks().update(String(value.id || ''), { url: value.url, title: value.title, note: value.note, noteAuto: value.noteAuto === true, noteBy: value.noteBy })) };
+      case 'bookmark-note':
+        // The note alone, written by the app's note model or by the Agent while it works; the Agent never replaces a
+        // note the user wrote.
+        return { bookmarks: bookmarksChanged(requireBookmarks().setNote(String(value.id || ''), { note: value.note, by: context.agent === true ? 'agent' : value.by, keepUsers: context.agent === true })) };
+      case 'bookmark-used':
+        return { bookmarks: requireBookmarks().used(String(value.id || '')).length };
+      case 'page-info': {
+        // What a page says about itself (its title, description and headings, the start of its text), for the note of a
+        // bookmark the app writes when the user bookmarks the page. Read only; nothing in the page changes.
+        const tab = requireTab(value.tabId);
+        const info = await runInPage(tab, page.inPage(page.pageInfo, {})).catch(() => null);
+        return { url: tab.url, title: tab.title, ...(info && typeof info === 'object' ? info : {}) };
+      }
       case 'bookmark-remove':
         return { bookmarks: bookmarksChanged(requireBookmarks().remove(String(value.id || ''))) };
       case 'bookmarked':

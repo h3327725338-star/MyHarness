@@ -6,7 +6,7 @@
 
 ## Provider / Model 维护
 
-当前 MyHarness AI package 和 `ModelRuntime.create()` 没有默认 Provider catalog。Coding Agent 产品入口也不内置 Provider；`ModelRuntime` 从 `models.json`、模型 store、credential 和 extension/native Provider registration 组装 catalog 和 active collection；Provider 环境变量只在相应 Provider 已存在时参与 auth resolution。修改 Provider 时同步检查：
+当前 MyHarness AI package 和 `ModelRuntime.create()` 没有默认 Provider catalog。Coding Agent 产品入口唯一的现成 Provider 是 Nebius Token Factory 预设，它只在用户粘贴 Key 后写入 `models.json`（`nebius-preset.ts`、`nebius-setup.ts`），之后与普通自定义 Provider 相同；`ModelRuntime` 从 `models.json`、模型 store、credential 和 extension/native Provider registration 组装 catalog 和 active collection；Provider 环境变量只在相应 Provider 已存在时参与 auth resolution。修改 Provider 时同步检查：
 
 - `providers/models/config.ts` 的 models.json schema；
 - `providers/models/composer.ts` 的 base/config/extension 组合；

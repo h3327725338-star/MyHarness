@@ -28,6 +28,7 @@ import { migrateSettings } from "./migrations.ts";
 import { FileSettingsStorage, InMemorySettingsStorage, type SettingsStorage } from "./storage.ts";
 import type {
 	AutoMemorySettings,
+	BookmarkNotesSettings,
 	CodeIntelligenceSettings,
 	CommitDescriptionSettings,
 	CompactionSettings,
@@ -41,6 +42,7 @@ import type {
 	PackageSource,
 	PopupNotificationSettings,
 	ResolvedWebSearchSettings,
+	ScheduledTasksSettings,
 	SessionContinuitySettings,
 	Settings,
 	SettingsError,
@@ -64,6 +66,7 @@ export type { SettingsStorage } from "./storage.ts";
 export { FileSettingsStorage, InMemorySettingsStorage } from "./storage.ts";
 export type {
 	AutoMemorySettings,
+	BookmarkNotesSettings,
 	CodeIntelligenceSettings,
 	CommitDescriptionSettings,
 	CompactionSettings,
@@ -77,6 +80,7 @@ export type {
 	PackageSource,
 	PopupNotificationSettings,
 	ResolvedWebSearchSettings,
+	ScheduledTasksSettings,
 	SessionContinuitySettings,
 	Settings,
 	SettingsError,
@@ -134,7 +138,7 @@ function normalizeWebSearchSettings(settings: WebSearchSettings | undefined): Re
 			? source.parallelPages.value
 			: undefined;
 	return {
-		enabled: source.enabled === true,
+		enabled: typeof source.enabled === "boolean" ? source.enabled : defaults.enabled,
 		engines,
 		pagesPerSearch: clampWebSearchNumber(
 			source.pagesPerSearch,
@@ -699,7 +703,14 @@ export class SettingsManager {
 			changed = true;
 		}
 
-		for (const field of ["commitDescription", "translation", "worktreeNaming", "sessionContinuity"] as const) {
+		for (const field of [
+			"commitDescription",
+			"translation",
+			"bookmarkNotes",
+			"scheduledTasks",
+			"worktreeNaming",
+			"sessionContinuity",
+		] as const) {
 			const configured = this.globalSettings[field];
 			if (configured?.provider === providerId && (modelId === undefined || configured.model === modelId)) {
 				delete configured.provider;
@@ -876,7 +887,7 @@ export class SettingsManager {
 	getAutoMemorySettings(): AutoMemorySettings & { enabled: boolean } {
 		const settings = this.globalSettings.autoMemory;
 		return {
-			enabled: settings?.enabled ?? SETTINGS_DEFAULTS.featureEnabled,
+			enabled: settings?.enabled ?? SETTINGS_DEFAULTS.autoMemoryEnabled,
 			provider: settings?.provider,
 			model: settings?.model,
 			thinkingLevel: settings?.thinkingLevel,
@@ -1264,6 +1275,30 @@ export class SettingsManager {
 		this.globalSettings.translation = { ...this.globalSettings.translation, ...settings };
 		for (const key of ["provider", "model", "thinkingLevel", "targetLanguage"] as const)
 			if (key in settings) this.markModified("translation", key);
+		this.save();
+	}
+
+	/** Bookmark notes helper model: empty provider/model means the Conversation naming model, then the main model. */
+	getBookmarkNotesSettings(): BookmarkNotesSettings {
+		const { provider, model, thinkingLevel } = this.settings.bookmarkNotes ?? {};
+		return { provider, model, thinkingLevel };
+	}
+
+	setBookmarkNotesSettings(settings: BookmarkNotesSettings): void {
+		this.globalSettings.bookmarkNotes = { ...this.globalSettings.bookmarkNotes, ...settings };
+		for (const key of ["provider", "model", "thinkingLevel"] as const) this.markModified("bookmarkNotes", key);
+		this.save();
+	}
+
+	/** Scheduled Agent tasks' model: empty provider/model means the main model and its thinking level. */
+	getScheduledTasksSettings(): ScheduledTasksSettings {
+		const { provider, model, thinkingLevel } = this.settings.scheduledTasks ?? {};
+		return { provider, model, thinkingLevel };
+	}
+
+	setScheduledTasksSettings(settings: ScheduledTasksSettings): void {
+		this.globalSettings.scheduledTasks = { ...this.globalSettings.scheduledTasks, ...settings };
+		for (const key of ["provider", "model", "thinkingLevel"] as const) this.markModified("scheduledTasks", key);
 		this.save();
 	}
 

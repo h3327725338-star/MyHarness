@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Notification, Tray, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Notification, Tray, Menu, nativeTheme, clipboard } = require('electron');
 const { spawn } = require('node:child_process');
 const { mkdirSync, appendFileSync, readFileSync, existsSync, copyFileSync } = require('node:fs');
 const { createHash } = require('node:crypto');
@@ -11,15 +11,23 @@ const { attachPreviewLinks } = require('./preview-links.cjs');
 const { createAppPrefs, loginItem, repairLoginItem } = require('./app-prefs.cjs');
 const { attachZoom, cleanZoom, stepZoom } = require('./zoom.cjs');
 const { applyEngineLanguage } = require('./browser-language.cjs');
+const { createUiLanguage, readUiPrefs, systemUiLanguage, translator } = require('./ui-language.cjs');
+const { cannotStartPage, shellColors, shellMotion, startingPage } = require('./start-page.cjs');
+const { attachAppContextMenu } = require('./app-context-menu.cjs');
 const root = resolve(__dirname, '../..');
+// When this process started: the starting page counts the whole wait from here, and the time to the app page is kept
+// for the next start's hint (start-page.cjs).
+const launchStartedAt = Date.now() - process.uptime() * 1000;
 // Windows finds the app behind a toast click through this id and starts the executable that the matching Start Menu
 // shortcut names. A development run of electron.exe gets an id of its own: Electron writes that shortcut without the app
 // path, so sharing the installed app's id would let a click start Electron's default window instead of MyHarness.
 // Started by Windows at sign-in (see app-prefs.cjs): the window appears without taking the focus from what the user opened.
 const autostart = process.argv.includes('--autostart');
 const notificationAppId = app.isPackaged ? 'MyHarness' : 'MyHarness.Dev';
-// The packaged app retains the checkout's data anchor, not the exe's arbitrary directory.
-const anchor = app.isPackaged ? JSON.parse(readFileSync(join(__dirname, 'runtime.json'), 'utf8')).workingDirectory : root;
+// The everyday build retains the checkout's data anchor, not the exe's arbitrary directory. An installed copy (built
+// with --installer) records none and works in the user's own ~/.myharness, so its data is ~/.myharness/data; the
+// service also derives its data folder from this directory (`<cwd>/data`), which keeps the two the same.
+const anchor = app.isPackaged ? JSON.parse(readFileSync(join(__dirname, 'runtime.json'), 'utf8')).workingDirectory || join(homedir(), '.myharness') : root;
 const cwd = resolve(process.env.MYHARNESS_DESKTOP_CWD || anchor);
 const data = resolve(process.env.MYHARNESS_DATA_ROOT || join(cwd, 'data'));
 const logs = join(data, 'logs');
@@ -55,9 +63,21 @@ const workspaceRequest = (command, timeoutMs = 15000) => new Promise((resolve, r
   pendingUi.set(requestId, { resolve, reject, timer });
   window.webContents.send('desktop:workspace', { requestId, command });
 });
+const agentDir = process.env.MYHARNESS_CODING_AGENT_DIR || join(homedir(), '.myharness', 'agent');
 // Host browser storage only; Agent configuration and persisted data are not redirected.
-app.setPath('userData', join(process.env.MYHARNESS_CODING_AGENT_DIR || join(homedir(), '.myharness', 'agent'), 'desktop-profile'));
+app.setPath('userData', join(agentDir, 'desktop-profile'));
 app.setName('MyHarness');
+// What the host shows itself speaks the interface language (ui-language.cjs): say('English', '中文'). Until the user picks
+// one it is the language of Windows, read once per run so the host and the page (MYHARNESS_SYSTEM_LANGUAGE) agree.
+let windowsLanguage;
+const systemLanguage = () => {
+  if (!windowsLanguage) {
+    try { windowsLanguage = systemUiLanguage(app.getPreferredSystemLanguages()); } catch { windowsLanguage = 'en'; }
+  }
+  return windowsLanguage;
+};
+const uiLanguage = createUiLanguage(agentDir, systemLanguage);
+const say = translator(uiLanguage);
 // The website language of the built-in browser is the engine's own language from the start (browser-language.cjs).
 applyEngineLanguage(app, join(app.getPath('userData'), 'browser-language.json'));
 const prefs = createAppPrefs(app.getPath('userData'));
@@ -84,11 +104,20 @@ function taskbarIcon() {
 // The window comes back from the tray (or from a second start) where it was, restored and in front.
 const showWindow = () => { if (!window || window.isDestroyed()) return; if (window.isMinimized()) window.restore(); window.show(); window.focus(); };
 // The tray icon is there from the start, like other desktop apps, so the app can be shown or quit from it at any time.
+// Its menu is built again when the pointer reaches the icon after the interface language changed.
+let trayLanguage;
+const setTrayMenu = () => {
+  if (!tray || uiLanguage() === trayLanguage) return;
+  trayLanguage = uiLanguage();
+  tray.setContextMenu(Menu.buildFromTemplate([{ label: say('Show MyHarness', '显示 MyHarness'), click: showWindow }, { type: 'separator' }, { label: say('Quit MyHarness', '退出 MyHarness'), click: () => app.quit() }]));
+};
 function createTray() {
   if (tray) return;
   tray = new Tray(APP_ICON);
   tray.setToolTip('MyHarness');
-  tray.setContextMenu(Menu.buildFromTemplate([{ label: '显示 MyHarness', click: showWindow }, { type: 'separator' }, { label: '退出 MyHarness', click: () => app.quit() }]));
+  trayLanguage = undefined;
+  setTrayMenu();
+  tray.on('mouse-move', setTrayMenu);
   tray.on('click', showWindow);
   tray.on('double-click', showWindow);
 }
@@ -120,10 +149,13 @@ async function onCloseRequest() {
       } catch (error) {
         log(`应用内关闭询问不可用，改用系统对话框：${error.message}`);
         const { response, checkboxChecked } = await dialog.showMessageBox(window, {
-          type: 'question', title: '关闭 MyHarness', message: '关闭窗口后要做什么？',
-          detail: '最小化到托盘：窗口隐藏到任务栏右下角，正在运行的任务继续进行。\n退出：结束 MyHarness 和它正在运行的所有任务。\n\n以后可以在 设置 → 外观 → 桌面应用 中更改。',
-          buttons: ['最小化到托盘', '退出 MyHarness', '取消'], defaultId: 0, cancelId: 2, noLink: true,
-          checkboxLabel: '记住我的选择，不再询问', checkboxChecked: false,
+          type: 'question', title: say('Close MyHarness', '关闭 MyHarness'), message: say('What should happen when the window closes?', '关闭窗口后要做什么？'),
+          detail: say(
+            'Minimize to tray: the window hides in the taskbar corner; running tasks keep going.\nQuit: ends MyHarness and every task it is running.\n\nYou can change this later in Settings → Appearance → Desktop app.',
+            '最小化到托盘：窗口隐藏到任务栏右下角，正在运行的任务继续进行。\n退出：结束 MyHarness 和它正在运行的所有任务。\n\n以后可以在 设置 → 外观 → 桌面应用 中更改。',
+          ),
+          buttons: [say('Minimize to tray', '最小化到托盘'), say('Quit MyHarness', '退出 MyHarness'), say('Cancel', '取消')], defaultId: 0, cancelId: 2, noLink: true,
+          checkboxLabel: say('Remember my choice', '记住我的选择，不再询问'), checkboxChecked: false,
         });
         answer = { choice: ['tray', 'quit', 'cancel'][response], remember: checkboxChecked };
       }
@@ -137,27 +169,33 @@ async function onCloseRequest() {
   if (action === 'tray') hideToTray(); else quitApp();
 }
 const appPrefs = () => ({ ...prefs.get(), openAtLogin: app.getLoginItemSettings(loginItem(app)).openAtLogin });
-const escaped = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-// The window has no system title bar (frame: false), so the two pages the host shows itself (starting, cannot start) carry
-// their own drag strip and window buttons. They are the only non-service pages allowed to use the window controls: the
-// IPC check compares the sender with the exact page loaded here.
+// The window has no system title bar (frame: false), so the two pages the host shows itself (starting, cannot start,
+// start-page.cjs) carry their own drag strip and window buttons. They are the only non-service pages allowed to use the
+// window controls: the IPC check compares the sender with the exact page loaded here. They take the colors of the saved
+// appearance, so the app page that follows appears in the same colors.
 let shellUrl;
-// Colors are the dark theme's own values (tokens.css is not loaded on these pages).
-const shellGlyph = { min: '<path d="M6 12h12"/>', max: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>', restore: '<rect x="6" y="8.5" width="9.5" height="9.5" rx="1.5"/><path d="M8.5 8.5V7.5A1.5 1.5 0 0 1 10 6h6.5A1.5 1.5 0 0 1 18 7.5V14a1.5 1.5 0 0 1-1.5 1.5h-1"/>', close: '<path d="M6 18 18 6M6 6l12 12"/>' };
-const shellButton = (action, label, glyph, id = '') => `<button ${id ? `id="${id}" ` : ''}aria-label="${label}" title="${label}" onclick="myHarnessDesktop.windowControls.${action}()"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${glyph}</svg></button>`;
-const loadShell = (body) => {
-  const style = '<style>.wc{position:fixed;top:0;right:0;height:44px;display:flex;color:#a8adad;-webkit-app-region:no-drag}.wc button{width:46px;height:44px;border:0;border-radius:0;background:transparent;color:inherit;display:inline-flex;align-items:center;justify-content:center}.wc button:hover{background:#2a2c2c;color:#eee}.wc #wc-close:hover{background:#e8665f;color:#fff}</style>';
-  const sync = `<script>{const b=document.getElementById('wc-max'),c=window.myHarnessDesktop&&myHarnessDesktop.windowControls,g=${JSON.stringify({ max: shellGlyph.max, restore: shellGlyph.restore })},s=(v)=>{b.querySelector('svg').innerHTML=v&&v.maximized?g.restore:g.max;};if(c){c.state().then(s,()=>{});c.onState(s);}}</script>`;
-  const bar = `<div style="position:fixed;top:0;left:0;right:0;height:44px;-webkit-app-region:drag"></div><div class="wc">${shellButton('minimize', '最小化', shellGlyph.min)}${shellButton('toggleMaximize', '最大化/还原', shellGlyph.max, 'wc-max')}${shellButton('close', '关闭', shellGlyph.close, 'wc-close')}</div>`;
-  shellUrl = `data:text/html;charset=utf-8,${encodeURIComponent(`<html lang="zh-CN"><meta charset="utf-8"><title>MyHarness</title>${style}<body style="margin:0;background:#1e1f1f;color:#eee;font:16px system-ui;padding:64px 48px 48px">${bar}${body}${sync}</body></html>`)}`;
+const shellLook = () => {
+  const saved = readUiPrefs(agentDir);
+  return { lang: uiLanguage(), colors: shellColors(saved, nativeTheme.shouldUseDarkColors), motion: shellMotion(saved), say };
+};
+const loadShell = (html) => {
+  shellUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
   return window.loadURL(shellUrl);
 };
 const errorPage = async (message) => {
   log(message);
-  if (!window || window.isDestroyed()) { dialog.showErrorBox('MyHarness 桌面端启动失败', `${message}\n日志：${logs}`); return; }
+  if (!window || window.isDestroyed()) { dialog.showErrorBox(say('MyHarness could not start', 'MyHarness 桌面端启动失败'), `${message}\n${say('Logs: ', '日志：')}${logs}`); return; }
   browser?.destroy();
-  await loadShell(`<h2>MyHarness 无法启动</h2><pre style="white-space:pre-wrap">${escaped(message)}</pre><p>日志：${escaped(logs)}</p><p>请关闭窗口后重新启动。</p>`);
+  await loadShell(cannotStartPage({ ...shellLook(), message, logs }));
   window.show();
+};
+// How long this start took, from the process start to the app page loaded, kept for the next starting page. A start at
+// sign-in is left out: Windows is busy then, so it would make the hint promise a longer wait than the user's own starts.
+let startTimed = false;
+const noteStartTime = () => {
+  if (startTimed || autostart) return;
+  startTimed = true;
+  try { prefs.set({ lastStartMs: Date.now() - launchStartedAt }); } catch (error) { log(`无法保存启动用时：${error.message}`); }
 };
 async function stop() {
   if (stopping) return;
@@ -195,13 +233,13 @@ function startService(restart) {
   let requestedRestart;
   const entry = app.isPackaged ? join(__dirname, 'runtime/node_modules/@myharness/coding-agent/dist/web.js') : join(root, 'packages/coding-agent/src/web.ts');
   const loader = app.isPackaged ? undefined : join(root, 'scripts/dev-fast-loader.mjs');
-  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', MYHARNESS_PROCESS_ENTRY: entry, MYHARNESS_DATA_ROOT: data, MYHARNESS_DESKTOP_HOST: '1' };
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', MYHARNESS_PROCESS_ENTRY: entry, MYHARNESS_DATA_ROOT: data, MYHARNESS_DESKTOP_HOST: '1', MYHARNESS_SYSTEM_LANGUAGE: systemLanguage() };
   if (loader) env.NODE_OPTIONS = `${env.NODE_OPTIONS || ''} --import=${require('node:url').pathToFileURL(loader).href}`.trim();
   if (app.isPackaged) env.MYHARNESS_SYSTEM_PROMPT_DIR = join(__dirname, 'runtime/system-prompts');
   job?.close();
   job = require('./windows-job.cjs').createJob();
   child = spawn(process.execPath, [join(__dirname, 'service-entry.cjs')], { cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
-  const timeout = setTimeout(() => { if (!serviceUrl) { void errorPage('本地服务启动超时（180 秒）'); job?.close(); job = undefined; } }, 180000);
+  const timeout = setTimeout(() => { if (!serviceUrl) { void errorPage(say('The local service did not start within 180 seconds.', '本地服务启动超时（180 秒）')); job?.close(); job = undefined; } }, 180000);
   let pending = '';
   for (const [stream, filename] of [[child.stdout, 'web-launch.out.log'], [child.stderr, 'web-launch.err.log']]) {
     stream.on('data', (chunk) => {
@@ -210,15 +248,15 @@ function startService(restart) {
       const found = pending.match(/MyHarness Web UI: (http:\/\/127\.0\.0\.1:\d+\/)/);
       if (found && !serviceUrl) {
         clearTimeout(timeout); serviceUrl = found[1];
-        void migratePrefs(serviceUrl).then((query) => window.loadURL(serviceUrl + query)).then(() => (autostart ? window.showInactive() : window.show())).catch((error) => errorPage(`界面加载失败：${error.message}`));
+        void migratePrefs(serviceUrl).then((query) => window.loadURL(serviceUrl + query)).then(() => { noteStartTime(); return autostart ? window.showInactive() : window.show(); }).catch((error) => errorPage(`${say('The interface failed to load: ', '界面加载失败：')}${error.message}`));
       }
     });
   }
   child.once('spawn', () => {
     try { job.assign(child.pid); child.send({ type: 'start', entry, args: ['--port', String(restart?.port || 0), '--no-open', ...(restart?.session ? ['--session', restart.session] : ['--continue'])], loader }); }
-    catch (error) { child.kill(); void errorPage(`无法建立服务进程管理：${error.message}`); }
+    catch (error) { child.kill(); void errorPage(`${say('Could not set up the service process group: ', '无法建立服务进程管理：')}${error.message}`); }
   });
-  child.once('error', (error) => { clearTimeout(timeout); void errorPage(`本地服务启动失败：${error.message}`); });
+  child.once('error', (error) => { clearTimeout(timeout); void errorPage(`${say('The local service failed to start: ', '本地服务启动失败：')}${error.message}`); });
   let restartDeadline;
   child.on('message', (message) => {
     // The Agent session's workspace tool asks the host process for browser or page commands; the answer goes back over
@@ -245,7 +283,7 @@ function startService(restart) {
     clearTimeout(timeout);
     clearTimeout(restartDeadline);
     if (!stopping && requestedRestart) { startService(requestedRestart); return; }
-    if (!stopping) void errorPage(`本地服务已退出（${code}）。请查看日志中的具体原因。`);
+    if (!stopping) void errorPage(say(`The local service exited (${code}). The logs say why.`, `本地服务已退出（${code}）。请查看日志中的具体原因。`));
   });
 }
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -263,12 +301,15 @@ else {
         .then(() => pointShortcutIcons({ aumid: notificationAppId, exe: process.execPath, icon: taskbarIcon(), log }));
       void repairLoginItem(app, { log });
     }
-    window = new BrowserWindow({ width: 1440, height: 960, minWidth: 980, minHeight: 600, show: false, frame: false, title: 'MyHarness', backgroundColor: '#1e1f1f', icon: APP_ICON, webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    const look = shellLook();
+    window = new BrowserWindow({ width: 1440, height: 960, minWidth: 980, minHeight: 600, show: false, frame: false, title: 'MyHarness', backgroundColor: look.colors.bg, icon: APP_ICON, webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.setMenu(null);
+    // Right-click in the app: copy, paste and the like for text, copy or save a picture (app-context-menu.cjs).
+    attachAppContextMenu(window, { Menu, clipboard, say });
     createTray();
     // Selection translation in website tabs goes to the running service, like the app page's own "Translate".
     const translate = async (text, choice = {}) => {
-      if (!serviceUrl) throw new Error('本地服务还没有就绪');
+      if (!serviceUrl) throw new Error(say('The local service is not ready yet', '本地服务还没有就绪'));
       const response = await fetch(new URL('/api/translate', serviceUrl), {
         method: 'POST',
         headers: { 'x-myharness-web': '1', 'content-type': 'application/json' },
@@ -276,7 +317,7 @@ else {
         signal: AbortSignal.timeout(120000),
       });
       const answer = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(answer?.error || `翻译失败（${response.status}）`);
+      if (!response.ok) throw new Error(answer?.error || say(`Translation failed (${response.status})`, `翻译失败（${response.status}）`));
       return answer;
     };
     // The saved target language, so a website tab's card shows it before the translation arrives.
@@ -294,7 +335,7 @@ else {
       const response = await fetch(address, { headers: { 'x-myharness-web': '1' }, signal: AbortSignal.timeout(10000) });
       return response.ok ? Buffer.from(await response.arrayBuffer()) : null;
     };
-    browser = createBrowser(window, log, { workspaceRoot: cwd, profileDir: app.getPath('userData'), translate, translationLanguage, translationVoice });
+    browser = createBrowser(window, log, { workspaceRoot: cwd, profileDir: app.getPath('userData'), translate, translationLanguage, translationVoice, uiLanguage });
     // Zoom of the app's own window: Ctrl + "+" / "-" / 0 and Ctrl + wheel while the keyboard is in the app (a website tab
     // zooms itself, see browser-view.cjs), or Settings → Appearance → Desktop app. It is kept across restarts and every page load.
     const setAppZoom = (factor) => {
@@ -417,7 +458,7 @@ else {
     for (const event of ['maximize', 'unmaximize', 'restore', 'enter-full-screen', 'leave-full-screen', 'focus', 'blur'])
       window.on(event, () => { if (!window.webContents.isDestroyed()) window.webContents.send('desktop:window-state', windowState()); });
     window.on('close', (event) => { if (!finished) { event.preventDefault(); void onCloseRequest(); } });
-    await loadShell('<span style="color:#ccc">正在启动 MyHarness…</span>');
+    await loadShell(startingPage({ ...look, startedAt: launchStartedAt, lastMs: prefs.get().lastStartMs }));
     if (autostart) window.showInactive(); else window.show();
     startService();
   }).catch((error) => void errorPage(error.stack || error.message));

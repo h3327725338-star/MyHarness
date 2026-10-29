@@ -7,7 +7,7 @@ import { t, serverText } from "./i18n.js";
 import { chatTitle, clip, normPath, relTime } from "./util.js";
 
 import { isLeftBlank, orderChats } from "./chat-order.js";
-import { shortcutFor } from "./shortcuts.js";
+import { shortcutFor, withShortcut } from "./shortcuts.js";
 import { chatModeOf, draftHasContent, expandedKey } from "./chat-modes.js";
 import { ModeSwitch, ModeTasks } from "./mode-switch.js";
 import { ExportSidebarFoot, exportReadOnly } from "./export-mode.js";
@@ -681,10 +681,10 @@ export function Sidebar() {
 	return html`<aside class=${`sidebar${sidebarOpen ? "" : " is-collapsed"}`} aria-label=${t("Workspaces and chats")} onPointerEnter=${peekSidebarEnter} onPointerLeave=${peekSidebarLeave}>
 		<div class="sidebar-top">
 			<div class="brand"><${ModeSwitch} /><span class="grow">MyHarness</span>
-				<button class="icon-btn sm" title=${`${sidebarOpen ? t("Hide sidebar") : t("Show sidebar")} (${shortcutFor("sidebar", shortcuts)})`} aria-label=${sidebarOpen ? t("Hide sidebar") : t("Show sidebar")} onClick=${() => setView({ sidebarOpen: !sidebarOpen })}><${Icon} name="sidebar" size=${16} /></button></div>
+				<button class="icon-btn sm" title=${withShortcut(sidebarOpen ? t("Hide sidebar") : t("Show sidebar"), "sidebar", shortcuts)} aria-label=${sidebarOpen ? t("Hide sidebar") : t("Show sidebar")} onClick=${() => setView({ sidebarOpen: !sidebarOpen })}><${Icon} name="sidebar" size=${16} /></button></div>
 			<${ModeTasks} />
-			<button class="nav-btn primary-nav" data-export-offline="true" onClick=${() => actions.newChat()} title=${t("New chat in Default (it belongs to no workspace)")}><${Icon} name="edit" size=${16} />${t("New chat")}<span class="kbd">${shortcutFor("newChat", shortcuts)}</span></button>
-			<button class="nav-btn" onClick=${() => setView({ palette: true })}><${Icon} name="search" size=${16} />${t("Search & commands")}<span class="kbd">${shortcutFor("palette", shortcuts)}</span></button>
+			<button class="nav-btn primary-nav" data-export-offline="true" onClick=${() => actions.newChat()} title=${t("New chat in Default (it belongs to no workspace)")}><${Icon} name="edit" size=${16} />${t("New chat")}</button>
+			<button class="nav-btn" onClick=${() => setView({ palette: true })}><${Icon} name="search" size=${16} />${t("Search & commands")}${shortcutFor("palette", shortcuts) ? html`<span class="kbd">${shortcutFor("palette", shortcuts)}</span>` : null}</button>
 		</div>
 		<div class="sidebar-search"><input ref=${searchRef} class="field sm" placeholder=${t("Filter chats…")} value=${filterText} onInput=${(e) => setFilterText(e.target.value)} aria-label=${t("Filter chats")} /></div>
 		<div class="sidebar-scroll" key=${mode}>

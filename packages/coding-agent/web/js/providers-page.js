@@ -3,11 +3,12 @@
 // provider sits apart at the bottom. Opening or switching providers only reads what is saved: no endpoint is contacted.
 import { html, useEffect, useRef, useState, Icon, Spinner, Toggle } from "./ui.js";
 import { Select } from "./select.js";
-import { api, attempt, loadModels, loadProviders, post, setView, toast, useStore } from "./store.js";
+import { api, attempt, loadModels, loadProviders, loadSettings, post, setView, toast, useStore } from "./store.js";
 import { confirmDialog, inputDialog } from "./actions.js";
 import { clip } from "./util.js";
-import { serverText, t, tNodes } from "./i18n.js";
+import { N_, serverText, t, tNodes } from "./i18n.js";
 import { ProviderForm } from "./provider-form.js";
+import { nebiusSummary, openServicePage, useNebiusInfo } from "./service-keys.js";
 
 const NEW = "\u0000new";
 
@@ -212,11 +213,118 @@ function ProviderDetail({ provider, entry, apiTypes, defaults, onSaved, onDirty,
 	</div>`;
 }
 
+const NEBIUS = "nebius";
+
+/** Which NVIDIA Nemotron model does which job once a Token Factory key is saved (NEBIUS_ROLE_PLAN on the server). */
+const NEBIUS_PLAN = [
+	{ model: "Nemotron 3 Ultra", jobs: N_("Main model") },
+	{ model: "Nemotron 3.5 Lightning", jobs: N_("Sub-agents, compaction, fallback, Auto Memory, hand-off notes, commit descriptions, bookmark notes, scheduled tasks, worktree naming, branch summaries") },
+	{ model: "Nemotron 3 Nano", jobs: N_("Conversation naming, translation") },
+	{ model: "Nemotron 3.5 Super VL", jobs: N_("Vision assistant (reads images)") },
+];
+
+function NebiusPlan() {
+	return html`<section class="set-card">
+		<div class="set-card-head"><div class="col grow"><strong>${t("Who does what")}</strong><span class="set-card-desc">${t("Only jobs you have not set get a model; a job with its own model keeps it. Without Nano on the account, Lightning takes its jobs.")}</span></div></div>
+		<div class="set-card-body nebius-plan">
+			${NEBIUS_PLAN.map((row) => html`<div class="nebius-plan-row" key=${row.model}><span class="nebius-plan-model">${row.model}</span><span class="dim">${t(row.jobs)}</span></div>`)}
+		</div>
+	</section>`;
+}
+
+/** What a setup did, under the button that ran it. */
+function NebiusResult({ result }) {
+	if (!result) return null;
+	return html`<div class="notice ok" role="status">${nebiusSummary(result)}${result.turnedOn?.length ? ` ${t("Turned on: {jobs}.", { jobs: result.turnedOn.map((job) => t(NEBIUS_JOB_NAMES[job] || job)).join(", ") })}` : ""}${result.listError ? html`<div class="dim">${t("The model list could not be read, so only the checked models were added: {error}", { error: result.listError })}</div>` : null}</div>`;
+}
+
+const NEBIUS_JOB_NAMES = { visionAssistant: N_("Vision assistant"), subAgent: N_("Sub-agents"), fallbackModel: N_("Fallback model"), conversationNaming: N_("Conversation naming") };
+
+const runNebiusSetup = async (apiKey) => {
+	const result = await post("/api/providers/nebius/setup", apiKey ? { apiKey } : {});
+	if (!result?.ok) throw new Error(serverText(result?.message, t("The key could not be saved.")));
+	await Promise.all([loadProviders(), loadSettings()]);
+	loadModels();
+	return result;
+};
+
+/** Nebius before it is set up: get a key, paste it, and every job gets its model. */
+function NebiusSetup({ onDone }) {
+	const [value, setValue] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState("");
+	const save = async () => {
+		if (!value.trim() || busy) return;
+		setBusy(true);
+		setError("");
+		try {
+			const result = await runNebiusSetup(value.trim());
+			toast(nebiusSummary(result), "info", 5000);
+			setValue("");
+			onDone(result);
+		} catch (failure) {
+			setError(failure.message);
+		} finally {
+			setBusy(false);
+		}
+	};
+	return html`<div class="stack">
+		<div class="prov-head"><div class="col grow"><div class="prov-title truncate">Nebius Token Factory <span class="badge">${t("Built in")}</span></div><div class="dim">${t("NVIDIA Nemotron models, served by Nebius Token Factory. Paste one API key and every job gets its model.")}</div></div></div>
+		<section class="set-card">
+			<div class="set-card-head"><strong>${t("API key")}</strong></div>
+			<div class="set-card-body col">
+				<div class="row nebius-get"><button class="btn" onClick=${() => openServicePage(NEBIUS)}><${Icon} name="externalLink" size=${13} />${t("Get an API key")}</button><span class="dim">${t("Opens Token Factory: sign in, create a key, and paste it here or in the strip above the page.")}</span></div>
+				<form class="key-add stacked" onSubmit=${(event) => { event.preventDefault(); void save(); }}>
+					<input class="field mono" type="password" autocomplete="off" spellcheck=${false} placeholder=${t("Paste the API key")} aria-label=${t("{name} API key", { name: "Nebius Token Factory" })} value=${value} onInput=${(e) => setValue(e.target.value)} />
+					<button class="btn primary" type="submit" disabled=${busy || !value.trim()}>${busy ? html`<${Spinner} size=${12} />` : null}${t("Save and set up")}</button>
+				</form>
+				${error ? html`<div class="notice danger" role="alert">${error}</div>` : null}
+				<span class="dim pf-hint">${t("The key is checked against your account's model list first (a free request) and stored on this computer only.")}</span>
+			</div>
+		</section>
+		<${NebiusPlan} />
+	</div>`;
+}
+
+/** Nebius once it is set up: the console (balance, top-up, keys), this computer's estimate, and the jobs set up again. */
+function NebiusExtras({ info, onChanged }) {
+	const [busy, setBusy] = useState(false);
+	const [result, setResult] = useState(null);
+	const spend = info?.spend;
+	const amount = spend ? `${spend.currency === "CNY" ? "¥" : "$"}${spend.total.toFixed(spend.total < 1 ? 4 : 2)}` : "";
+	const again = async () => {
+		setBusy(true);
+		try {
+			setResult(await runNebiusSetup());
+			onChanged();
+		} catch (failure) {
+			toast(failure.message, "error");
+		} finally {
+			setBusy(false);
+		}
+	};
+	return html`<section class="set-card nebius-card">
+		<div class="set-card-head"><div class="col grow"><strong>${t("Balance and spending")}</strong><span class="set-card-desc">${t("Token Factory has no balance API: the balance and Top up are in its console. This computer estimates what it spent from the model prices.")}</span></div></div>
+		<div class="set-card-body col">
+			<div class="nebius-spend" role="status">${spend ? t("Estimated on this computer: {amount} since {date} ({count} requests). The Token Factory bill is what counts.", { amount, date: new Date(spend.since).toLocaleDateString(), count: spend.requests }) : t("Nothing spent from this computer yet.")}</div>
+			<div class="row nebius-links">
+				<button class="btn sm" onClick=${() => openServicePage(NEBIUS, info?.consoleUrl, { keyStrip: false })}><${Icon} name="externalLink" size=${13} />${t("Balance and top up")}</button>
+				<button class="btn sm" onClick=${() => openServicePage(NEBIUS)}><${Icon} name="key" size=${13} />${t("Get an API key")}</button>
+				<button class="btn sm" disabled=${busy} title=${t("Give Nemotron models to the jobs that have no model of their own")} onClick=${again}>${busy ? html`<${Spinner} size=${12} />` : null}${t("Set up jobs again")}</button>
+			</div>
+			<${NebiusResult} result=${result} />
+		</div>
+	</section>`;
+}
+
 export function ProvidersPage() {
 	const providers = useStore((s) => s.providers);
 	const request = useStore((s) => s.view.providerSel);
 	const [custom, setCustom] = useState(null);
 	const [sel, setSel] = useState(request || null);
+	const [nebiusNonce, setNebiusNonce] = useState(0);
+	const [nebiusResult, setNebiusResult] = useState(null);
+	const nebiusInfo = useNebiusInfo(nebiusNonce);
 	const dirty = useRef(false);
 	const loadCustom = () =>
 		api("/api/providers/custom")
@@ -232,10 +340,14 @@ export function ProvidersPage() {
 		setSel(request);
 		setView({ providerSel: null });
 	}, [request]);
-	const list = providers?.providers || [];
-	const current = sel === NEW ? null : list.find((p) => p.id === sel) || list[0];
+	// Nebius is always offered, first: before it is set up the list shows it anyway, and an empty list opens on it.
+	const listed = providers?.providers || [];
+	const nebiusListed = listed.some((p) => p.id === NEBIUS);
+	const list = nebiusListed ? [...listed.filter((p) => p.id === NEBIUS), ...listed.filter((p) => p.id !== NEBIUS)] : listed;
+	const nebiusSetup = !nebiusListed && (sel === NEBIUS || (!sel && !list.length));
+	const current = sel === NEW || nebiusSetup ? null : list.find((p) => p.id === sel) || list[0];
 	const choose = async (id) => {
-		if (id === (current?.id ?? (sel === NEW ? NEW : null))) return;
+		if (id === (current?.id ?? (sel === NEW ? NEW : nebiusSetup ? NEBIUS : null))) return;
 		if (dirty.current && !(await confirmDialog({ title: t("Discard unsaved changes?"), message: t("The changes to this provider have not been saved."), confirmLabel: t("Discard"), danger: true }))) return;
 		dirty.current = false;
 		setSel(id);
@@ -252,26 +364,33 @@ export function ProvidersPage() {
 	return html`<div class="prov">
 		<div class="prov-list" role="listbox" aria-label=${t("Providers")}>
 			${!providers ? html`<div class="empty"><${Spinner} /></div>` : null}
+			${providers && !nebiusListed
+				? html`<button key=${NEBIUS} role="option" aria-selected=${nebiusSetup} class=${`prov-item prov-builtin ${nebiusSetup ? "on" : ""}`} onClick=${() => choose(NEBIUS)}>
+					<span class="dot warn" title=${t("No API key")} />
+					<span class="col grow"><span class="truncate">Nebius Token Factory</span><span class="dim truncate prov-item-sub">${t("Built in · NVIDIA Nemotron")}</span></span>
+				</button>`
+				: null}
 			${list.map((p) => {
 				const status = statusOf(p);
-				return html`<button key=${p.id} role="option" aria-selected=${current?.id === p.id && sel !== NEW} class=${`prov-item ${current?.id === p.id && sel !== NEW ? "on" : ""}`} onClick=${() => choose(p.id)}>
+				return html`<button key=${p.id} role="option" aria-selected=${current?.id === p.id && sel !== NEW} class=${`prov-item ${p.id === NEBIUS ? "prov-builtin" : ""} ${current?.id === p.id && sel !== NEW ? "on" : ""}`} onClick=${() => choose(p.id)}>
 					<span class=${`dot ${status.cls}`} title=${status.text} />
-					<span class="col grow"><span class="truncate">${p.name}</span><span class="dim mono truncate prov-item-sub">${p.id}</span></span>
+					<span class="col grow"><span class="truncate">${p.name}</span><span class="dim mono truncate prov-item-sub">${p.id === NEBIUS ? t("Built in · NVIDIA Nemotron") : p.id}</span></span>
 				</button>`;
 			})}
-			${providers && !list.length ? html`<div class="dim pf-hint prov-empty">${t("No providers yet.")}</div>` : null}
 			<button class=${`prov-item prov-add ${sel === NEW ? "on" : ""}`} onClick=${() => choose(NEW)}><${Icon} name="plus" size=${14} /><span>${t("Add provider")}</span></button>
 		</div>
 		<div class="prov-detail stack">
 			${providers?.error ? html`<div class="notice danger">${t("models.json: {error}", { error: providers.error })}</div>` : null}
 			${!providers || !custom
 				? html`<${Spinner} />`
+				: nebiusSetup
+					? html`<${NebiusSetup} onDone=${(result) => { setNebiusResult(result); setNebiusNonce((n) => n + 1); loadCustom(); setSel(NEBIUS); }} />`
 				: sel === NEW || !current
 					? html`<div class="stack">
 						<div class="prov-head"><div class="col grow"><div class="prov-title">${t("Add provider")}</div><div class="dim">${t("Any OpenAI-, Anthropic-, Gemini- or Mistral-compatible endpoint.")}</div></div></div>
 						<${ProviderForm} key="new" initial=${null} apiTypes=${custom.apiTypes} defaults=${custom.connectionDefaults} onSaved=${saved} onDirty=${(d) => (dirty.current = d)} />
 					</div>`
-					: html`<${ProviderDetail} key=${current.id} provider=${current} entry=${entry} apiTypes=${custom.apiTypes} defaults=${custom.connectionDefaults} onSaved=${saved} onDirty=${(d) => (dirty.current = d)} onDeleted=${() => (loadCustom(), setSel(null))} />`}
+					: html`${current.id === NEBIUS ? html`<${NebiusResult} result=${nebiusResult} /><${NebiusExtras} info=${nebiusInfo} onChanged=${() => setNebiusNonce((n) => n + 1)} />` : null}<${ProviderDetail} key=${current.id} provider=${current} entry=${entry} apiTypes=${custom.apiTypes} defaults=${custom.connectionDefaults} onSaved=${saved} onDirty=${(d) => (dirty.current = d)} onDeleted=${() => (loadCustom(), setNebiusResult(null), setNebiusNonce((n) => n + 1), setSel(null))} />`}
 			${providers?.modelsPath ? html`<div class="dim mono truncate pf-hint prov-path" title=${providers.modelsPath}>${providers.modelsPath}</div>` : null}
 		</div>
 	</div>`;

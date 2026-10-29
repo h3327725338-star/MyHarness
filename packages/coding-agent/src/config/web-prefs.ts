@@ -31,6 +31,15 @@ export function readWebPrefs(agentDir: string): StoredWebPrefs | null {
 	}
 }
 
+/**
+ * The interface language until the user picks one: the desktop host passes the language of Windows ("zh-CN" for
+ * Simplified Chinese, "en" for every other language). Without the host there is none; the page then goes by the browser.
+ */
+export function systemInterfaceLanguage(): "zh-CN" | "en" | undefined {
+	const value = process.env.MYHARNESS_SYSTEM_LANGUAGE;
+	return value === "zh-CN" || value === "en" ? value : undefined;
+}
+
 export function writeWebPrefs(agentDir: string, value: StoredWebPrefs): void {
 	const file = join(agentDir, WEB_PREFS_FILE);
 	mkdirSync(dirname(file), { recursive: true });

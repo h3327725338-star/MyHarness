@@ -159,8 +159,9 @@ Each record has a stable key (`kind:id`) and a per-device version vector.
 - Remote version dominates the local one: apply it.
 - Local version dominates: keep it.
 - Concurrent edits of a chat: the JSONL files are merged by entry id, preserving both branches. An entry, or the
-  header, that both devices changed differently keeps the local version and saves one copy of the remote file — even
-  when the merge itself changed nothing else.
+  header, that both devices changed differently takes the later change without asking: the other device's version
+  when its record time is later than this computer's file time, else this computer's (which then quietly saves one
+  copy of the other file to recover from). No review entry is made; older review entries of this kind are dropped.
 - Concurrent edits of a memory of any scope (global, workspace, session, archived, pending, profile): the two versions
   are merged line by line against the last version both devices committed (three-way merge). YAML frontmatter is
   merged by field: a timestamp keeps the later value, list fields keep the sorted union, and other fields keep the more
@@ -247,6 +248,10 @@ part stripped so the other device's user-folder prefix cannot block the match;
 skipped and the search is capped);
 4. otherwise a precise error: the file is still inside a Google Drive folder the Drive client has not delivered, or it
 was created on another computer and has not been synced here.
+
+A Markdown link keeps its address percent-encoded (`C:/Users/user/My%20Drive/.../a%20b.pdf`). The path as written goes
+through these steps first, so a file whose name really holds `%20` still opens; when that misses, the decoded path goes
+through them again.
 
 Suffix and basename candidates never leave the Workspace root, `..` and absolute suffixes are refused, and nothing is
 created or modified. The resolved local path is what gets opened or revealed.
@@ -517,8 +522,8 @@ All routes are local-only and use the same origin checks as the rest of the Web 
   physical computers through a real Drive. A vault is written again whenever its sign-ins changed (at most every 30
   minutes while browsing), and Drive keeps every uploaded version as an object; old versions are not cleaned up.
 - Batches over 5000 operations written by another client are refused; this daemon never writes such a batch itself.
-- Review entries remain only for a chat entry or title both devices changed, a Workspace identity both changed, and
-  delete-vs-edit; there is no “apply the other version” button yet, and the local path and the copy path are shown in
+- Review entries remain only for a Workspace identity both devices changed and delete-vs-edit (a chat entry or title
+  both changed goes to the later change); there is no “apply the other version” button yet, and the local path and the copy path are shown in
   full. Memories, the prompt, drafts, the saved prompts and files no longer create review entries: they merge
   automatically. These merges are tested with two devices on the in-memory Drive only.
 - A snapshot stands for its device's own batches by batch time. A device whose clock jumped backwards could publish a

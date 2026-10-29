@@ -43,7 +43,7 @@ node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts
 
 ## Provider 配置与启动约定
 
-MyHarness 的 library 层采用手动 Provider 模式：`ModelRuntime.create()` 不自动加载上游 Provider 或模型目录，普通 Provider 和 model 来源是用户配置目录中的 `models.json`（Windows 默认是 `%USERPROFILE%\.myharness\agent\models.json`）。Coding Agent 产品入口同样不内置任何 Provider，Provider 按下列规则处理：
+MyHarness 的 library 层采用手动 Provider 模式：`ModelRuntime.create()` 不自动加载上游 Provider 或模型目录，普通 Provider 和 model 来源是用户配置目录中的 `models.json`（Windows 默认是 `%USERPROFILE%\.myharness\agent\models.json`）。Coding Agent 产品入口唯一的现成 Provider 是 Nebius Token Factory 预设：它在用户粘贴 Key 时才写入 `models.json`（`providers/models/nebius-preset.ts`、`application/use-cases/nebius-setup.ts`），之后就是普通的 `models.json` Provider。Provider 按下列规则处理：
 
 - 不读取、同步或校验上游 Provider model catalog；
 - 不执行任何上游模型目录生成或 hydrate；

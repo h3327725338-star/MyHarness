@@ -25,11 +25,22 @@ function routes() {
 	return { agentDir, call };
 }
 
-/** Runs boot-theme.js with a shared copy (from /api/web-prefs.js) and a localStorage copy; returns its choice. */
-function start(shared: unknown, local: { prefs?: unknown; at?: number } = {}) {
+/**
+ * Runs boot-theme.js with a shared copy (from /api/web-prefs.js) and a localStorage copy; returns its choice. `system` is
+ * the language of Windows the desktop host gave, `browser` the browser's own language.
+ */
+function start(
+	shared: unknown,
+	local: { prefs?: unknown; at?: number } = {},
+	languages: { system?: unknown; browser?: string } = {},
+) {
 	const root = { dataset: {} as Record<string, string>, lang: "" };
 	const context: Record<string, unknown> = {
 		document: { documentElement: root },
+		...(languages.system !== undefined ? { __MYHARNESS_SYSTEM_LANGUAGE__: languages.system } : {}),
+		...(languages.browser !== undefined
+			? { navigator: { languages: [languages.browser], language: languages.browser } }
+			: {}),
 		matchMedia: () => ({ matches: true }),
 		localStorage: {
 			getItem: (key: string) =>
@@ -46,7 +57,7 @@ function start(shared: unknown, local: { prefs?: unknown; at?: number } = {}) {
 		__MYHARNESS_WEB_PREFS__: shared,
 	};
 	runInNewContext(boot, context);
-	return { boot: context.__MYHARNESS_BOOT_PREFS__ as Record<string, unknown>, dataset: root.dataset };
+	return { boot: context.__MYHARNESS_BOOT_PREFS__ as Record<string, unknown>, dataset: root.dataset, lang: root.lang };
 }
 
 describe("shared Web UI preferences", () => {
@@ -74,6 +85,54 @@ describe("shared Web UI preferences", () => {
 		const context: Record<string, unknown> = {};
 		runInNewContext(script, context);
 		expect(context.__MYHARNESS_WEB_PREFS__).toEqual({ prefs: { theme: "dark" }, updatedAt: 20 });
+		expect(context.__MYHARNESS_SYSTEM_LANGUAGE__).toBeNull();
+	});
+
+	it("gives the page the language of Windows that the desktop host passed", () => {
+		const { call } = routes();
+		const previous = process.env.MYHARNESS_SYSTEM_LANGUAGE;
+		try {
+			for (const [given, served] of [
+				["zh-CN", "zh-CN"],
+				["en", "en"],
+				["fr", null],
+			] as const) {
+				process.env.MYHARNESS_SYSTEM_LANGUAGE = given;
+				let script = "";
+				call("GET /api/web-prefs.js", undefined, {
+					writeHead: () => {},
+					end: (text: string) => {
+						script = text;
+					},
+				});
+				const context: Record<string, unknown> = {};
+				runInNewContext(script, context);
+				expect(context.__MYHARNESS_SYSTEM_LANGUAGE__).toBe(served);
+			}
+		} finally {
+			if (previous === undefined) delete process.env.MYHARNESS_SYSTEM_LANGUAGE;
+			else process.env.MYHARNESS_SYSTEM_LANGUAGE = previous;
+		}
+	});
+
+	it("starts in the language of Windows until the user picks one, and in the picked one after that", () => {
+		// No preferences at all: a Simplified Chinese Windows starts in Chinese, an English one in English.
+		expect(start(null, {}, { system: "zh-CN" })).toMatchObject({ lang: "zh-CN", boot: { defaultLang: "zh-CN" } });
+		expect(start(null, {}, { system: "en", browser: "zh-CN" })).toMatchObject({
+			lang: "en",
+			boot: { defaultLang: "en" },
+		});
+		// Other settings saved but no language: still Windows.
+		expect(start({ prefs: { theme: "dark" }, updatedAt: 1 }, {}, { system: "zh-CN" }).lang).toBe("zh-CN");
+		// The user's own choice wins either way.
+		expect(start({ prefs: { lang: "en" }, updatedAt: 1 }, {}, { system: "zh-CN" }).lang).toBe("en");
+		expect(start({ prefs: { lang: "zh-CN" }, updatedAt: 1 }, {}, { system: "en" }).lang).toBe("zh-CN");
+		// Without the desktop host (a plain browser) the browser's language decides; only Simplified Chinese is Chinese.
+		expect(start(null, {}, { browser: "zh-CN" }).lang).toBe("zh-CN");
+		expect(start(null, {}, { browser: "zh-Hans-SG" }).lang).toBe("zh-CN");
+		expect(start(null, {}, { browser: "zh-TW" }).lang).toBe("en");
+		expect(start(null, {}, { browser: "ja-JP" }).lang).toBe("en");
+		expect(start(null).lang).toBe("en");
 	});
 
 	it("rejects malformed writes and treats a damaged file as no preferences", () => {

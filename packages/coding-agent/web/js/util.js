@@ -277,10 +277,18 @@ export function loadPrefs() {
 	}
 }
 
-/** What the start-up choice of preferences needs from the page: the shared copy is older (push) or a copy was unreadable. */
+/**
+ * What the start-up choice of preferences needs from the page: the shared copy is older (push) or a copy was unreadable,
+ * and the interface language while the user has not picked one (boot-theme.js: Windows' or the browser's language).
+ */
 export function bootPrefsState() {
 	const boot = globalThis.__MYHARNESS_BOOT_PREFS__;
-	return { push: Boolean(boot?.push), unreadable: Boolean(boot?.unreadable), updatedAt: boot?.updatedAt || 0 };
+	return {
+		push: Boolean(boot?.push),
+		unreadable: Boolean(boot?.unreadable),
+		updatedAt: boot?.updatedAt || 0,
+		defaultLang: boot?.defaultLang === "zh-CN" ? "zh-CN" : "en",
+	};
 }
 
 let savedPrefs = null;

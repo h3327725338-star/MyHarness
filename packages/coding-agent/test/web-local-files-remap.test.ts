@@ -62,6 +62,33 @@ describe("cross-computer local file remap", () => {
 		}
 	});
 
+	it("decodes a Markdown link's %20 escapes, and still opens a name that really holds them", async () => {
+		const root = makeRoot("local-remap-encoded-");
+		try {
+			// The workspace on this computer is ...\DSA; the link was written on another one, percent-encoded.
+			const nested = join(root, "课件", "week-06");
+			mkdirSync(nested, { recursive: true });
+			const file = join(nested, "DSA Tutorial ADT Revision.pdf");
+			writeFileSync(file, "x");
+			const link = "C:/Users/user/My%20Drive/Study/Subject/DSA/课件/week-06/DSA%20Tutorial%20ADT%20Revision.pdf";
+			expect(await resolveLocalFile(root, link)).toEqual({ path: file, directory: false });
+			expect(await resolveLocalFile(root, "%E8%AF%BE%E4%BB%B6/week-06/DSA%20Tutorial%20ADT%20Revision.pdf")).toEqual(
+				{
+					path: file,
+					directory: false,
+				},
+			);
+			const literal = join(root, "100%20done.txt");
+			writeFileSync(literal, "x");
+			expect(await resolveLocalFile(root, "100%20done.txt")).toEqual({ path: literal, directory: false });
+			await expect(resolveLocalFile(root, "C:/Users/user/My%20Drive/Study/no%20such%20file.pdf")).rejects.toThrow(
+				/Google Drive has not delivered/,
+			);
+		} finally {
+			cleanup(root);
+		}
+	});
+
 	it("falls back to a unique basename match under the workspace root", async () => {
 		const root = makeRoot("local-remap-base-");
 		try {

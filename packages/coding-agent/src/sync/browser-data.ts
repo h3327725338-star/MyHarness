@@ -96,6 +96,20 @@ function unionMap(a: Json, b: Json, choose: (x: unknown, y: unknown) => unknown 
 
 const pretty = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
 
+/**
+ * Of two versions of one bookmark, the one edited last (its name, address or what it is for); the later use of either is
+ * kept, so the Agent's order of recently used sites survives. Ties fall to `pick`, so both computers choose the same.
+ */
+function newerBookmark(a: Json, b: Json): Json {
+	const at = (item: Json) => String(item.updatedAt ?? item.addedAt ?? "");
+	const chosen = at(a) === at(b) ? pick(a, b) : at(a) > at(b) ? a : b;
+	const used = [a.lastUsedAt, b.lastUsedAt]
+		.filter((value): value is string => typeof value === "string")
+		.sort()
+		.at(-1);
+	return used && chosen.lastUsedAt !== used ? { ...chosen, lastUsedAt: used } : chosen;
+}
+
 function mergeBookmarks(a: Json, b: Json): string {
 	const byId = new Map<string, Json>();
 	for (const item of [
@@ -104,7 +118,7 @@ function mergeBookmarks(a: Json, b: Json): string {
 	]) {
 		if (!isRecord(item) || typeof item.id !== "string" || typeof item.url !== "string") continue;
 		const known = byId.get(item.id);
-		byId.set(item.id, known ? pick(known, item) : item);
+		byId.set(item.id, known ? newerBookmark(known, item) : item);
 	}
 	// The order of the bar is the order bookmarks were added in; the same page saved on both computers stays once.
 	const order = (x: Json, y: Json) =>

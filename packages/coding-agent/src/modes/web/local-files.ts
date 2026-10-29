@@ -248,6 +248,36 @@ export async function resolveLocalFile(
 		throw new HttpError(400, "Only local file paths are supported");
 	}
 	if (/^(?:\\\\|\/\/)/.test(value)) throw new HttpError(400, "Network and device paths are not supported");
+	// A Markdown link keeps its address percent-encoded (`C:/Users/user/My%20Drive/a%20b.pdf`). The name as written is tried
+	// first, so a file whose name really holds `%20` still opens; then the decoded one, which the remap below can match.
+	const decoded = percentDecoded(value);
+	if (!decoded) return resolvePath(root, value, extraRoots);
+	try {
+		return await resolvePath(root, value, extraRoots);
+	} catch (error) {
+		if (!(error instanceof HttpError) || error.status !== 404) throw error;
+	}
+	if (/^(?:\\\\|\/\/)/.test(decoded)) throw new HttpError(400, "Network and device paths are not supported");
+	return resolvePath(root, decoded, extraRoots);
+}
+
+/** The path with its `%XX` escapes decoded, or null when it has none (or they do not decode to a usable path). */
+function percentDecoded(value: string): string | null {
+	if (!/%[0-9a-f]{2}/i.test(value)) return null;
+	try {
+		const decoded = decodeURIComponent(value);
+		return decoded !== value && !/[\x00-\x1f]/.test(decoded) ? decoded : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Direct path first, then the cross-computer remap under the Workspace root and the extra roots. */
+async function resolvePath(
+	root: string,
+	value: string,
+	extraRoots: string[],
+): Promise<{ path: string; directory: boolean }> {
 	const full = path.resolve(root, value);
 	try {
 		const actual = await realpath(full);

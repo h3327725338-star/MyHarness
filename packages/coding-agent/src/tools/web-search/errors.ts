@@ -17,6 +17,7 @@ export class WebSearchError extends Error {
  */
 const ACCESS_BLOCK_CODES: ReadonlySet<WebSearchFailureCode> = new Set([
 	"rate_limited",
+	"keyless_limit",
 	"captcha",
 	"forbidden",
 	"js_required",

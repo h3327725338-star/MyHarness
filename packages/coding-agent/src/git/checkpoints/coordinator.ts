@@ -32,7 +32,7 @@ function getBashCommand(args: unknown): string | undefined {
 
 /**
  * Tools that never change workspace files, so they never open a checkpoint. todo_write keeps its list in the
- * conversation, and the job tools only inspect or stop background jobs. apply_patch is deliberately not listed: it can
+ * conversation, schedule keeps its tasks in the agent directory, and the job tools only inspect or stop background jobs. apply_patch is deliberately not listed: it can
  * add, move and delete files anywhere, so it takes the scan checkpoint like any other unknown tool.
  */
 const NON_MUTATING_TOOLS = new Set([
@@ -47,6 +47,7 @@ const NON_MUTATING_TOOLS = new Set([
 	"session_get",
 	"ask_user_question",
 	"todo_write",
+	"schedule",
 	"job_list",
 	"job_output",
 	"job_kill",

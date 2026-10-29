@@ -72,6 +72,8 @@ describe("Workspace tool parameter schema", () => {
 			type: "browser",
 			url: "https://example.com",
 		});
+		// The bookmarks reminder asks for `open` with `bookmark`: a call without a type is a website.
+		expect(validate({ operation: "open", bookmark: "bm1" })).toEqual({ operation: "open", bookmark: "bm1" });
 
 		expect(validate({ operation: "mouse", action: "click", x: 1, y: 2 })).toEqual({
 			operation: "mouse",

@@ -73,8 +73,9 @@ function classify(raw: string): ErrorExplanation {
 		};
 	}
 	if (
+		status === 402 ||
 		has(
-			/insufficient_quota|quota exceeded|out of budget|usage limit|available balance|\bbilling\b|insufficient (?:balance|credit|funds)|余额不足|额度/iu,
+			/insufficient_quota|quota exceeded|out of budget|usage limit|available balance|\bbilling\b|insufficient (?:balance|credit|funds)|payment required|negative balance|balance (?:is )?negative|余额不足|额度/iu,
 		)
 	) {
 		return {

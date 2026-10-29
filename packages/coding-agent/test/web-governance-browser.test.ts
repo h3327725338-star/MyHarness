@@ -121,14 +121,29 @@ try {
  resolveConfirm(true); await deletion; await wait(400);
  if(document.querySelector('.chat-row')) throw Error('deleted row remains');
  setView({settingsOpen:true,settingsSection:'shortcuts'}); render(h(SettingsModal),app); await wait(200);
+ // The built-in browser's shortcut is listed only in the desktop app.
  const inputs=[...document.querySelectorAll('[data-shortcut-editor]')];
- if(inputs.length!==SHORTCUTS.length) throw Error('shortcut settings missing');
- inputs[1].dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,altKey:true,bubbles:true,cancelable:true})); await wait(100);
- if(inputs[1].getAttribute('aria-invalid')!=='true' || state.view.shortcuts.newChat) throw Error('conflict saved');
- if(!document.querySelector('[role=alert]')?.textContent.includes('冲突')) throw Error('conflict warning missing');
- inputs[1].dispatchEvent(new KeyboardEvent('keydown',{key:'j',ctrlKey:true,altKey:true,bubbles:true,cancelable:true})); await wait(100);
- if(state.view.shortcuts.newChat!=='Ctrl+Alt+J') throw Error('custom key not saved');
- if(!JSON.stringify(localStorage).includes('Ctrl+Alt+J')) throw Error('custom key not persisted');
+ if(inputs.length!==SHORTCUTS.filter(s=>!s.desktop).length) throw Error('shortcut settings missing');
+ const newChat=inputs[SHORTCUTS.findIndex(s=>s.id==='newChat')];
+ const press=(init)=>newChat.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,...init}));
+ // Another action's key, a key the app already uses, and a bare letter are refused with why, and nothing is saved.
+ for(const [init,why] of [[{key:'k',ctrlKey:true},'命令面板'],[{key:'c',ctrlKey:true},'复制'],[{key:'q'},'Ctrl 或 Alt']]){
+  press(init); await wait(100);
+  if(newChat.getAttribute('aria-invalid')!=='true' || state.view.shortcuts.newChat!==undefined) throw Error('conflict saved: '+JSON.stringify(init));
+  if(!document.querySelector('[role=alert]')?.textContent.includes(why)) throw Error('conflict warning missing: '+why);
+ }
+ // Any free combination is taken, not only Ctrl+Alt ones.
+ press({key:'n',ctrlKey:true,shiftKey:true}); await wait(100);
+ if(state.view.shortcuts.newChat!=='Ctrl+Shift+N' || newChat.getAttribute('aria-invalid')==='true') throw Error('custom key not saved');
+ if(!JSON.stringify(localStorage).includes('Ctrl+Shift+N')) throw Error('custom key not persisted');
+ // Backspace removes it; the × removes another one; Reset brings the defaults back.
+ press({key:'Backspace'}); await wait(100);
+ if(state.view.shortcuts.newChat!=='' || !newChat.textContent.includes('无')) throw Error('shortcut not removed');
+ const sidebarRow=inputs[SHORTCUTS.findIndex(s=>s.id==='sidebar')].closest('.shortcut-field');
+ sidebarRow.querySelector('.shortcut-clear').click(); await wait(100);
+ if(state.view.shortcuts.sidebar!=='') throw Error('× did not remove the shortcut');
+ [...document.querySelectorAll('.set-card-head button')].find(b=>b.textContent.includes('恢复默认')).click(); await wait(100);
+ if(Object.keys(state.view.shortcuts).length || !newChat.textContent.includes('Ctrl')) throw Error('reset did not bring the defaults back');
  const stats={tokens:{input:75,cacheRead:9925,cacheWrite:0,output:500}};
  const cache=sessionCache(stats); const speed={state:'live',tps:42.5,live:true};
  render(h('div',{},h(CacheValue,{session:cache}),h(CacheValue,{session:cache}),h(SpeedValue,{speed}),h(SpeedValue,{speed})),app); await wait(50);

@@ -147,7 +147,7 @@ export function exportTooLargeMessage(status, body) {
  */
 function leaveWorkspaceMax() {
 	if (!state.view.wsMax) return {};
-	return { wsMax: false, wsMaxSidebar: null, sidebarOpen: plainSidebar() };
+	return { wsMax: false, wsMaxSidebar: null, wsChatHidden: false, sidebarOpen: plainSidebar() };
 }
 
 /**
@@ -199,9 +199,43 @@ export const actions = {
 		if (next && !state.view.wsActive && !state.view.wsTabs.length) return;
 		// The columns swap places: layout-morph.js moves each one from its old box to its new one.
 		morphLayout(
-			() => setView(next ? { wsMax: true, panelOpen: true, wsMaxSidebar: state.view.sidebarOpen, sidebarOpen: false } : leaveWorkspaceMax()),
+			() => setView(next ? { wsMax: true, wsChatHidden: false, panelOpen: true, wsMaxSidebar: state.view.sidebarOpen, sidebarOpen: false } : leaveWorkspaceMax()),
 			{ beforeCapture: hideBrowserViews },
 		);
+	},
+
+	/**
+	 * While the conversation is the right-hand column (collaboration mode, browser fullscreen), tuck it away at the
+	 * window's right edge (`false`) or bring it back, as the sidebar hides at the left: the workspace takes its room, and
+	 * tucked away it peeks in from the workspace head's "Show the conversation" button (chat-peek.js). Closing the
+	 * workspace itself goes through restoring the layout first.
+	 */
+	showConversation(show) {
+		if (state.view.browserFull) setView({ browserFullChat: show });
+		else if (state.view.wsMax) setView({ wsChatHidden: !show });
+	},
+
+	/**
+	 * Browser fullscreen: the active website tab fills the app's window, as a browser fills its own window. The window
+	 * itself keeps its size and buttons and never covers the taskbar (that would be a video's full screen, not this).
+	 * It is the collaboration layout with the sidebar and the conversation tucked away: each peeks in from its edge
+	 * (sidebar-peek.js, chat-peek.js) and its button keeps it open. The tab's toolbar, sign-in pages and downloads work as
+	 * before. F11, Esc or the toolbar button ends it, and so does closing the panel or leaving the website tab (app.js).
+	 */
+	toggleBrowserFull(force, { bySite = false } = {}) {
+		const next = typeof force === "boolean" ? force : !state.view.browserFull;
+		if (next === state.view.browserFull) return;
+		// A site leaving its own full screen ends only the fullscreen it started.
+		if (!next && bySite && !state.view.browserFullPrev?.bySite) return;
+		if (next) {
+			const active = state.view.wsTabs.find((tab) => tab.id === state.view.wsActive);
+			if (!state.view.panelOpen || active?.type !== "browser") return;
+			setView({ browserFull: true, browserFullChat: false, browserFullPrev: { sidebarOpen: state.view.sidebarOpen, bySite }, sidebarOpen: false });
+			return;
+		}
+		const prev = state.view.browserFullPrev;
+		// The sidebar comes back as it was, or stays if the user kept it open meanwhile.
+		setView({ browserFull: false, browserFullChat: false, browserFullPrev: null, sidebarOpen: state.view.sidebarOpen || !!prev?.sidebarOpen });
 	},
 
 	/**
@@ -541,17 +575,44 @@ export const actions = {
 		return actions.send(t("Continue the interrupted task from its current state. Keep every file change and step already completed; do not redo them or start over."));
 	},
 
-	async editAndResend(userItem) {
+	/**
+	 * "Rewind to here" under a message of the chat on screen: the chat goes back to just before that message (it and
+	 * everything after it leave the chat, kept as a side branch of its history tree) and its text goes back into the input
+	 * box. Files the agent changed meanwhile stay as they are.
+	 */
+	async rewindTo(userItem, text) {
 		if (!userItem.id) return undefined;
-		if (state.snap?.active) return toast(t("Stop the current run before editing an earlier message."), "warning");
+		if (state.snap?.active) return toast(t("Stop the current run before rewinding."), "warning");
 		const ok = await confirmDialog({
-			title: t("Edit and resend from here?"),
-			message: t("This creates a new session that branches before this message and puts its text back in the composer. The original session stays unchanged."),
-			confirmLabel: t("Fork and edit"),
+			title: t("Rewind to here?"),
+			message: t("This message and everything after it leave the chat, and its text goes back into the input box. Files the agent changed stay as they are."),
+			confirmLabel: t("Rewind"),
 		});
 		if (!ok) return undefined;
-		const result = await attempt(() => post("/api/sessions/fork", { entryId: userItem.id, position: "before" }));
-		if (result?.selectedText != null) actions.insertIntoComposer(result.selectedText, { replace: true });
+		const result = await attempt(() => post("/api/sessions/navigate", { targetId: userItem.id }));
+		if (result && !result.cancelled && text) actions.insertIntoComposer(text);
+		return result;
+	},
+
+	/**
+	 * "Fork from here": a new chat with this chat's history up to just before the message, in the same Workspace and
+	 * mode, with the message's text in its input box. The chat on screen stays as it is (it may even keep running).
+	 */
+	async forkFrom(userItem, text) {
+		if (!userItem.id) return undefined;
+		const seq = nextSwitch();
+		flushDrafts();
+		const result = await attempt(() => post("/api/sessions/fork-new", { entryId: userItem.id }));
+		if (result?.slot && isLatestSwitch(seq)) {
+			const group = result.unbound ? GENERAL_KEY : result.rootPath;
+			const key = expandedKey(uiMode());
+			if (group) setView({ [key]: { ...state.view[key], [group]: true } });
+			void loadSlots().catch(() => {});
+			await showSlot(result.slot, seq);
+			await refreshSessionLists();
+			// After the new chat is on screen, so its own (empty) draft does not replace the text.
+			if (text && isLatestSwitch(seq)) requestAnimationFrame(() => actions.insertIntoComposer(text, { replace: true }));
+		}
 		return result;
 	},
 
@@ -631,6 +692,19 @@ export const actions = {
 		const key = expandedKey(uiMode());
 		if (result?.slot && state.view[key]?.[GENERAL_KEY] === false) setView({ [key]: { ...state.view[key], [GENERAL_KEY]: true } });
 		return result;
+	},
+
+	/** The New chat shortcut: a chat in the workspace of the chat on screen, or in Default when that chat has none. */
+	newChatHere() {
+		const root = state.snap?.workspace?.rootPath;
+		return root ? actions.newSession(root) : actions.newChat();
+	},
+
+	/** The right panel shown again as it was (its active tab), or hidden; its tabs stay either way. */
+	toggleRightPanel() {
+		if (state.view.panelOpen) return actions.closePanel();
+		const active = state.view.wsTabs.find((tab) => tab.id === state.view.wsActive);
+		return active ? actions.activateWorkspaceTab(active.id) : actions.openWorkspace({ type: state.view.panelTab || "changes" });
 	},
 
 	/** Show the other mode (Coding / General) with its latest chat; see store.switchChatMode. */

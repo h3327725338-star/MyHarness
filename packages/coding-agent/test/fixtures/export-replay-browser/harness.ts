@@ -461,12 +461,12 @@ export const W125_INSTALL_FETCH_COUNTER = `(function(){
 })()`;
 
 export const W125_OPEN_PALETTE_EXPRESSION = `(function(){
-	window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK", ctrlKey: true, altKey: true, bubbles: true, cancelable: true }));
+	window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK", ctrlKey: true, bubbles: true, cancelable: true }));
 	return true;
 })()`;
 
 export const W125_NEW_CHAT_KEY_EXPRESSION = `(function(){
-	window.dispatchEvent(new KeyboardEvent("keydown", { key: "n", code: "KeyN", ctrlKey: true, altKey: true, bubbles: true, cancelable: true }));
+	window.dispatchEvent(new KeyboardEvent("keydown", { key: "o", code: "KeyO", ctrlKey: true, bubbles: true, cancelable: true }));
 	return true;
 })()`;
 
@@ -644,7 +644,7 @@ export async function runScenario(
 		await new Promise((resolve) => setTimeout(resolve, 600));
 		const nAfter = await browser.evaluate<W125FetchWindowSnapshot>(W125_FETCH_WINDOW_EXPRESSION);
 		assert(
-			"Ctrl+Alt+N 在只读页不产生任何请求（fakeFetch 计数增量 0）",
+			"Ctrl+O 在只读页不产生任何请求（fakeFetch 计数增量 0）",
 			nBefore.paletteOpen === false && nAfter.calls === nBefore.calls && nAfter.toasts === 0,
 			`paletteOpen=${nBefore.paletteOpen} calls ${nBefore.calls}→${nAfter.calls} toasts=${nAfter.toasts}`,
 		);

@@ -874,6 +874,41 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 	});
 
 	/**
+	 * "Fork from here" under a message: a new chat with this chat's history up to just before that message, opened as a
+	 * chat of its own in the same Workspace and mode. This chat is only read and stays as it is (it may even be running).
+	 * With nothing worth keeping before the message (it is the first one), the new chat starts empty.
+	 */
+	server.route("POST", "/api/sessions/fork-new", async ({ body }) => {
+		const entryId = asString(asObject(body).entryId, "entryId");
+		const manager = host.session.sessionManager;
+		const entry = manager.getEntry(entryId);
+		if (entry?.type !== "message" || entry.message.role !== "user")
+			throw new HttpError(404, "No message with that id in this chat.");
+		const file = host.session.sessionFile;
+		const mode = manager.getMode();
+		const saved = !!file && existsSync(file);
+		// The Workspace the chat belongs to, as "Continue in a new chat" finds it.
+		const workspaceId = saved ? readSessionHeader(file)?.workspaceId : undefined;
+		const workspace = workspaceId ? host.workspaceStore.getById(workspaceId, mode) : undefined;
+		const place = { rootPath: workspace?.rootPath ?? null, unbound: !workspace };
+		let forked: string | undefined;
+		if (entry.parentId && saved) {
+			// The newest lines are written in batches: the copy reads the file, so it must have them.
+			manager.flushPendingWrites();
+			const copy = SessionManager.open(file, sessionDir());
+			forked = copy.createBranchedSession(entry.parentId);
+		}
+		// createBranchedSession writes nothing for a history without a reply (only a marker before the first message).
+		if (!forked || !existsSync(forked)) {
+			const created = await hub.newSession(host, workspace?.rootPath, !workspace, mode, { forceNew: true });
+			return { slot: created.slot, ...place };
+		}
+		const opened = await hub.openSession(host, forked);
+		host.broadcast("workspaces_changed", {});
+		return { slot: opened.slot, ...place };
+	});
+
+	/**
 	 * "Continue in a new chat": a separate, ordinary new chat in the source's Workspace and mode that starts with the
 	 * source's hand-off note and newest messages as background. The source is only read; nothing is sent or run.
 	 */

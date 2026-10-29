@@ -296,6 +296,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						"session_get",
 						"ask_user_question",
 						"todo_write",
+						"schedule",
 						...(settingsManager.getWebSearchSettings().enabled ? ["web_search", "web_fetch"] : []),
 						// The desktop workspace tool only exists under the Electron host (see SessionToolRegistry.isBuiltinEnabled).
 						...(desktopWorkspaceAvailable() ? ["workspace"] : []),

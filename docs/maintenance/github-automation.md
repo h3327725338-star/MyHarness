@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `ci.yml` | `windows-2022` + `windows-2025` matrix | 正式 CI baseline：完整安装、audit、build、check 和 test |
 | `pr-gate.yml` | `ubuntu-latest` | Pull Request contributor gate；不是正式 CI baseline |
-| `build-binaries.yml` | `ubuntu-latest` | 多平台 binary 构建和发布；不是正式 CI baseline |
+| `build-binaries.yml` | `ubuntu-latest` | 多平台 Bun binary 构建和发布；只能在 GitHub 上手动运行（`workflow_dispatch`），推送标签不会触发；不是正式 CI baseline |
 | `npm-audit.yml` | `ubuntu-latest` | 独立 npm 依赖审计；不是正式 CI baseline |
 | `issue-gate.yml` | `ubuntu-latest` | Issue gate |
 | `issue-triage-labels.yml` | `ubuntu-latest` | Issue triage label |
@@ -41,6 +41,7 @@ Windows Server”，也不能声称已逐一验证 Windows 10/11 的每个桌面
 - workflow 使用的命令必须与根 `package.json`、`scripts/README.md` 和各 package 的 scripts 一致；命令改名时同步检查 YAML。
 - 正式 CI 的 runner 只能是 `windows-2022` 和 `windows-2025`；禁止把 `windows-latest` 当作稳定基线。
 - binary workflow 与 [`scripts/build-binaries.sh`](../../scripts/build-binaries.sh) 的平台、资源和产物名称必须保持一致。
+- 没有任何 workflow 由标签触发。`build-binaries.yml` 曾在推送 `v*` 标签时自动发布多平台 Bun binary；MyHarness 以 Windows 桌面应用发布，桌面版的 `v*` 标签会因此多出一个带 Linux/macOS 产物的 Release，所以只保留手动运行。`scripts/release.mjs` 推送的标签同样不会自动发布任何东西。
 - CI 通过只表示对应 workflow 在其实际 runner、凭据和网络条件下通过；不自动证明本机 Windows、真实 Provider、OAuth、终端或 LSP 行为。
 - 不在 workflow、Issue template 或文档中写入真实 secret；可以记录 secret 名称，但不能记录 secret 值。
 - Issue gate、label 和 contributor workflow 的行为以 YAML、permissions、event 和实际 GitHub run 为准。

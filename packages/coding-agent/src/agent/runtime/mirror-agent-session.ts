@@ -226,6 +226,10 @@ export class MirrorAgentSession extends AgentSession {
 		await this.requireBridge().command("setModel", { provider: model.provider, id: model.id });
 	}
 
+	override async useModelInThisSession(): Promise<void> {
+		throw new Error("This chat is run by another MyHarness process; it keeps that process's model.");
+	}
+
 	override setThinkingLevel(level: Parameters<AgentSession["setThinkingLevel"]>[0]): void {
 		void this.bridge?.command("setThinkingLevel", { level }).catch(() => {});
 	}

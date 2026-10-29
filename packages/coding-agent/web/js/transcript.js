@@ -674,6 +674,8 @@ function UserMessage({ item, turn }) {
 	const parsed = useMemo(() => splitAttachments(item.text), [item.text]);
 	const attachments = item.attachments?.length ? item.attachments : parsed.attachments;
 	const body = attachments.length ? parsed.body : item.text;
+	// What goes back into the input box on Rewind or Fork: the typed text (a command with its name), not the file list.
+	const again = item.command ? `/${item.command.name}${body ? ` ${body}` : ""}` : body || "";
 	return html`<div class="user-row">
 		<div class="user-bubble" title=${new Date(item.ts).toLocaleString(getLang())}>
 			${item.command ? html`<div class="chip-line"><span class="badge accent">/${item.command.name}</span></div>` : null}
@@ -688,10 +690,36 @@ function UserMessage({ item, turn }) {
 			${body ? html`<${UserText} text=${body} />` : null}
 		</div>
 		<div class="msg-actions">
-			<${CopyButton} text=${body || item.text} label=${t("Copy message")} />
-			${item.id ? html`<button class="icon-btn sm" title=${t("Edit and resend from here (forks the session)")} aria-label=${t("Edit and resend")} onClick=${() => actions.editAndResend(item)}><${Icon} name="edit" size=${14} /></button>` : null}
+			<${CopyAction} text=${body || item.text} />
+			${item.id && !exportReadOnly()
+				? html`<${MsgAction} icon="rewind" label=${t("Rewind to here")} note=${t("Removes this message and everything after it.")} onClick=${() => actions.rewindTo(item, again)} />
+					<${MsgAction} icon="fork" label=${t("Fork from here")} note=${t("Starts a new chat from this point. This one stays as it is.")} onClick=${() => actions.forkFrom(item, again)} />`
+				: null}
 		</div>
 	</div>`;
+}
+
+/** One action under a message: an icon, and on hover or keyboard focus a tip with its name and what it does. */
+function MsgAction({ icon, label, note, onClick }) {
+	return html`<span class="msg-act">
+		<button type="button" class="icon-btn sm" aria-label=${label} aria-description=${note || undefined} onClick=${onClick}><${Icon} name=${icon} size=${14} /></button>
+		<span class="msg-tip" aria-hidden="true"><strong>${label}</strong>${note ? html`<span>${note}</span>` : null}</span>
+	</span>`;
+}
+
+function CopyAction({ text }) {
+	const [done, setDone] = useState(false);
+	const copy = async (event) => {
+		event.stopPropagation();
+		try {
+			await navigator.clipboard.writeText(text);
+			setDone(true);
+			setTimeout(() => setDone(false), 1200);
+		} catch {
+			// Clipboard unavailable (insecure context / permissions): nothing else to do.
+		}
+	};
+	return html`<${MsgAction} icon=${done ? "check" : "copy"} label=${done ? t("Copied") : t("Copy")} onClick=${copy} />`;
 }
 
 /** Tokens of one reply: always with a unit and one decimal (0.2K, 12.7K, 1.3M). */
@@ -867,6 +895,29 @@ function continuationBody(text) {
  * "Continued from …": a marker line like the compaction one. It names the source chat, opens it at the point the
  * background was taken from, shows the background on demand, and — only before the first message — takes it back out.
  */
+/**
+ * The message a scheduled Agent task sends when it runs (turns.js marks its turn): a line naming the task, like the
+ * other markers of the chat, with its instructions behind "Show instructions" instead of a bubble the user never typed.
+ */
+function ScheduledRunMarker({ item, details }) {
+	const [open, setOpen] = useState(false);
+	const time = new Date(item.ts).toLocaleString(getLang(), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+	return html`<div class="marker scheduled-run-marker">
+		<div class="marker-head">
+			<span class="marker-line" />
+			<span class="marker-text continuation-text">
+				<${Icon} name="clock" size=${13} />
+				<span>${t("Scheduled task")}</span>
+				${details.title ? html`<span class="truncate">${clip(details.title, 60)}</span>` : null}
+				<span class="dim">· ${time}</span>
+				<button class="link-btn" aria-expanded=${open} onClick=${() => setOpen(!open)}>${open ? t("Hide instructions") : t("Show instructions")}</button>
+			</span>
+			<span class="marker-line" />
+		</div>
+		<${Collapse} open=${open}><div class="marker-body"><${Markdown} text=${item.text || ""} /></div><//>
+	</div>`;
+}
+
 function ContinuationMarker({ item }) {
 	const [open, setOpen] = useState(false);
 	const started = useStore((s) => s.items.some((other) => other.kind === "user"));
@@ -910,7 +961,7 @@ const TurnView = memo(function TurnView({ turn, isLast, live, waiting, run, cwd,
 	// Folding rebuilds the blocks (texts and later blocks go into the first one): glide to the new height instead of jumping.
 	const processRef = useSwapGlide(fold);
 	return html`<section class=${`turn ${live ? "live" : ""}`} data-turn-key=${turn.user ? turn.key : undefined} data-last-turn=${isLast ? "" : undefined}>
-		${turn.user ? html`<${UserMessage} item=${turn.user} turn=${turn} />` : null}
+		${turn.user ? (turn.scheduled ? html`<${ScheduledRunMarker} item=${turn.user} details=${turn.scheduled} />` : html`<${UserMessage} item=${turn.user} turn=${turn} />`) : null}
 		<div class="turn-process" ref=${processRef}>
 		${segments.map((segment) =>
 			segment.type === "text"
@@ -984,10 +1035,9 @@ function Welcome({ snap, models, opening = false }) {
 		<div class="welcome-tips dim">
 			<span><span class="kbd">/</span> ${t("commands & skills")}</span>
 			<span><span class="kbd">@</span> ${t("mention a file")}</span>
-			<span><span class="kbd">!</span> ${t("run a shell command")}</span>
-			<span><span class="kbd">${paletteKey}</span> ${t("command palette")}</span>
+			${paletteKey ? html`<span><span class="kbd">${paletteKey}</span> ${t("command palette")}</span>` : null}
 		</div>
-		${!model && !opening ? html`<div class="welcome-warn"><${Icon} name="alertTriangle" size=${15} /> ${tNodes("No model is available yet. {add} to start.", { add: html`<button class="link-btn" onClick=${() => setView({ settingsOpen: true, settingsSection: "providers" })}>${t("Add a provider")}</button>` })}</div>` : null}
+		${!model && !opening ? html`<div class="welcome-warn"><${Icon} name="alertTriangle" size=${15} /> ${tNodes("No model is available yet. {add} to start.", { add: html`<button class="link-btn" onClick=${() => setView({ settingsOpen: true, settingsSection: "providers", providerSel: "nebius" })}>${t("Connect NVIDIA Nemotron on Nebius")}</button>` })}</div>` : null}
 	</div>`;
 }
 
@@ -1425,8 +1475,6 @@ export function Transcript() {
 	// One coalesced measurement per animation frame reads each geometry property once, and the header class is
 	// written only when the boolean actually flips (toggling it every event invalidates styles for nothing).
 	const measureFrame = useRef(0);
-	const headerRef = useRef(null);
-	const headerScrolled = useRef(false);
 	const measureScroll = () => {
 		measureFrame.current = 0;
 		const el = scroller.current;
@@ -1447,12 +1495,6 @@ export function Transcript() {
 		lastTop.current = top;
 		const show = !stick.current && distance > 72;
 		setAway((prev) => (prev === show ? prev : show));
-		if (!headerRef.current || !headerRef.current.isConnected) headerRef.current = document.querySelector(".main-header");
-		const scrolled = top > 4;
-		if (scrolled !== headerScrolled.current) {
-			headerScrolled.current = scrolled;
-			headerRef.current?.classList.toggle("scrolled", scrolled);
-		}
 	};
 	const scheduleMeasure = () => {
 		if (!measureFrame.current) measureFrame.current = requestAnimationFrame(measureScroll);

@@ -66,9 +66,12 @@ describe("regression #5109: exclude tools", () => {
 				"memory_search",
 				"memory_write",
 				"pwsh",
+				"schedule",
 				"session_get",
 				"session_search",
 				"todo_write",
+				"web_fetch",
+				"web_search",
 				"write",
 			]);
 			expect(harness.session.systemPrompt).not.toContain("- read:");

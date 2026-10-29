@@ -39,7 +39,7 @@ dev-desktop.cmd → packages/desktop（Electron 宿主，服务进程）
                          loopback HTTP + SSE → coding-agent/web/
 ```
 
-- `npm run desktop:dev` 启动独立 Electron 宿主，`npm run desktop:pack` 构建免安装目录；宿主复用 Web 服务与数据；第三方网页每个标签一个主进程 `WebContentsView`（不用 iframe/webview），共用持久化第三方分区，右侧面板是同时承载面板、文件与网页的多标签工作区。原生视图的可见性与尺寸由页面侧的 `web/js/browser-view-sync.js` 和宿主不变量共同保证：切换标签先隐藏，只有活动标签带新 bounds 时才显示，关闭标签清理视图、定时器、下载和权限回调。站点权限由页面内用户显式允许或拒绝，决定保存在桌面配置目录的 `browser-permissions.json`，Agent 不能授予。Agent 侧的 `workspace` 工具只在宿主内注册，经子进程 IPC 控制浏览器标签，并把页面级命令转发给前端页面后以其回报状态为准。桌面重启由 IPC 交回宿主监督，浏览器重启路径不变。
+- `npm run desktop:dev` 启动独立 Electron 宿主，`npm run desktop:pack` 构建免安装目录，`npm run desktop:installer` 构建给其他电脑用的 Windows 安装包（安装版数据在 `~/.myharness/data`，见 `packages/desktop/README.md`）；宿主复用 Web 服务与数据；第三方网页每个标签一个主进程 `WebContentsView`（不用 iframe/webview），共用持久化第三方分区，右侧面板是同时承载面板、文件与网页的多标签工作区。原生视图的可见性与尺寸由页面侧的 `web/js/browser-view-sync.js` 和宿主不变量共同保证：切换标签先隐藏，只有活动标签带新 bounds 时才显示，关闭标签清理视图、定时器、下载和权限回调。站点权限由页面内用户显式允许或拒绝，决定保存在桌面配置目录的 `browser-permissions.json`，Agent 不能授予。Agent 侧的 `workspace` 工具只在宿主内注册，经子进程 IPC 控制浏览器标签，并把页面级命令转发给前端页面后以其回报状态为准。桌面重启由 IPC 交回宿主监督，浏览器重启路径不变。
 - 日常使用走桌面端：双击仓库根目录 `dev-desktop.cmd`。原先用系统浏览器打开的启动脚本（`dev-web.cmd`、`dev-web.vbs`、`dev-web.ps1`、`web-runtime.ps1`、`web-source.ps1`、`web-source.sh`）已移除，界面代码历史另存于私有仓库 `MyHarness-WebArchive`。
 - 需要直接跑源码时，在仓库根目录执行 `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts`（参数原样转发，保留调用者工作目录）。服务启动后不打开任何浏览器，只在日志里打印 `MyHarness Web UI: <url>`；`--no-open` 仍被接受（桌面端在传），仅为兼容保留。
 - Worktree 的“启动副本”和“生成启动文件”都用 Node 直接运行副本自己的 `packages/coding-agent/src/web.ts` 与 `scripts/dev-fast-loader.mjs`，同样打印地址、不打开浏览器。
@@ -62,6 +62,7 @@ dev-desktop.cmd → packages/desktop（Electron 宿主，服务进程）
 | `application/` | 资源加载、Trust、Workspace 及跨领域 use case |
 | `providers/` | 产品 Provider runtime、模型与 credential |
 | `tools/` | 工具执行 contract、权限、取消和结果；`workspace.ts` 是桌面宿主专用工具（内置浏览器与右侧工作区控制），不在宿主内时不注册 |
+| `schedules/` | 定时任务：任务列表与两台电脑之间的合并（`store.ts`，Data root 的 `schedules.json`，经 Google Drive 同步）、到点时间计算（`timing.ts`）、本机时钟与运行（`service.ts`）；页面接口在 `modes/web/routes-schedules.ts`，Agent 工具在 `tools/schedule.ts` |
 | `extensions/` | contracts、API entry、loader、runtime 与包管理 |
 | `git/` | Git 原语、checkpoint、Worktree 和提交/推送流程 |
 | `symbols/` | Semantic/LSP 代码导航、符号存储、语言服务器与模块安装 |

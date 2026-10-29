@@ -47,6 +47,16 @@ describe("SettingsManager", () => {
 	});
 
 	describe("auto memory", () => {
+		it("is on by default and uses the main model until one is chosen", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getAutoMemorySettings()).toEqual({
+				enabled: true,
+				provider: undefined,
+				model: undefined,
+				thinkingLevel: undefined,
+			});
+		});
+
 		it("persists the memory model configuration globally", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			manager.setAutoMemorySettings({
@@ -125,9 +135,10 @@ describe("SettingsManager", () => {
 		});
 
 		it("uses the defaults and clamps out-of-range numbers to the real limits", () => {
+			// On out of the box: Tavily needs no key (its free keyless access), Google is the second engine.
 			expect(SettingsManager.inMemory({}).getWebSearchSettings()).toEqual({
-				enabled: false,
-				engines: ["google", "bing"],
+				enabled: true,
+				engines: ["tavily", "google"],
 				pagesPerSearch: 3,
 				maxUrlsPerFetch: 10,
 				fetchConcurrency: 4,
@@ -150,8 +161,10 @@ describe("SettingsManager", () => {
 			expect(invalid.getWebSearchSettings()).toMatchObject({
 				pagesPerSearch: 3,
 				maxUrlsPerFetch: 10,
-				engines: ["google", "bing"],
+				engines: ["tavily", "google"],
 			});
+			// A choice the user saved stays, the switch included.
+			expect(SettingsManager.inMemory({ webSearch: { enabled: false } }).getWebSearchSettings().enabled).toBe(false);
 			expect(
 				SettingsManager.inMemory({ webSearch: { browserFallback: "no" as never } }).getWebSearchSettings()
 					.browserFallback,
@@ -165,7 +178,7 @@ describe("SettingsManager", () => {
 					webSearch: { browserFallback: true, engines: list as never },
 				}).getWebSearchSettings().engines;
 			expect(engines(["brave_api", "brave", "bing"])).toEqual(["bing", "brave"]);
-			expect(engines(["brave_api"])).toEqual(["google", "bing"]);
+			expect(engines(["brave_api"])).toEqual(["tavily", "google"]);
 		});
 
 		it("migrates a SearXNG/Crawl4AI configuration and drops the legacy fields on save", async () => {
@@ -223,12 +236,12 @@ describe("SettingsManager", () => {
 			const manager = SettingsManager.inMemory({
 				webSearch: { enabled: true, engineMode: "selected", engines: ["wikipedia", "qwant"] },
 			});
-			expect(manager.getWebSearchSettings().engines).toEqual(["google", "bing"]);
+			expect(manager.getWebSearchSettings().engines).toEqual(["tavily", "google"]);
 			const huge = SettingsManager.inMemory({ webSearch: { parallelPages: { mode: "manual", value: 500 } } });
 			expect(huge.getWebSearchSettings().maxUrlsPerFetch).toBe(60);
 		});
 
-		it("moves the untouched previous default engine list to Google and Bing, but keeps real choices", async () => {
+		it("moves the untouched previous default engine list to the current default, but keeps real choices", async () => {
 			// Written by the previous version: the old default list and no browserFallback field.
 			writeFileSync(
 				join(agentDir, "settings.json"),
@@ -245,7 +258,7 @@ describe("SettingsManager", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			expect(manager.getWebSearchSettings()).toEqual({
 				enabled: true,
-				engines: ["google", "bing"],
+				engines: ["tavily", "google"],
 				pagesPerSearch: 6,
 				maxUrlsPerFetch: 20,
 				fetchConcurrency: 8,

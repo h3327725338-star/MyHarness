@@ -13,6 +13,54 @@ import { checkResolvedHost, type HostLookup, validatePublicHttpUrl } from "./url
 /** After a person did not get a site's page through, the window is not opened again for that site for this long. */
 const DECLINED_COOLDOWN_MS = 2 * 60_000;
 
+/** A page the desktop app's built-in browser read with the user's sign-ins there (tools/workspace.ts readInBuiltInBrowser). */
+export interface SignedInPage {
+	url: string;
+	title: string;
+	html: string;
+	signIn: boolean;
+	challenge: boolean;
+}
+
+/**
+ * A page of the desktop app's built-in browser, read with the user's own sign-ins, checked like a page of the real
+ * browser (it must have landed on a public address) and turned into Markdown. A page that is a sign-in or a human check
+ * there too is reported with the way out the desktop app has: the Agent opens it as a workspace tab and hands it to the
+ * user, never a window of another browser. Undefined when nothing readable came out of it.
+ */
+export async function signedInPageResult(
+	page: SignedInPage,
+	requested: string,
+	lookup: HostLookup,
+): Promise<ReadPageResult | undefined> {
+	const hostname = new URL(requested).hostname;
+	const landed = validatePublicHttpUrl(page.url);
+	if (!landed.ok || !landed.url || !landed.hostname) {
+		throw new WebSearchError("blocked", `页面跳转到了不允许的地址：${landed.message ?? page.url}`);
+	}
+	const resolvedProblem = await checkResolvedHost(landed.hostname, lookup);
+	if (resolvedProblem) throw new WebSearchError("blocked", resolvedProblem);
+	// The host's own sign-in flag also counts a login box in a page's header; the wall check weighs it against the text.
+	const wall = detectAccessWall(page.html, 200, landed.url);
+	if (page.challenge || (wall && wall.kind !== "blocked")) {
+		const what = page.challenge ? "要求人机验证" : wall!.reason;
+		throw new WebSearchError(
+			"challenge_required",
+			`${hostname} ${what}，在内置浏览器中打开也是如此（用户在内置浏览器里还没有登录或通过）。请用 workspace 工具在内置浏览器中打开 ${requested}，用 handoff 请用户在那里完成，再用 workspace 读取页面；内置浏览器会记住这次的登录或验证。`,
+		);
+	}
+	const converted = htmlToMarkdown(page.html, landed.url);
+	if (!converted.markdown) return undefined;
+	const cut = converted.markdown.length > PAGE_LIMITS.maxMarkdownChars;
+	return {
+		finalUrl: landed.url,
+		title: converted.title || page.title || undefined,
+		publishedAt: converted.publishedAt,
+		markdown: cut ? converted.markdown.slice(0, PAGE_LIMITS.maxMarkdownChars) : converted.markdown,
+		truncated: cut,
+	};
+}
+
 export interface BrowserPageReaderOptions {
 	browser: BrowserTransport;
 	lookup: HostLookup;

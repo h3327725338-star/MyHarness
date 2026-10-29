@@ -17,7 +17,7 @@ import type { PageSnapshot } from "../src/tools/web-search/browser/launch.ts";
 import { WebSearchCache } from "../src/tools/web-search/cache.ts";
 import { WebSearchError } from "../src/tools/web-search/errors.ts";
 import { detectAccessWall } from "../src/tools/web-search/page.ts";
-import { WebSearchService } from "../src/tools/web-search/service.ts";
+import { WebSearchService, type WebSearchServiceOptions } from "../src/tools/web-search/service.ts";
 import { createWebFetchToolDefinition } from "../src/tools/web-search/tool.ts";
 import type { BrowserChallengeRequest, BrowserTransport, TransportPage } from "../src/tools/web-search/transport.ts";
 
@@ -73,7 +73,12 @@ function fakeBrowser(options: FakeBrowserOptions) {
 function createService(
 	routes: Record<string, () => Response>,
 	browser: BrowserTransport | null,
-	options: { settings?: WebSearchSettings; interactive?: boolean; now?: () => number } = {},
+	options: {
+		settings?: WebSearchSettings;
+		interactive?: boolean;
+		now?: () => number;
+		signedInBrowser?: WebSearchServiceOptions["signedInBrowser"];
+	} = {},
 ) {
 	const settingsManager = SettingsManager.inMemory({
 		webSearch: { enabled: true, browserFallback: true, ...options.settings },
@@ -93,6 +98,7 @@ function createService(
 		browser,
 		interactiveChallenges: () => options.interactive ?? false,
 		now: options.now,
+		signedInBrowser: options.signedInBrowser,
 	});
 	return { service, calls };
 }
@@ -237,6 +243,90 @@ describe("reading a page that refuses plain requests", () => {
 		expect(progress[0]).toContain("members.example 要求登录");
 		expect(progress[0]).toContain("已打开 Chrome 窗口");
 		expect(progress.at(-1)).toContain("已通过");
+	});
+
+	it("reads a page in the desktop app's built-in browser with the user's sign-ins there, never in another browser's window", async () => {
+		const signedIn = (html: string, url = "https://members.example/area") => ({
+			url,
+			title: "Members",
+			html,
+			signIn: false,
+			challenge: false,
+		});
+		// Signed in there: the page is read at once, the other browser is not even started.
+		const first = fakeBrowser({
+			load: (url) => browserPage(url, loginPage),
+			challenge: (url) => [browserPage(url, article("Members only", "Welcome back."))],
+		});
+		const asked: string[] = [];
+		const { service } = createService({ "members.example": () => html("Forbidden", 403) }, first.browser, {
+			interactive: true,
+			signedInBrowser: async (url) => {
+				asked.push(url);
+				return signedIn(article("Members only", "Signed in in the built-in browser."));
+			},
+		});
+		const response = await service.fetch({ urls: ["https://members.example/area"] });
+		expect(response.failures).toEqual([]);
+		expect(response.pages[0]?.markdown).toContain("Signed in in the built-in browser.");
+		expect(asked).toEqual(["https://members.example/area"]);
+		expect(first.loads).toEqual([]);
+		expect(first.challenges).toEqual([]);
+
+		// Not signed in there either: the Agent is sent to the built-in browser to hand the page to the user.
+		const second = fakeBrowser({
+			load: (url) => browserPage(url, loginPage),
+			challenge: (url) => [browserPage(url, article("Members only", "Welcome back."))],
+		});
+		const walled = createService({ "members.example": () => html("Forbidden", 403) }, second.browser, {
+			interactive: true,
+			signedInBrowser: async (url) => signedIn(loginPage, `${url}/login`),
+		});
+		const wall = await walled.service.fetch({ urls: ["https://members.example/area"] });
+		expect(wall.pages).toEqual([]);
+		expect(wall.failures[0]).toMatchObject({ code: "challenge_required" });
+		expect(wall.failures[0]!.message).toContain("members.example 要求登录，在内置浏览器中打开也是如此");
+		expect(wall.failures[0]!.message).toContain("handoff");
+		expect(second.loads).toEqual([]);
+		expect(second.challenges).toEqual([]);
+
+		// The built-in browser could not read it (a timeout): the other browser tries, but opens no window.
+		const third = fakeBrowser({
+			load: (url) => browserPage(url, loginPage),
+			challenge: (url) => [browserPage(url, article("Members only", "Welcome back."))],
+		});
+		const failing = createService({ "members.example": () => html("Forbidden", 403) }, third.browser, {
+			interactive: true,
+			signedInBrowser: async () => {
+				throw new Error("the desktop host did not answer within 45s (readUrl)");
+			},
+		});
+		const failed = await failing.service.fetch({ urls: ["https://members.example/area"] });
+		expect(failed.failures[0]).toMatchObject({ code: "challenge_required" });
+		expect(third.loads).toEqual(["https://members.example/area"]);
+		expect(third.challenges).toEqual([]);
+
+		// What it landed on must be a public address, as for the other browser.
+		const inside = createService({ "members.example": () => html("Forbidden", 403) }, null, {
+			signedInBrowser: async () => signedIn(article("Internal", "secret"), "https://intranet.example/secret"),
+		});
+		expect((await inside.service.fetch({ urls: ["https://members.example/area"] })).failures[0]).toMatchObject({
+			code: "blocked",
+		});
+
+		// Without a desktop host (it answers undefined) the person is still asked in the other browser's window.
+		const fourth = fakeBrowser({
+			load: (url) => browserPage(url, loginPage),
+			challenge: (url) => [browserPage(url, article("Members only", "Welcome back."))],
+		});
+		const plain = createService({ "members.example": () => html("Forbidden", 403) }, fourth.browser, {
+			interactive: true,
+			signedInBrowser: async () => undefined,
+		});
+		expect((await plain.service.fetch({ urls: ["https://members.example/area"] })).pages[0]?.markdown).toContain(
+			"Welcome back.",
+		);
+		expect(fourth.challenges).toEqual(["https://members.example/area"]);
 	});
 
 	it("shows the help request of web_fetch as tool progress", async () => {

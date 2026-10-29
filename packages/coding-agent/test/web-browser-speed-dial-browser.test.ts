@@ -14,6 +14,8 @@ const installed = detectInstalledBrowsers();
  * - an empty website tab shows the host's shortcuts as a centred grid with an add tile;
  * - dropping one shortcut on the middle of another sends a layout with a group of both; the group opens in place and
  *   can be renamed; right-click deletes; a click opens the site in this tab; the add tile saves a typed address;
+ * - a shortcut's tooltip says what its site is for (its bookmark's note), and right-click → "What it is for…" opens the
+ *   bookmark editor, which writes the note with the model it names;
  * - website tabs can be shown by their site icon alone, toggled from the tab menu;
  * - a site icon reported for a tab that is not on screen reaches the tab strip.
  */
@@ -25,12 +27,20 @@ it.skipIf(!installed.length)(
 		const browser = new LocalBrowser({
 			kind: installed.find((item) => item.kind === "chrome")?.kind ?? installed[0]!.kind,
 			rootDir: join(root, "browser"),
+			// Runs in the plain unit suite too: headless, never a window pulled to the front.
+			unattended: true,
 		});
 		try {
 			for (const dir of ["js", "vendor", "css"])
 				server.mount({ prefix: `/${dir}/`, directory: fileURLToPath(new URL(`../web/${dir}`, import.meta.url)) });
 			server.route("GET", "/api/web-prefs", () => ({ prefs: null }));
 			server.route("PUT", "/api/web-prefs", () => ({ ok: true }));
+			server.route("GET", "/api/bookmarks/note-model", () => ({
+				model: "lab/note-model",
+				name: "Note model",
+				source: "own model",
+			}));
+			server.route("POST", "/api/bookmarks/purpose", () => ({ note: "看 Beta 的周报", model: "lab/note-model" }));
 			server.mount({ prefix: "/test/", directory: root });
 			writeFileSync(
 				join(root, "index.html"),
@@ -64,7 +74,8 @@ window.myHarnessDesktop={
 		calls.push(JSON.parse(JSON.stringify(command)));
 		if(command.action==='speeddial')return {items:layout};
 		if(command.action==='speeddial-save'){layout=command.items;return {items:layout};}
-		if(command.action==='bookmarks')return {bookmarks:[{id:'bm',title:'Docs',url:'https://docs.example/'}]};
+		if(command.action==='bookmarks')return {bookmarks:[{id:'bm',title:'Docs',url:'https://docs.example/'},{id:'bm-alpha',title:'Alpha home',url:'https://alpha.example/home',note:'Alpha 的工作看板',noteAuto:true,noteBy:'agent'}]};
+		if(command.action==='bookmark-add')return {bookmarks:[{id:'bm',title:'Docs',url:'https://docs.example/'},{id:'bm-new',title:command.title,url:command.url,note:command.note}]};
 		if(command.action==='state')return {tabId:command.tabId,url:opened.get(command.tabId)||'',title:'',loading:false,error:'',canGoBack:false,canGoForward:false};
 		if(command.action==='ensure'){if(command.url)opened.set(command.tabId,command.url);return {tabId:command.tabId,url:command.url,loading:false};}
 		if(command.action==='permissions')return {permissions:[],pending:[]};
@@ -102,6 +113,20 @@ try {
 	const grid=document.querySelector('.sd').getBoundingClientRect();
 	const target=document.querySelector('.desktop-browser-target').getBoundingClientRect();
 	check(Math.abs((grid.left+grid.right)/2-(target.left+target.right)/2)<4,'the grid is not centred');
+	check(await until(()=>(tiles()[0].querySelector('.sd-button').title||'').includes('Alpha 的工作看板')),'the tooltip does not say what the site is for: '+tiles()[0].querySelector('.sd-button').title);
+
+	mark('purpose');
+	tiles()[1].querySelector('.sd-button').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:50,clientY:50}));
+	check(await until(()=>[...document.querySelectorAll('.sd-menu button')].some(b=>b.textContent==='What it is for…')),'right-click does not offer the purpose');
+	[...document.querySelectorAll('.sd-menu button')].find(b=>b.textContent==='What it is for…').click();
+	check(await until(()=>!!document.querySelector('.ws-bookmark-editor')),'the purpose did not open the bookmark editor');
+	check(document.querySelectorAll('.ws-bookmark-editor input')[1].value==='https://beta.example/','the editor is not for this site');
+	check(await until(()=>document.querySelector('.ws-bookmark-note').value==='看 Beta 的周报'),'the note was not written: '+document.querySelector('.ws-bookmark-note').value);
+	check(await until(()=>document.querySelector('.ws-bookmark-model')?.textContent.includes('note-model')),'the editor does not say which model writes: '+document.querySelector('.ws-bookmark-model')?.textContent);
+	check(document.querySelector('.ws-bookmark-note-hint').textContent.includes('note-model'),'the note does not say who wrote it: '+document.querySelector('.ws-bookmark-note-hint').textContent);
+	document.querySelector('.ws-bookmark-editor button[type=submit]').click();
+	check(await until(()=>calls.some(c=>c.action==='bookmark-add'&&c.url==='https://beta.example/'&&c.note==='看 Beta 的周报'&&c.noteAuto===true&&c.noteBy==='lab/note-model')),'saving did not keep the note with its writer: '+JSON.stringify(calls.filter(c=>c.action==='bookmark-add')));
+	check(await until(()=>!document.querySelector('.ws-bookmark-editor:not(.closing)')||document.querySelector('.ws-side-pop.closing')),'the editor did not close');
 
 	mark('group');
 	await drag(tiles()[2],tiles()[0],'into');

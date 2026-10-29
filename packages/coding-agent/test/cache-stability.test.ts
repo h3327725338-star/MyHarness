@@ -38,9 +38,8 @@ describe("prompt cache stability", () => {
 			persisted: true,
 			settings: { autoMemory: autoMemorySettings },
 		});
-		// AutoMemoryManager 通过 getAgentDir()（环境变量优先）定位 memory 根目录，
-		// 而不是 harness.tempDir。显式指向 harness 的 agent 目录，保证测试写入的
-		// 内存文件能被 recall 读到，且不依赖开发者机器上的真实用户目录（CI 上没有）。
+		// 旧记忆从会话的 agent 目录（harness 的 tempDir/agent）迁移进来；环境变量也指向
+		// 同一个目录，让其余按 getAgentDir() 找目录的代码同样不碰开发者机器上的真实用户目录。
 		process.env[ENV_AGENT_DIR] = join(harness.tempDir, "agent");
 		harnesses.push(harness);
 		return harness;
@@ -117,7 +116,8 @@ describe("prompt cache stability", () => {
 
 	describe("Test 4: Auto Memory disabled", () => {
 		it("does not include the memory policy in the system prompt", async () => {
-			const harness = await createHarness({ persisted: true });
+			// Auto Memory is on by default; this is a user who turned it off.
+			const harness = await createHarness({ persisted: true, settings: { autoMemory: { enabled: false } } });
 			harnesses.push(harness);
 
 			harness.setResponses([fauxAssistantMessage("reply")]);

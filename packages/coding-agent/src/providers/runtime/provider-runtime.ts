@@ -56,6 +56,7 @@ import {
 } from "../models/custom-provider-manager.ts";
 import { DisabledProviderPolicy } from "../models/disabled.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "../models/store.ts";
+import { providerSpendLedger } from "./provider-spend.ts";
 
 const DEFAULT_MODEL_REFRESH_TIMEOUT_MS = 15_000;
 interface ModelRuntimeSnapshot {
@@ -955,17 +956,32 @@ export class ModelRuntime implements Models {
 		context: Context,
 		options?: ModelsApiStreamOptions<TApi>,
 	): AssistantMessageEventStream {
-		return lazyStream(model, async () => {
-			const prepared = await this.prepareRequest(
-				model,
-				options as (StreamOptions & ModelsStreamTransforms) | undefined,
-			);
-			return prepared.provider.stream(
-				prepared.model as Model<TApi>,
-				context,
-				prepared.options as ApiStreamOptions<TApi>,
-			);
-		});
+		return this.countSpend(
+			model,
+			lazyStream(model, async () => {
+				const prepared = await this.prepareRequest(
+					model,
+					options as (StreamOptions & ModelsStreamTransforms) | undefined,
+				);
+				return prepared.provider.stream(
+					prepared.model as Model<TApi>,
+					context,
+					prepared.options as ApiStreamOptions<TApi>,
+				);
+			}),
+		);
+	}
+
+	/** Adds the request's cost to this computer's estimate for the provider (provider-spend.ts) once it finished. */
+	private countSpend(model: Model<Api>, stream: AssistantMessageEventStream): AssistantMessageEventStream {
+		const file = this.modelsPath ? join(dirname(this.modelsPath), "provider-spend.json") : undefined;
+		if (file) {
+			stream
+				.result()
+				.then((message) => providerSpendLedger(file).record(model.provider, message, model.cost?.currency))
+				.catch(() => {});
+		}
+		return stream;
 	}
 
 	complete<TApi extends Api>(
@@ -977,10 +993,13 @@ export class ModelRuntime implements Models {
 	}
 
 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
-		return lazyStream(model, async () => {
-			const prepared = await this.prepareRequest(model, options);
-			return prepared.provider.streamSimple(prepared.model, context, prepared.options as SimpleStreamOptions);
-		});
+		return this.countSpend(
+			model,
+			lazyStream(model, async () => {
+				const prepared = await this.prepareRequest(model, options);
+				return prepared.provider.streamSimple(prepared.model, context, prepared.options as SimpleStreamOptions);
+			}),
+		);
 	}
 
 	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage> {

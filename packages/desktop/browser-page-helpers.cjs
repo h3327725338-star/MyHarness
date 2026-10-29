@@ -390,6 +390,32 @@ async function pageRead(h, q) {
  * The page script that runs `fn(helpers, arg)`. A thrown error (an invalid selector) comes back as `{ ok: false, error }`
  * instead of the engine's generic "Script failed to execute".
  */
+/**
+ * What a page says about itself, for the note of a bookmark the app writes: its title, the description it gives search
+ * engines and link previews, its first headings, the language it is in and the start of its text. Read only.
+ */
+function pageInfo() {
+  const meta = (name) => {
+    const element = document.querySelector(`meta[name="${name}"], meta[property="${name}"]`);
+    return element ? String(element.getAttribute('content') || '').replace(/\s+/g, ' ').trim().slice(0, 400) : '';
+  };
+  const headings = [];
+  for (const element of document.querySelectorAll('h1, h2')) {
+    const text = String(element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
+    if (text && !headings.includes(text)) headings.push(text.slice(0, 120));
+    if (headings.length >= 8) break;
+  }
+  const text = String(document.body ? document.body.innerText || '' : '').replace(/[ \t\u00a0]+/g, ' ').replace(/\n{2,}/g, '\n').trim().slice(0, 1500);
+  return {
+    ok: true,
+    description: meta('description') || meta('og:description') || meta('twitter:description'),
+    siteName: meta('og:site_name') || meta('application-name'),
+    language: String(document.documentElement.lang || '').slice(0, 20),
+    headings,
+    text,
+  };
+}
+
 const inPage = (fn, arg) => `(() => { try { return (${fn})((${pageHelpers})(${JSON.stringify(INTERACTIVE_QUERY)}), ${JSON.stringify(arg ?? null)}); } catch (error) { return { ok: false, error: String(error && error.message ? error.message : error) }; } })()`;
 
-module.exports = { INTERACTIVE_QUERY, pageHelpers, inPage, pageLocate, pageInteractive, pageWaitCondition, pageFindText, pageTextOnScreen, pageScroll, pageSelectFocused, pageFocused, pageRead };
+module.exports = { INTERACTIVE_QUERY, pageHelpers, inPage, pageLocate, pageInteractive, pageWaitCondition, pageFindText, pageTextOnScreen, pageScroll, pageSelectFocused, pageFocused, pageRead, pageInfo };

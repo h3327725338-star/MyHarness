@@ -2,6 +2,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, 
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getSessionConversationDir } from "../config/paths/index.ts";
 import type { WorkspaceStore } from "../data/workspace-store.ts";
+import { mergeScheduleLists, scheduleListOf, updateScheduleList } from "../schedules/store.ts";
 import { refreshMemoryIndexes, withMemoryLock, writeMemoryFile } from "../session/memory/store.ts";
 import type { ModeStateStore } from "../session/mode-state.ts";
 import { readSessionHeader } from "../session/storage/jsonl/index.ts";
@@ -41,10 +42,12 @@ export interface ApplyOutcome {
 	memoriesChanged: boolean;
 	/** Set when a Workspace had to be restored to a managed folder on this device. */
 	binding?: { workspaceId: string; path: string; name: string; hint?: string; pending: boolean };
-	/** Entries both devices changed differently; the local version is kept and the remote one is saved as a copy. */
+	/** Entries both devices changed differently; the later change is kept (see `remoteWon`), without asking. */
 	entryConflicts?: string[];
-	/** Both devices changed the Session header (for example its title); the local header is kept. */
+	/** Both devices changed the Session header (for example its title); the later change is kept. */
 	headerConflict?: boolean;
+	/** The other device's version of those entries and header was the later one and replaced this device's. */
+	remoteWon?: boolean;
 }
 
 function emptyOutcome(): ApplyOutcome {
@@ -147,10 +150,15 @@ export async function writeMergedMemory(ctx: ApplyContext, id: string, text: str
 	return true;
 }
 
-/** Merge two append-only Session trees: every entry id survives once, and both branches stay reachable. */
+/**
+ * Merge two append-only Session trees: every entry id survives once, and both branches stay reachable. An entry (or the
+ * header) both devices changed takes the remote version when `preferRemote` (its change is the later one), else keeps
+ * the local one; the header keeps this device's `cwd` either way.
+ */
 export function mergeSessionJsonl(
 	localText: string | undefined,
 	remoteText: string,
+	preferRemote = false,
 ): { text: string; changed: boolean; headerConflict: boolean; entryConflicts: string[] } {
 	const parse = (text: string): { header?: Record<string, unknown>; entries: Record<string, unknown>[] } => {
 		let parsedHeader: Record<string, unknown> | undefined;
@@ -194,14 +202,20 @@ export function mergeSessionJsonl(
 			changed = true;
 			continue;
 		}
-		if (stableJson(existing) !== stableJson(entry)) entryConflicts.push(id);
+		if (stableJson(existing) !== stableJson(entry)) {
+			entryConflicts.push(id);
+			if (preferRemote) byId.set(id, entry);
+		}
 	}
-	const header = local.header ?? remote.header;
 	const headerConflict = Boolean(
 		local.header &&
 			remote.header &&
 			stableJson({ ...local.header, cwd: "" }) !== stableJson({ ...remote.header, cwd: "" }),
 	);
+	const header =
+		headerConflict && preferRemote && local.header && remote.header
+			? { ...remote.header, ...("cwd" in local.header ? { cwd: local.header.cwd } : {}) }
+			: (local.header ?? remote.header);
 	const lines: string[] = [];
 	if (header) lines.push(JSON.stringify(header));
 	for (const id of order) lines.push(JSON.stringify(byId.get(id)));
@@ -252,8 +266,16 @@ export async function applySession(
 	const target = sessionConversationFile(ctx, record);
 	if (!target) return { ...outcome, conflictCount: 0 };
 	const localText = existsSync(target.path) ? readFileSync(target.path, "utf8") : undefined;
-	const merged = mergeSessionJsonl(localText, fromUtf8(data));
-	const conflicts = { entryConflicts: merged.entryConflicts, headerConflict: merged.headerConflict };
+	// What both devices changed goes to the later change: the other device's file time (`updatedAt`) against this file's.
+	let localTime = 0;
+	try {
+		localTime = statSync(target.path).mtimeMs;
+	} catch {
+		localTime = 0;
+	}
+	const remoteWon = Date.parse(record.updatedAt) > localTime;
+	const merged = mergeSessionJsonl(localText, fromUtf8(data), remoteWon);
+	const conflicts = { entryConflicts: merged.entryConflicts, headerConflict: merged.headerConflict, remoteWon };
 	if (!merged.changed) return { ...outcome, conflictCount: merged.entryConflicts.length, ...conflicts };
 	assertDirectTarget(target.path, ctx.dataRoot);
 	backupIfExists(ctx, "session", record.key, "conversation.jsonl", target.path);
@@ -461,6 +483,17 @@ export async function applyPrompt(ctx: ApplyContext, data: Uint8Array): Promise<
 /** Apply the saved prompts of the Web UI: the list in the preferences file is replaced, other preferences stay. */
 export async function applySavedPrompts(ctx: ApplyContext, data: Uint8Array): Promise<ApplyOutcome> {
 	writeSavedPrompts(ctx.agentDir, savedPromptsOf(JSON.parse(fromUtf8(data)) as unknown));
+	return { ...emptyOutcome(), applied: true };
+}
+
+/**
+ * Apply the scheduled tasks: merged into the local list (schedules/store.ts), never written over it, because this
+ * computer's clock may have recorded a run since the last pass. When the merge adds something of this computer's, the
+ * next pass publishes it.
+ */
+export async function applySchedules(ctx: ApplyContext, data: Uint8Array): Promise<ApplyOutcome> {
+	const remote = scheduleListOf(JSON.parse(fromUtf8(data)) as unknown);
+	updateScheduleList(ctx.agentDir, (local) => mergeScheduleLists(local, remote));
 	return { ...emptyOutcome(), applied: true };
 }
 

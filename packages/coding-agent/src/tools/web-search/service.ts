@@ -9,7 +9,7 @@ import { type EngineResult, type SearchTimeRange, WEB_SEARCH_ENGINES } from "./e
 import { abortError, failureFromError, isAccessBlock, WebSearchError } from "./errors.ts";
 import { type FetchLike, plainHttpFetch } from "./http.ts";
 import { type ReadPageResult, readPage } from "./page.ts";
-import { BrowserPageReader } from "./page-browser.ts";
+import { BrowserPageReader, type SignedInPage, signedInPageResult } from "./page-browser.ts";
 import { type BrowserTransport, browserLabel, HttpTransport } from "./transport.ts";
 import type {
 	WebFetchedPage,
@@ -67,6 +67,11 @@ export interface WebSearchServiceOptions {
 	browser?: BrowserTransport | null;
 	/** True when a person can be asked to pass a CAPTCHA or log in in a visible browser window. */
 	interactiveChallenges?: () => boolean;
+	/**
+	 * The desktop app's built-in browser: reads a page with the user's sign-ins there (tools/workspace.ts
+	 * readInBuiltInBrowser); resolves undefined when this process has no desktop host.
+	 */
+	signedInBrowser?: (url: string, signal: AbortSignal | undefined) => Promise<SignedInPage | undefined>;
 	/** Overrides WEB_SEARCH_LIMITS.searchReadBudgetMs (tests). */
 	searchReadBudgetMs?: number;
 }
@@ -502,9 +507,35 @@ export class WebSearchService {
 	}
 
 	/**
+	 * A refused page in the desktop app's built-in browser, signed in wherever the user signed in there (the Agent once
+	 * opened another browser's window for a site the built-in browser was already signed in to). `desktop` says whether
+	 * there is such a browser: then nobody is asked in another browser's window afterwards, because a sign-in or a human
+	 * check belongs in the built-in browser, where the Agent hands the page to the user (signedInPageResult).
+	 */
+	private async readSignedIn(
+		url: string,
+		signal: AbortSignal | undefined,
+	): Promise<{ page?: ReadPageResult; desktop: boolean }> {
+		const read = this.options.signedInBrowser;
+		if (!read) return { desktop: false };
+		let page: SignedInPage | undefined;
+		try {
+			page = await read(url, signal);
+		} catch {
+			const aborted = abortError(signal);
+			if (aborted) throw aborted;
+			// The host could not read it (it timed out, the page crashed): the other browser still may, without a window.
+			return { desktop: true };
+		}
+		if (!page) return { desktop: false };
+		return { page: await signedInPageResult(page, url, this.lookup), desktop: true };
+	}
+
+	/**
 	 * One page: the plain request first; when the site refuses it (403, robot check, login, a page that only exists
-	 * after JavaScript ran), the same page in the real browser, which may ask the person for help (see BrowserPageReader).
-	 * A single HTTP error never ends the read while the browser can still be tried.
+	 * after JavaScript ran), the same page in the desktop app's built-in browser with the user's sign-ins (readSignedIn),
+	 * then in the real browser, which may ask the person for help in its own window when there is no desktop app (see
+	 * BrowserPageReader). A single HTTP error never ends the read while a browser can still be tried.
 	 */
 	private async readOnePage(
 		url: string,
@@ -523,6 +554,9 @@ export class WebSearchService {
 			const refused = isAccessBlock(error) || (error instanceof WebSearchError && error.code === "empty_content");
 			if (!refused || signal?.aborted) throw error;
 			const direct = error as WebSearchError;
+			const signedIn = await this.readSignedIn(url, signal);
+			if (signedIn.page) return signedIn.page;
+			if (signedIn.desktop) mayAskPerson = false;
 			const unavailable = !this.pageReader
 				? "当前运行环境没有浏览器通道。"
 				: !this.settings().browserFallback

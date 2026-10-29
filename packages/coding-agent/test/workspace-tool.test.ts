@@ -559,11 +559,62 @@ describe("workspace tool: the Agent's own mouse, keyboard and trusted sites", ()
 			throw new Error(`unexpected ${String(command.action)}`);
 		});
 		const list = await call(tool, { operation: "bookmarks" });
-		expect(list.content[0]!.text).toContain('bm1 "Mail" https://mail.example/');
+		expect(list.content[0]!.text).toContain("Mail — https://mail.example/");
+		expect(list.content[0]!.text).toContain("[id bm1]");
 		const result = await call(tool, { operation: "open", type: "browser", bookmark: "mail", background: true });
 		expect(opened.at(-1)).toMatchObject({ action: "open", background: true, tab: { url: "https://mail.example/" } });
 		expect(result.content[0]!.text).toContain("opened browser tab browser:new (background)");
 		await expect(call(tool, { operation: "open", type: "browser", bookmark: "nope" })).rejects.toThrow(/no bookmark/);
+		// Without a type (as the bookmarks reminder puts it) the bookmark still opens as a website.
+		await call(tool, { operation: "open", bookmark: "bm1" });
+		expect(opened.at(-1)).toMatchObject({ action: "open", background: true, tab: { url: "https://mail.example/" } });
+	});
+
+	it("hands a step only the user may take to the user, waits for the answer and says what to do next", async () => {
+		const { tool, sent } = twoTabs((command) => {
+			if (command.action === "handoff")
+				return {
+					outcome: "done-auto",
+					waitedMs: 42_000,
+					url: "https://b.example/inbox",
+					title: "Inbox",
+					signIn: false,
+					challenge: false,
+				};
+			throw new Error(`unexpected ${String(command.action)}`);
+		});
+		const result = await call(tool, {
+			operation: "handoff",
+			tabId: tabB,
+			reason: "login",
+			message: "Please sign in to the mail site.",
+			timeoutMinutes: 5,
+		});
+		const activate = sent.find((entry) => entry.action === "workspace" && entry.command.action === "activate");
+		expect(activate?.command).toMatchObject({ tabId: tabB });
+		const handoff = sent.find((entry) => entry.command.action === "handoff")!.command;
+		expect(handoff).toMatchObject({
+			tabId: tabB,
+			reason: "login",
+			message: "Please sign in to the mail site.",
+			timeoutMs: 300_000,
+		});
+		const text = result.content[0]!.text;
+		expect(text).toContain("handoff browser:b reason=login outcome=done-auto waited=42s");
+		expect(text).toContain("sign_in=no human_check=no");
+		expect(text).toContain("Check the page");
+	});
+
+	it("never types into a human check: the host refusal reaches the Agent with the way to hand it over", async () => {
+		const { tool } = twoTabs((command) => {
+			if (command.action === "insertText" || command.action === "mouse")
+				throw new Error(
+					'这个页面是网站的人机验证（Just a moment），请用 workspace 的 handoff（reason: "verify"）请用户完成',
+				);
+			if (command.action === "state") return { loading: false, url: "https://b.example/", challenge: true };
+			throw new Error(`unexpected ${String(command.action)}`);
+		});
+		await expect(call(tool, { operation: "type", tabId: tabB, text: "hello" })).rejects.toThrow(/handoff/);
 	});
 
 	it("signs in with the saved login and never prints a password", async () => {

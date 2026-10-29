@@ -1,14 +1,11 @@
-import { join } from "node:path";
-import { getDocsPath } from "../../config.ts";
-
 const UNKNOWN_PROVIDER = "unknown";
 
+/**
+ * Where a user sets up a model. The desktop app and the Web UI do it in Settings → Providers; the docs are not part of
+ * an installed app, so no file path is given.
+ */
 export function getProviderLoginHelp(): string {
-	return [
-		"Use /model to select and configure a provider. Set API keys via environment variables. See:",
-		`  ${join(getDocsPath(), "providers.md")}`,
-		`  ${join(getDocsPath(), "models.md")}`,
-	].join("\n");
+	return "Add a provider and a model in Settings → Providers (or in models.json in the agent folder), then choose the model in the composer.";
 }
 
 export function formatNoModelsAvailableMessage(): string {
@@ -16,10 +13,11 @@ export function formatNoModelsAvailableMessage(): string {
 }
 
 export function formatNoModelSelectedMessage(): string {
-	return `No model selected.\n\n${getProviderLoginHelp()}\n\nThen use /model to select a model.`;
+	return `No model selected.\n\n${getProviderLoginHelp()}`;
 }
 
+/** The agent core's placeholder model (provider "unknown") means no model was set up at all, not a missing key. */
 export function formatNoApiKeyFoundMessage(provider: string): string {
-	const providerDisplay = provider === UNKNOWN_PROVIDER ? "the selected model" : provider;
-	return `No API key found for ${providerDisplay}.\n\n${getProviderLoginHelp()}`;
+	if (provider === UNKNOWN_PROVIDER) return formatNoModelSelectedMessage();
+	return `No API key found for ${provider}.\n\nAdd its API key in Settings → Providers (or set it in an environment variable).`;
 }

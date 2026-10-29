@@ -446,3 +446,77 @@ describe("mail tool", () => {
 		expect(restrictToolNamesForRole("delegated", ["read", "mail"])).toEqual(["read"]);
 	});
 });
+
+describe("mail tool: a new email without an API path", () => {
+	const run = (
+		connections: MailConnections,
+		args: Record<string, unknown>,
+		channel?: { request: (command: Record<string, unknown>, timeoutMs?: number) => Promise<unknown> },
+	) =>
+		createMailToolDefinition(dir, { connections, channel: () => channel }).execute(
+			"call",
+			args as never,
+			new AbortController().signal,
+			undefined,
+			{} as never,
+		) as Promise<{ content: { text: string }[] }>;
+
+	it("sends through the API mailbox when one is connected", async () => {
+		const { connections, request } = service([Response.json({ id: "sent" })], {
+			accounts: [account("google", "a@gmail.com")],
+		});
+		const host = { request: vi.fn(async () => ({ ok: true })) };
+		const result = await run(
+			connections,
+			{ message: { to: ["me@gmail.com"], subject: "提醒", text: "(^_^)" } },
+			host,
+		);
+		expect(String(request.mock.calls[0][0])).toBe("https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
+		const mime = Buffer.from(JSON.parse(String(request.mock.calls[0][1]?.body)).raw, "base64url").toString("utf8");
+		expect(mime).toContain("To: me@gmail.com");
+		expect(result.content[0]!.text).toContain("Gmail API (a@gmail.com)");
+		expect(host.request).not.toHaveBeenCalled();
+	});
+
+	it("sends through the website signed in to in the built-in browser when no mailbox is connected", async () => {
+		const { connections, request } = service();
+		const host = {
+			request: vi.fn(async () => ({ ok: true, provider: "google", account: "me@gmail.com", ms: 4200 })),
+		};
+		const result = await run(
+			connections,
+			{ message: { to: ["me@gmail.com"], subject: "提醒", text: "(^_^)" } },
+			host,
+		);
+		expect(request).not.toHaveBeenCalled();
+		expect(host.request).toHaveBeenCalledWith(
+			expect.objectContaining({ action: "webMailSend", to: ["me@gmail.com"], subject: "提醒", text: "(^_^)" }),
+			expect.any(Number),
+		);
+		expect(result.content[0]!.text).toContain("Gmail website in the built-in browser (me@gmail.com)");
+		// The website takes plain text with a subject only; without a desktop host there is no website at all.
+		await expect(
+			run(connections, { message: { to: ["me@gmail.com"], subject: "x", attachments: ["a.txt"] } }, host),
+		).rejects.toThrow("不能带附件");
+		await expect(run(connections, { message: { to: ["me@gmail.com"], text: "x" } }, host)).rejects.toThrow(
+			"需要主题",
+		);
+		await expect(run(connections, { message: { to: ["me@gmail.com"], subject: "x" } })).rejects.toThrow(
+			"没有可以发信的邮箱",
+		);
+		await expect(run(connections, { message: { subject: "x" } }, host)).rejects.toThrow("没有收件人");
+		await expect(run(connections, {}, host)).rejects.toThrow("需要 message");
+	});
+
+	it("asks which mailbox when several are connected and none is named", async () => {
+		const { connections, request } = service([Response.json({})], {
+			accounts: [account("google", "a@gmail.com"), account("microsoft", "b@outlook.com")],
+		});
+		await expect(run(connections, { message: { to: ["x@y.co"], subject: "s" } })).rejects.toThrow(
+			"请用 account 指定",
+		);
+		await run(connections, { account: "b@outlook.com", message: { to: ["x@y.co"], subject: "s", text: "t" } });
+		expect(String(request.mock.calls[0][0])).toBe("https://graph.microsoft.com/v1.0/me/sendMail");
+		expect(JSON.parse(String(request.mock.calls[0][1]?.body)).message.subject).toBe("s");
+	});
+});

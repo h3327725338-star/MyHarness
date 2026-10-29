@@ -29,6 +29,8 @@ export const SETTINGS_DEFAULTS = {
 		skipPrompt: false,
 	},
 	featureEnabled: false,
+	/** Auto Memory is on until the user turns it off; with no model of its own it uses the main model. */
+	autoMemoryEnabled: true,
 	retry: {
 		enabled: true,
 		maxRetries: 3,
@@ -84,9 +86,10 @@ export const SETTINGS_DEFAULTS = {
 	defaultSubAgentMaxTasks: 3,
 	network: DEFAULT_NETWORK_TIMEOUTS,
 	webShutdownGraceSeconds: 10,
+	// On out of the box: Tavily answers without a key through its free keyless access (see engines/tavily.ts).
 	webSearch: {
-		enabled: false,
-		engines: ["google", "bing"],
+		enabled: true,
+		engines: ["tavily", "google"],
 		pagesPerSearch: 3,
 		maxUrlsPerFetch: 10,
 		fetchConcurrency: 4,

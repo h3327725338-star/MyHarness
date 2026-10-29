@@ -66,7 +66,7 @@ export function CommandPalette() {
 		// view (D-18). Remaining groups render only when they have entries, so no empty group can appear.
 		const readOnly = exportReadOnly();
 		const cmds = [
-			...(readOnly ? [] : [{ label: t("New chat"), icon: "edit", hint: shortcutFor("newChat", state.view.shortcuts), run: run(() => actions.newChat()) }]),
+			...(readOnly ? [] : [{ label: t("New chat"), icon: "edit", hint: shortcutFor("newChat", state.view.shortcuts), run: run(() => actions.newChatHere()) }]),
 			{ label: t("Toggle sidebar"), icon: "sidebar", hint: shortcutFor("sidebar", state.view.shortcuts), run: run(() => setView({ sidebarOpen: !state.view.sidebarOpen })) },
 			...(readOnly
 				? []

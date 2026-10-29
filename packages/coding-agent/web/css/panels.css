@@ -4,6 +4,13 @@
 /* The native page view of the desktop host lies exactly over this box, which reaches every edge of the panel: no strip
    of the panel shows beside the site. The resize handle on the panel's edge stays draggable on its outer half. */
 .desktop-browser-target { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+/* Beside a peeking sidebar or conversation the view ends a gutter before the card (browser-view-sync.js sets the widths):
+   the strips it leaves show the app's background, as around a docked card, instead of the site's last picture, so the
+   card's ring and shadow stand apart from the page. They come and go with the card's slide. */
+.desktop-browser-target::before, .desktop-browser-target::after { content: ""; position: absolute; top: 0; bottom: 0; z-index: 1; background: var(--bg-app); pointer-events: none; opacity: 0; transition: opacity 180ms cubic-bezier(0.4, 0, 1, 1); }
+.desktop-browser-target::before { left: 0; width: var(--peek-lane-left, 0px); }
+.desktop-browser-target::after { right: 0; width: var(--peek-lane-right, 0px); }
+:root[data-sidebar-peek="in"] .desktop-browser-target::before, :root[data-chat-peek="in"] .desktop-browser-target::after { opacity: 1; transition: opacity 120ms var(--ease-out); }
 /* New-tab page: the user's shortcuts as round site icons in the middle of the empty tab (Chrome's start page), with
    groups drawn as a 2x2 of small icons (the Start menu's folders). It only shows while the tab has no native page. */
 .sd { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px; overflow: auto; }
@@ -59,6 +66,22 @@
 .notice.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 /* The browser's own notice and the bot-check bar are rows: the text takes the room, the buttons sit at its end. */
 .notice.ws-notice, .notice.ws-challenge { align-items: center; }
+/* The Agent asks the user to sign in or pass a check on this tab (browser-help.js): above the page, in the accent color. */
+.notice.ws-help { align-items: center; background: var(--accent-soft); border-color: var(--accent-line); color: var(--text); white-space: normal; animation: pop-in var(--t-pop) var(--ease-out) both; }
+.notice.ws-help > svg { flex: none; color: var(--accent); }
+.ws-help-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ws-help-text > span { color: var(--text-2); }
+.notice.ws-help > .btn { flex: none; }
+/* A tab opened to get an API key (service-keys.js): paste the key above the page, without going back to Settings. */
+.notice.ws-key-strip { align-items: center; flex-wrap: wrap; background: var(--accent-soft); border-color: var(--accent-line); color: var(--text); white-space: normal; animation: pop-in var(--t-pop) var(--ease-out) both; }
+.notice.ws-key-strip.ok { background: var(--ok-soft); border-color: transparent; }
+.notice.ws-key-strip > svg { flex: none; color: var(--accent); }
+.notice.ws-key-strip.ok > svg { color: var(--ok); }
+.ws-key-text { min-width: 0; flex: 0 1 auto; }
+.ws-key-form { gap: 6px; min-width: 220px; flex: 1 1 260px; }
+.ws-key-form > .field { min-width: 0; height: 28px; }
+.ws-key-form > .btn, .notice.ws-key-strip > .btn { flex: none; }
+.ws-key-error { flex-basis: 100%; font-size: var(--fs-xs); }
 /* The browser's own notice lies over its toolbar for a few seconds: the page below never moves, and nothing of the page
    is covered (the native view would have to hide under it). Opaque, because the toolbar's controls are behind it. */
 .ws-browser-bar { position: relative; }

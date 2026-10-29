@@ -214,7 +214,7 @@ const runChecks=async()=>{
 	 const si=[...document.querySelectorAll('[data-shortcut-editor]')];
 	 if(si.length!==7)throw Error('shortcut editors not seven: '+si.length);
 	 widthsEqual(si,'shortcut editors');rightsEqual(si,'shortcut editors');
-	 const sw=rect(si[0]).width;if(sw<110||sw>160)throw Error('shortcut editor width outside 110-160: '+Math.round(sw));
+	 const sw=rect(si[0]).width;if(sw<150||sw>208)throw Error('shortcut editor width outside 150-208: '+Math.round(sw));
 	 const overflowPages=['appearance','agent','search','network','shortcuts','providers','safety'];
 	 for(const p of overflowPages){
 	  setView({settingsSection:p});await wait(250);

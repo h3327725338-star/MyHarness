@@ -14,8 +14,9 @@ const installed = detectInstalledBrowsers();
  *
  * - a visible box produces bounds with its exact rectangle, a moved box produces new bounds without a stale frame;
  * - a dialog/overlay over the box, or a clipping ancestor, hides the view (null bounds);
- * - the peeking sidebar over the left side of the box cuts the view at its edge (`clip`) instead of hiding it, and a
- *   View Transition over the screen hides it with `live` (the host then sends moving frames, drawn into the picture);
+ * - the peeking sidebar over the left side of the box cuts the view a gutter before its edge (`clip`) instead of hiding
+ *   it, the strip left beside the card shows the app's background, and a View Transition over the screen hides it with
+ *   `live` (the host then sends moving frames, drawn into the picture);
  * - unmounting the website tab — the action of switching to Session/Terminal/file/media — reports null bounds, so the
  *   native view cannot stay over the next tab;
  * - the workspace actions hide the native views before they switch to a non-browser tab or close the panel;
@@ -29,6 +30,8 @@ it.skipIf(!installed.length)(
 		const browser = new LocalBrowser({
 			kind: installed.find((item) => item.kind === "chrome")?.kind ?? installed[0]!.kind,
 			rootDir: join(root, "browser"),
+			// Runs in the plain unit suite too: headless, never a window pulled to the front.
+			unattended: true,
 		});
 		try {
 			for (const dir of ["js", "vendor", "css"])
@@ -79,7 +82,7 @@ try {
 	const panel=document.createElement('div');
 	panel.id='panel';
 	panel.style.cssText='position:fixed;left:100px;top:80px;width:400px;height:500px;overflow:hidden;background:#ccc';
-	panel.innerHTML='<div id="target" style="width:100%;height:400px;background:#ddd"></div>';
+	panel.innerHTML='<div id="target" class="desktop-browser-target" style="width:100%;height:400px;background:#ddd"></div>';
 	document.body.append(panel);
 	const sync=createBrowserViewSync({host:window.myHarnessDesktop,tabId:'browser:https://example.com/',element:()=>document.getElementById('target'),onError:error=>{throw new Error(error)}});
 	sync.start();
@@ -103,7 +106,8 @@ try {
 	check(await until(()=>lastBounds()&&lastBounds().rect),'removing the overlay did not bring the native view back');
 	coveredSync.stop();
 
-	// 2a. The sidebar peek covers only the left side of the box: the view is cut at the sidebar's edge and stays live.
+	// 2a. The sidebar peek covers only the left side of the box: the view is cut a gutter (6 px) before the sidebar's edge
+	//     and stays live.
 	//     Sliding in, the cut is where the sidebar comes to rest; once it has slid out the whole box is shown again.
 	mark('peek');
 	const peekSync=createBrowserViewSync({host:window.myHarnessDesktop,tabId:'browser:https://example.com/',element:()=>document.getElementById('target'),onError:()=>{}});
@@ -118,21 +122,75 @@ try {
 	app.append(side);
 	document.body.append(app);
 	document.documentElement.dataset.sidebarPeek='in';
-	check(await until(()=>{const last=lastBounds();return last&&last.rect&&last.rect.x===100&&last.rect.width===400&&last.clip&&last.clip.x===250&&last.clip.width===250&&last.clip.y===80&&last.clip.height===400}),'the peeking sidebar did not cut the view at its resting edge: '+JSON.stringify(lastBounds()));
+	check(await until(()=>{const last=lastBounds();return last&&last.rect&&last.rect.x===100&&last.rect.width===400&&last.clip&&last.clip.x===256&&last.clip.width===244&&last.clip.y===80&&last.clip.height===400}),'the peeking sidebar did not cut the view a gutter before its resting edge: '+JSON.stringify(lastBounds()));
 	side.style.transform='none';
 	await wait(100);
-	check(lastBounds().clip&&lastBounds().clip.x===250,'the cut moved while the sidebar came to rest: '+JSON.stringify(lastBounds()));
+	check(lastBounds().clip&&lastBounds().clip.x===256,'the cut moved while the sidebar came to rest: '+JSON.stringify(lastBounds()));
 	// A sidebar that leaves too little of the box hides the view instead of showing a sliver.
 	side.style.width='470px';
 	check(await until(()=>lastBounds()&&lastBounds().rect===null),'a sliver of the view was left beside a wide sidebar: '+JSON.stringify(lastBounds()));
 	side.style.width='250px';
 	document.documentElement.dataset.sidebarPeek='out';
 	side.style.transform='translateX(-120px)';
-	check(await until(()=>{const last=lastBounds();return last&&last.rect&&last.clip&&last.clip.x===130}),'sliding out, the cut did not follow the sidebar: '+JSON.stringify(lastBounds()));
+	check(await until(()=>{const last=lastBounds();return last&&last.rect&&last.clip&&last.clip.x===136}),'sliding out, the cut did not follow the sidebar: '+JSON.stringify(lastBounds()));
 	side.style.transform='translateX(-274px)';
 	check(await until(()=>{const last=lastBounds();return last&&last.rect&&!last.clip}),'the whole box did not come back after the peek: '+JSON.stringify(lastBounds()));
 	delete document.documentElement.dataset.sidebarPeek;
 	app.remove();
+
+	// 2a'. While the conversation is tucked away (browser fullscreen, or collaboration mode after hiding it) it peeks in
+	//      over the right side of the box: the view is cut a gutter before its left edge (where it comes to rest while
+	//      sliding in) and the strip beside it shows the app's background instead of the site's last picture, both
+	//      peeks at once leave the part between them, and the whole box comes back once it has slid out. A docked
+	//      conversation (full-chat, no longer chat-tucked) is a column, not a peek.
+	mark('chat-peek');
+	check(await until(()=>{const last=lastBounds();return last&&last.rect&&!last.clip}),'the box was not shown before the conversation peek');
+	const full=document.createElement('div');
+	full.className='app ws-max browser-full chat-tucked';
+	full.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:50;display:block';
+	const chat=document.createElement('div');
+	chat.className='main';
+	chat.style.cssText='position:fixed;left:350px;top:0;width:300px;height:600px;margin:0;pointer-events:auto;background:#fff;visibility:visible;transition:none;transform:translateX(60px)';
+	full.append(chat);
+	document.body.append(full);
+	document.documentElement.dataset.chatPeek='in';
+	check(await until(()=>{const last=lastBounds();return last&&last.rect&&last.rect.x===100&&last.rect.width===400&&last.clip&&last.clip.x===100&&last.clip.width===244&&last.clip.y===80&&last.clip.height===400}),'the peeking conversation did not cut the view a gutter before its resting edge: '+JSON.stringify(lastBounds()));
+	chat.style.transform='none';
+	await wait(100);
+	check(lastBounds().clip&&lastBounds().clip.width===244,'the cut moved while the conversation came to rest: '+JSON.stringify(lastBounds()));
+	const target=document.getElementById('target');
+	const lane=()=>getComputedStyle(target,'::after');
+	check(await until(()=>lane().width==='156px'&&lane().opacity==='1'&&getComputedStyle(target,'::before').width==='0px'),'the strip beside the conversation does not show the app background: '+JSON.stringify({width:lane().width,opacity:lane().opacity,color:lane().backgroundColor}));
+	check(lane().backgroundColor===getComputedStyle(document.body).backgroundColor,'the strip is not the app background: '+lane().backgroundColor);
+	// Collaboration mode tucks the conversation away the same way, without fullscreen: its peek cuts the view too.
+	full.classList.remove('browser-full');
+	await wait(100);
+	check(lastBounds().clip&&lastBounds().clip.width===244,'a peek in collaboration mode did not cut the view: '+JSON.stringify(lastBounds()));
+	full.classList.add('browser-full');
+	const both=document.createElement('div');
+	both.className='sidebar is-collapsed';
+	both.style.cssText='position:fixed;left:0;top:0;width:250px;height:600px;margin:0;pointer-events:auto;background:#fff;transition:none';
+	full.prepend(both);
+	document.documentElement.dataset.sidebarPeek='in';
+	check(await until(()=>{const last=lastBounds();return last&&last.clip&&last.clip.x===256&&last.clip.width===88}),'both peeks did not leave the part between them: '+JSON.stringify(lastBounds()));
+	both.remove();
+	delete document.documentElement.dataset.sidebarPeek;
+	// Docked, the conversation is the column beside the box.
+	full.classList.add('full-chat');
+	full.classList.remove('chat-tucked');
+	chat.style.left='500px';
+	check(await until(()=>{const last=lastBounds();return last&&last.rect&&!last.clip}),'a docked conversation still cut the view: '+JSON.stringify(lastBounds()));
+	full.classList.remove('full-chat');
+	full.classList.add('chat-tucked');
+	chat.style.left='350px';
+	document.documentElement.dataset.chatPeek='out';
+	chat.style.transform='translateX(100px)';
+	check(await until(()=>{const last=lastBounds();return last&&last.clip&&last.clip.width===344}),'sliding out, the cut did not follow the conversation: '+JSON.stringify(lastBounds()));
+	chat.style.transform='translateX(400px)';
+	check(await until(()=>{const last=lastBounds();return last&&last.rect&&!last.clip}),'the whole box did not come back after the conversation peek: '+JSON.stringify(lastBounds()));
+	check(lane().width==='0px','the strip stayed after the conversation peek: '+lane().width);
+	delete document.documentElement.dataset.chatPeek;
+	full.remove();
 
 	// 2b. A View Transition over the screen (the mode reveal): the view is hidden with \`live\`, then shown again.
 	if (typeof document.startViewTransition==='function') {
@@ -195,10 +253,11 @@ try {
 	await submit('deepseek pricing');
 	check(await until(()=>calls.some(c=>c.action==='navigate'&&c.url==='https://www.google.com/search?q=deepseek%20pricing')),'a query was not searched with Google: '+JSON.stringify(calls.slice(-4)));
 	// No magnifier in the toolbar (find in page is Ctrl+F; a magnifier beside the address field reads as "search"),
-	// and the new tab button follows the star: the engine picker is a caret inside the address field.
+	// and the downloads button follows the star (a new tab is the "+" after the tabs): the engine picker is a caret inside
+	// the address field.
 	const labels=[...document.querySelectorAll('.ws-browser-bar > button')].map(b=>b.getAttribute('aria-label'));
 	check(!labels.includes('Find in page'),'the toolbar must not carry a find-in-page magnifier: '+JSON.stringify(labels));
-	check(labels.indexOf('New browser tab')===labels.indexOf('Bookmark this page')+1,'the new tab button must follow the star: '+JSON.stringify(labels));
+	check(labels.indexOf('Downloads')===labels.indexOf('Bookmark this page')+1&&!labels.includes('New browser tab'),'the downloads button must follow the star: '+JSON.stringify(labels));
 	const engineTrigger=document.querySelector('.ws-browser-bar form button[aria-label="Search engine"]');
 	check(!!engineTrigger,'the search engine picker is not inside the address bar');
 	engineTrigger.click();

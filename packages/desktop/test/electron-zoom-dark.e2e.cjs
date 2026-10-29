@@ -12,7 +12,7 @@
  * context-menu path (the host's translate function is a stub here). The window stays off screen and never takes the
  * focus. Exit code 1 at the first failure.
  */
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, nativeImage } = require('electron');
 const http = require('node:http');
 const { mkdirSync, readFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
@@ -58,12 +58,32 @@ const PAGE = (cssPort) => `<!doctype html><html><head><meta charset="utf-8"><tit
 <button id="go" style="margin: 300px 0 0 400px" onclick="document.getElementById('out').textContent='clicked'">Go</button><div id="out">idle</div></body></html>`;
 
 const pages = http.createServer((request, response) => {
+  if (request.url === '/icon.png') {
+    response.writeHead(200, { 'content-type': 'image/png' });
+    response.end(iconPng());
+    return;
+  }
   pages.lastLanguage = request.headers['accept-language'];
   response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-  // A page whose body arrives late: what it shows while it loads is what a slow site shows.
+  // A page whose body arrives late: what it shows while it loads is what a slow site shows. Its white panel is what a
+  // web app paints of its own before the engine runs.
   if (request.url === '/slow') {
-    response.write('<!doctype html><html><head><meta charset="utf-8"><title>Slow</title><style>body { background: #ffffff; color: #111111; }</style></head><body><p>first part</p>');
+    response.write('<!doctype html><html><head><meta charset="utf-8"><title>Slow</title><style>body { background: #ffffff; color: #111111; } #panel { background: #ffffff; height: 120px; }</style></head><body><p>first part</p><div id="panel">panel</div>');
     setTimeout(() => response.end('<p>rest</p></body></html>'), 2500);
+    return;
+  }
+  // A light page with a blue banner on top and a blue button in the middle (Devpost's home page), and icons drawn
+  // through a mask whose color is set in the same rule and in another rule.
+  if (request.url === '/banner') {
+    response.end(`<!doctype html><html><head><meta charset="utf-8"><title>Banner</title><style>
+body { margin: 0; background: #ffffff; color: #111111; font: 14px sans-serif; }
+#banner { background: #2f6fde; color: #ffffff; height: 30vh; }
+#middle { position: absolute; left: 0; right: 0; top: calc(50vh - 30px); text-align: center; }
+#middle button { background: #1a73e8; color: #ffffff; border: 0; width: 360px; height: 60px; }
+.icon { display: inline-block; width: 20px; height: 20px; margin: 4px; -webkit-mask-image: url(/icon.png); mask-image: url(/icon.png); }
+.icon.one { background-color: #444746; }
+.nav .icon.two { background-color: #444746; }
+</style></head><body><div id="banner"><div class="nav"><span class="icon one" id="one"></span><span class="icon two" id="two"></span></div></div><div id="middle"><button>Browse all</button></div></body></html>`);
     return;
   }
   // A page with a frame of its own site, the way Gmail shows its account menu in a frame of google.com.
@@ -97,6 +117,31 @@ const luminance = (rgb) => {
   });
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 };
+/** WCAG contrast ratio of two computed colors. */
+const contrast = (one, two) => {
+  const [high, low] = [luminance(one), luminance(two)].sort((a, b) => b - a);
+  return (high + 0.05) / (low + 0.05);
+};
+
+let icon;
+/** A 20 px round icon in Gmail's dark gray (#444746) on transparency, for the mask of the /banner page. */
+function iconPng() {
+  if (icon) return icon;
+  const size = 20;
+  const bitmap = Buffer.alloc(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const at = (y * size + x) * 4;
+      // BGRA
+      bitmap[at] = 0x46;
+      bitmap[at + 1] = 0x47;
+      bitmap[at + 2] = 0x44;
+      bitmap[at + 3] = (x - 9.5) ** 2 + (y - 9.5) ** 2 < 64 ? 255 : 0;
+    }
+  }
+  icon = nativeImage.createFromBitmap(bitmap, { width: size, height: size }).toPNG();
+  return icon;
+}
 
 async function main() {
   const pagePort = await listen(pages);
@@ -172,10 +217,11 @@ async function main() {
   // A dark site never shows white while it loads: before the engine runs, the body and the canvas are already dark.
   const slowLoad = browser.command({ action: 'navigate', tabId: id, url: `${origin}/slow` }).catch(() => undefined);
   const early = await until(async () => {
-    const value = (await browser.command({ action: 'exec', tabId: id, code: '(() => document.body && document.title === "Slow" ? { body: getComputedStyle(document.body).backgroundColor, ready: document.readyState } : null)()' })).result;
+    const value = (await browser.command({ action: 'exec', tabId: id, code: '(() => document.getElementById("panel") && document.title === "Slow" ? { body: getComputedStyle(document.body).backgroundColor, panel: getComputedStyle(document.getElementById("panel")).backgroundColor, ready: document.readyState } : null)()' })).result;
     return value?.ready === 'loading' ? value : undefined;
   }, 5000);
   check(!!early && luminance(early.body) < 0.05, 'a dark site is dark while it is still loading', early);
+  check(!!early && luminance(early.panel) < 0.05, "and so are the page's own white panels", early);
   await slowLoad;
   await browser.command({ action: 'navigate', tabId: id, url: origin });
   await until(async () => {
@@ -223,6 +269,52 @@ async function main() {
   check(nativeLook.prefers === true && nativeLook.body === 'rgb(18, 18, 18)' && nativeLook.text === 'rgb(238, 238, 238)', "the page shows the site's own dark colors, untouched", nativeLook);
   const engineOn = await browser.tabs[0].view.webContents.executeJavaScriptInIsolatedWorld(999, [{ code: '!!(globalThis.DarkReader && DarkReader.isEnabled())' }]);
   check(engineOn === false, 'Dark Reader does not run over a site that is dark by itself', engineOn);
+
+  // A light page whose banner and middle button are blue is no dark theme: it is recolored like any light page.
+  await browser.command({ action: 'navigate', tabId: id, url: `${origin}/banner` });
+  const banner = await until(async () => {
+    const state = await browser.command({ action: 'state', tabId: id });
+    return state.title === 'Banner' && !state.loading && state.dark ? state : undefined;
+  }, 20000);
+  const bannerLook = async () => (await browser.command({ action: 'exec', tabId: id, code: '({ body: getComputedStyle(document.body).backgroundColor, one: getComputedStyle(document.getElementById("one")).backgroundColor, two: getComputedStyle(document.getElementById("two")).backgroundColor, banner: getComputedStyle(document.getElementById("banner")).backgroundColor })' })).result;
+  check(banner?.darkNative === false && luminance((await bannerLook()).body) < 0.05, 'a light page with a blue banner and a blue button in the middle is recolored, not taken for a dark theme', banner && { darkNative: banner.darkNative, look: await bannerLook() });
+  // Icons drawn through a mask take their color from background-color; with the color in another rule than the mask
+  // the engine darkens it like a background, and the icon pass gives it back its contrast.
+  const inked = await until(async () => {
+    const value = await bannerLook();
+    return contrast(value.two, value.banner) >= 3 && contrast(value.one, value.banner) >= 3 ? value : undefined;
+  }, 8000);
+  check(!!inked, 'mask icons stay readable on the dark page, also with their color set in another rule', inked || (await bannerLook()));
+
+  // Turned off and at once on again, the page ends up dark: passes of one tab never overlap.
+  await browser.command({ action: 'darkMode', mode: 'off' });
+  await browser.command({ action: 'darkMode', mode: 'on' });
+  await wait(100);
+  await browser.command({ action: 'darkMode', mode: 'off' });
+  await wait(30);
+  await browser.command({ action: 'darkMode', mode: 'on' });
+  const again = await until(async () => {
+    const value = await bannerLook();
+    const state = await browser.command({ action: 'state', tabId: id });
+    return state.dark && luminance(value.body) < 0.05 && contrast(value.two, value.banner) >= 3 ? value : undefined;
+  }, 10000);
+  check(!!again, 'dark mode turned off and on again quickly ends dark, icons included', again || (await bannerLook()));
+  const ink = await browser.tabs[0].view.webContents.executeJavaScriptInIsolatedWorld(999, [{ code: 'document.querySelectorAll("[data-mh-ink]").length' }]);
+  check(ink >= 1, 'the icon pass marks the dark icon again after the engine came back', ink);
+
+  // A general mode picked in a tab's menu applies to that tab's site too: the site's own "never dark" choice goes.
+  await browser.command({ action: 'darkSite', tabId: id, value: 'off' });
+  const lightAgain = await until(async () => (luminance((await bannerLook()).body) > 0.9 ? true : undefined));
+  check(!!lightAgain, 'the site is light with its own "never dark" choice');
+  const marksGone = await browser.tabs[0].view.webContents.executeJavaScriptInIsolatedWorld(999, [{ code: 'document.querySelectorAll("[data-mh-ink], .darkreader--myharness-ink").length' }]);
+  check(marksGone === 0, "turning dark off removes the icon pass's marks and its stylesheet", marksGone);
+  const picked = await browser.command({ action: 'darkMode', tabId: id, mode: 'on', clearSite: true });
+  check(picked.darkMode === 'on' && picked.darkSite === null, 'the answer carries the general mode and the cleared site choice', picked);
+  const darkFromMenu = await until(async () => (luminance((await bannerLook()).body) < 0.05 ? true : undefined), 10000);
+  check(!!darkFromMenu, 'and the site is dark again');
+  const current = await browser.command({ action: 'darkMode', tabId: id });
+  check(current.darkMode === 'on' && current.darkSite === null, 'a tab can ask for the current choice without changing it', current);
+  await browser.command({ action: 'darkMode', mode: 'auto' });
   await browser.command({ action: 'darkMode', appDark: false });
   await wait(300);
   const nativeOff = await browser.command({ action: 'state', tabId: id });

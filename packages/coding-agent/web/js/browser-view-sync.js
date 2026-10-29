@@ -9,8 +9,10 @@
 //   low rate while it is still, so a stale rectangle can never be left behind;
 // - any doubt (animating panel, covered dialog, hidden page, tab unmount) hides the view at once instead of guessing.
 //
-// Two coverings keep the page live instead: the sidebar peek (sidebar-peek.js) covers only the left side of the box, so
-// the host cuts the view at the sidebar's edge (`clip`) without resizing it; and while a View Transition plays over the
+// Three coverings keep the page live instead: the sidebar peek (sidebar-peek.js) covers only the left side of the box and
+// the conversation peek of browser fullscreen (chat-peek.js) only its right side, so the host cuts the view a gutter
+// before their edges (`clip`) without resizing it, and the strips it leaves show the app's background (panels.css), where
+// the card's ring and shadow stand apart from the page; and while a View Transition plays over the
 // screen (the mode reveal, a layout morph) the hidden view's place shows moving frames the host captures (`live`), so a
 // playing video never looks paused.
 //
@@ -29,7 +31,11 @@ const IDLE_CHECK_MS = 120;
 const STABLE_CHECKS = 2;
 // The sidebar the peek floats over the conversation, and the narrowest part of the box still shown beside it.
 const PEEK = ".app > .sidebar.is-collapsed";
+// The conversation that peeks in from the right while it is tucked away (browser fullscreen, collaboration mode).
+const CHAT_PEEK = ".app.chat-tucked > .main";
 const MIN_SHOWN = 48;
+// The gutter between a peeking card and the website, as around a docked card: the card's ring and shadow lie in it.
+const PEEK_GAP = 6;
 
 /**
  * An animation is moving, resizing or fading the box: "screen" for a View Transition over the whole screen (the mode
@@ -69,14 +75,41 @@ function peekCard() {
 	return { right, top: box.top, bottom: box.bottom };
 }
 
-/** The part of the box the peeking sidebar leaves uncovered: all of it, the part right of the sidebar, or null. */
-function uncovered(rect) {
+/** The peeking conversation's left edge and height, or null while none floats; sliding in, the edge it slides to. */
+function chatCard() {
+	const phase = document.documentElement.dataset.chatPeek;
+	if (phase !== "in" && phase !== "out") return null;
+	const chat = document.querySelector(CHAT_PEEK);
+	if (!chat) return null;
+	const box = chat.getBoundingClientRect();
+	let left = box.left;
+	if (phase === "in") {
+		const transform = getComputedStyle(chat).transform;
+		if (transform && transform !== "none") left -= Math.max(0, new DOMMatrixReadOnly(transform).m41);
+	}
+	return { left, top: box.top, bottom: box.bottom };
+}
+
+const acrossRows = (card, rect) => card && card.bottom > rect.y && card.top < rect.y + rect.height;
+
+/** Where the view ends beside the peeking sidebar and conversation: a gutter away from each card's edge. */
+function peekEdges(rect) {
 	const card = peekCard();
-	if (!card || card.bottom <= rect.y || card.top >= rect.y + rect.height) return rect;
-	const edge = Math.ceil(card.right);
-	if (edge <= rect.x) return rect;
-	const right = rect.x + rect.width;
-	return right - edge < MIN_SHOWN ? null : { x: edge, y: rect.y, width: right - edge, height: rect.height };
+	const chat = chatCard();
+	return {
+		left: acrossRows(card, rect) ? Math.max(rect.x, Math.ceil(card.right) + PEEK_GAP) : rect.x,
+		right: acrossRows(chat, rect) ? Math.min(rect.x + rect.width, Math.floor(chat.left) - PEEK_GAP) : rect.x + rect.width,
+	};
+}
+
+/**
+ * The part of the box the peeking sidebar and conversation leave uncovered: all of it, the part between them, or null
+ * when too little is left.
+ */
+function uncovered(rect, edges = peekEdges(rect)) {
+	const { left, right } = edges;
+	if (left === rect.x && right === rect.x + rect.width) return rect;
+	return right - left < MIN_SHOWN ? null : { x: left, y: rect.y, width: right - left, height: rect.height };
 }
 
 function overlaps(a, b) {
@@ -164,13 +197,27 @@ export function createBrowserViewSync({ host, tabId, element, onError }) {
 		shown = false;
 		send(null, extra);
 	};
+	// The strips of the box the view leaves beside a peeking card, as widths from its left and right edges, for panels.css
+	// to paint with the app's background. They follow the cut every frame while a card slides.
+	let lanesNode = null;
+	let lanes = "";
+	const showLanes = (node, left, right) => {
+		const key = `${left}|${right}`;
+		if (node === lanesNode && key === lanes) return;
+		lanesNode = node;
+		lanes = key;
+		node.style.setProperty("--peek-lane-left", `${left}px`);
+		node.style.setProperty("--peek-lane-right", `${right}px`);
+	};
 	const evaluate = () => {
 		const node = element();
 		const rect = browserViewRect(node);
+		const edges = rect ? peekEdges(rect) : null;
+		if (edges) showLanes(node, Math.min(rect.width, edges.left - rect.x), Math.min(rect.width, rect.x + rect.width - edges.right));
 		const motion = rect ? animating(node) : false;
 		// A View Transition over the screen: the hidden page's place shows the host's moving frames until it ends.
 		if (!rect || motion) return hide(motion === "screen" ? { live: true } : undefined);
-		const part = uncovered(rect);
+		const part = uncovered(rect, edges);
 		if (!part || covered(node, { left: part.x, top: part.y, right: part.x + part.width, bottom: part.y + part.height, width: part.width, height: part.height }))
 			return hide();
 		const key = `${rect.x},${rect.y},${rect.width},${rect.height}`;
@@ -191,9 +238,10 @@ export function createBrowserViewSync({ host, tabId, element, onError }) {
 		const node = element();
 		const box = node?.getBoundingClientRect();
 		const key = box ? `${Math.round(box.left)},${Math.round(box.top)},${Math.round(box.right)},${Math.round(box.bottom)}` : "";
-		// The peeking sidebar's edge moves the cut while it slides out.
+		// The peeking sidebar's and conversation's edges move the cut while they slide.
 		const card = peekCard();
-		const peek = card ? `${Math.round(card.right)}` : "";
+		const chat = chatCard();
+		const peek = `${card ? Math.round(card.right) : ""}|${chat ? Math.round(chat.left) : ""}`;
 		const moving = key !== lastBox || peek !== lastPeek;
 		lastBox = key;
 		lastPeek = peek;
@@ -213,6 +261,8 @@ export function createBrowserViewSync({ host, tabId, element, onError }) {
 			stopped = true;
 			cancelAnimationFrame(frame);
 			frame = 0;
+			lanesNode?.style.removeProperty("--peek-lane-left");
+			lanesNode?.style.removeProperty("--peek-lane-right");
 			// Null before the page may hand the panel to another tab; the host ignores it for an inactive tab.
 			host.browser({ action: "bounds", tabId, rect: null }).catch(() => undefined);
 		},

@@ -20,7 +20,9 @@
 | `sub-agent.ts` | `agent` 工具：启动只读或读写的 Explore 子进程（前台或后台批次）；非 Git 工作区先装配过滤后的独立文件镜像，失败不回宿主运行，逐任务 finally 清理（机制见 `agent/delegation/non-git-sandbox.ts`），通过 NDJSON stdin 下发任务与“收敛提醒” steering 消息，收集结果、超时与停滞检测；只有 stall watchdog、墙钟超时、`maxTurns` 和取消会真正终止任务，重复操作/连续工具失败/无新信息只注入提醒；带 `questions` 的任务要求逐项回答并附 `## Completion checklist`，缺失即记为 `partial`（`stopReason: "incomplete_answer"`）；`runExploreBatch()` 也被 `workflow/` 使用 |
 | `symbols.ts` | `symbols` 工具：符号、定义、引用、诊断等查询，以及 find_existing / read_symbol / impact / rename_preview 组合操作（实现在 `symbols/workflow/`） |
 | `apply-rename.ts` | `apply_rename` 工具：按 rename_preview 的计划写入；与 `symbols` 同受 `codeIntelligence.symbolsEnabled` 控制，复用 apply_patch 的文件队列与整体回滚，任一文件哈希变化则整份拒绝 |
-| `workspace.ts` | `workspace` 工具（仅桌面端）：内置浏览器与右侧工作区的结构化控制。浏览器命令经服务进程到 Electron 主进程的 IPC 通道操作 `WebContentsView`（含导航、DOM/可访问性/交互元素、点击/输入/滚动、页内查找、工作区文件上传、截图、下载取消/重试、网络与站点权限状态），工作区命令转发给页面（页面拥有标签列表和媒体元素）并以其回报的状态为准；只在 `MYHARNESS_DESKTOP_HOST=1` 且 IPC 已连接时注册。站点权限只能由页面里的用户决定，工具不能授予。 |
+| `workspace.ts` | `workspace` 工具（仅桌面端）：内置浏览器与右侧工作区的结构化控制。浏览器命令经服务进程到 Electron 主进程的 IPC 通道操作 `WebContentsView`（含导航、DOM/可访问性/交互元素、点击/输入/滚动、页内查找、工作区文件上传、截图、下载取消/重试、网络与站点权限状态），工作区命令转发给页面（页面拥有标签列表和媒体元素）并以其回报的状态为准；只在 `MYHARNESS_DESKTOP_HOST=1` 且 IPC 已连接时注册。站点权限只能由页面里的用户决定，工具不能授予。需要登录或人机验证的页面由 `handoff` 交给用户（标签上显示请求，调用等到用户完成、拒绝、超时，或验证/登录自己结束；回合停止时撤回），人机验证页面上的输入类操作被拒绝；`bookmarks` 按关键词查书签及其用途说明，`bookmark_note` 让 Agent 做任务时补写或改好书签的用途（宿主拒绝改用户自己写的）。 |
+| `workspace-bookmarks.ts` | 每轮把用户的书签和用途说明作为提醒加入上下文（列表没变不重发；用户自己写的用途单独标出），以及 `workspace bookmarks` 的过滤与行格式 |
+| `schedule.ts` | `schedule` 工具：列出、新建、修改、删除定时任务（提醒或 Agent 任务），领域逻辑在 `src/schedules/`；子智能体不提供 |
 | `symbols-runtime.ts` | `symbols` 工具需要的运行时端口：索引、路由、安装状态 |
 | `agent-tasks.ts` | `agent_tasks` 工具：主智能体查看并停止本会话的多智能体派发（`agent` 批次、`workflow`、`ultracode`）；停止会返回任务已经产出的部分结果，工具只负责格式化，派发由会话（`agent/delegation/background-work.ts`）持有 |
 | `dispatch-control.ts` | 多智能体派发工具与会话之间的契约：登记派发、停止单个任务或整次派发、主运行被中断时把仍在工具调用里的派发改到后台 |
@@ -83,7 +85,7 @@
 
 ### mail/
 
-`tool.ts`：`mail` 工具，使用已连接的 Gmail / Outlook 邮箱（`providers/credentials/mail-connections.ts`）调用 Gmail API 或 Microsoft Graph，并处理附件保存。`message.ts`：把纯字段写成的邮件编码为 Gmail 的 RFC 5322 `raw` 或 Graph message（含附件）。
+`tool.ts`：`mail` 工具，使用已连接的 Gmail / Outlook 邮箱（`providers/credentials/mail-connections.ts`）调用 Gmail API 或 Microsoft Graph，并处理附件保存。`message.ts`：把纯字段写成的邮件编码为 Gmail 的 RFC 5322 `raw` 或 Graph message（含附件）。`route-context.ts`：同时有 `mail` 和 `workspace`（桌面端内置浏览器）的对话，每轮把邮件走哪条路作为提醒加入上下文（路线没变不重发）：有通过 API 连接的邮箱时用 `mail` 工具；一个都没有时告诉 Agent 不要调用 `mail`，改用内置浏览器里已登录的网页邮箱（宿主的 `webMail` 回答哪个已登录，1.5 秒内没答复就列出 Gmail 和 Outlook 两个网址，回答缓存 10 分钟）。以前没有 API 连接时 Agent 也先调用 `mail`，报错后才转去浏览器。`send.ts`：发一封新邮件的唯一入口 `sendMail`，`mail` 工具只给 `message` 不给 `path` 时和定时邮件（`schedules/` 的 `kind: "mail"`）都用它：有合适的 API 邮箱就用 API；没有时经桌面宿主的 `webMailSend` 命令，在内置浏览器已登录的 Gmail / Outlook 网页里一次填好并发出（纯文本、要有主题、不能带附件），不再让 Agent 一格一格填写信表单。
 
 ### web-search/ — 联网搜索与读网页
 

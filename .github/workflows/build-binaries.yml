@@ -1,9 +1,9 @@
 name: Build Binaries
 
+# Manual only. A pushed tag must not publish these multi-platform Bun binaries: MyHarness ships as the
+# Windows desktop app, and a `v*` tag used for a desktop release would otherwise get a second, unrelated
+# Release with Linux/macOS assets.
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag:

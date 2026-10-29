@@ -198,6 +198,20 @@ test('the mouse sends trusted events at a point, draws the agent pointer and ref
   }
 });
 
+test('the Agent writes a bookmark note only where the user did not', async () => {
+  const { browser, cleanup } = loadHost();
+  try {
+    const { bookmarks } = await browser.command({ action: 'bookmark-add', url: 'https://school.example/', title: 'School', note: 'Course site', noteAuto: true, noteBy: 'm/x' });
+    const mine = (await browser.command({ action: 'bookmark-add', url: 'https://mine.example/', title: 'Mine', note: 'my own words' })).bookmarks[1];
+    const written = await browser.command({ action: 'bookmark-note', id: bookmarks[0].id, note: 'DSA assignments', by: 'pretend' }, { agent: true });
+    assert.deepEqual([written.bookmarks[0].note, written.bookmarks[0].noteBy], ['DSA assignments', 'agent']);
+    await assert.rejects(browser.command({ action: 'bookmark-note', id: mine.id, note: 'something else' }, { agent: true }), /用户自己写的/);
+    assert.equal((await browser.command({ action: 'bookmarks' })).bookmarks[1].note, 'my own words');
+  } finally {
+    cleanup();
+  }
+});
+
 test('site permissions: a bookmarked site is allowed at once, others wait and the Agent can answer them', async () => {
   const { browser, events, permission, cleanup } = loadHost();
   try {
@@ -251,7 +265,7 @@ test('speed dial commands save the layout and tell every page', async () => {
   }
 });
 
-test('the visible tab keeps exactly the panel size while the Agent drives it, and its clicks are page pixels', async () => {
+test('the visible tab in a narrow panel gets the desktop size while the Agent drives it, the panel shows the part that fits, and its clicks are page pixels', async () => {
   const { browser, cdp, cleanup } = loadHost();
   try {
     const rect = { x: 700, y: 10, width: 426, height: 780 };
@@ -260,7 +274,8 @@ test('the visible tab keeps exactly the panel size while the Agent drives it, an
     const metrics = () => cdp.filter((entry) => entry.method.startsWith('Emulation.'));
     await browser.command({ action: 'snapshot', tabId: tab.id }, { agent: true });
     assert.equal(metrics().length, 0, 'no device metrics override: the page is never a scaled-down picture');
-    assert.deepEqual({ ...tab.view.bounds, x: tab.view.bounds.x + tab.view.parent.bounds.x, y: tab.view.bounds.y + tab.view.parent.bounds.y }, rect);
+    assert.deepEqual(tab.view.parent.bounds, rect, 'what shows is still the panel');
+    assert.deepEqual(tab.view.bounds, { x: 0, y: 0, width: 1280, height: 800 }, 'the page is laid out at the desktop size from the panel corner');
     cdp.length = 0;
     await browser.command({ action: 'mouse', tabId: tab.id, kind: 'click', x: 200, y: 300 }, { agent: true });
     const pressed = cdp.find((entry) => entry.params?.type === 'mousePressed').params;

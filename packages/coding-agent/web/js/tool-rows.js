@@ -4,6 +4,7 @@
 import { html, Collapse, Icon, Spinner, useHeightGlide, useState } from "./ui.js";
 import { count, serverText, t } from "./i18n.js";
 import { clip } from "./util.js";
+import { openServicePage } from "./service-keys.js";
 
 export const KIND_ICON = { read: "file", list: "folder", find: "search", search: "search", run: "terminal", edit: "edit", write: "fileDiff", web: "globe", fetch: "globe", github: "gitBranch", mail: "mail", agent: "layers", history: "clock", tool: "wrench" };
 
@@ -62,7 +63,7 @@ function Problems({ failures }) {
 	];
 	return blocks.map(({ label, items, tone }) => items.length ? html`<div class="web-block" key=${label}>
 		<div class="web-label">${label}<span class="web-count">${items.length}</span></div>
-		<ul class=${`web-problems ${tone}`}>${items.map((failure, i) => html`<li key=${i}>${[failure.query, failure.url && clip(failure.url, 80)].filter(Boolean).join(" · ")}${failure.query || failure.url ? ": " : ""}${serverText(failure.message, failure.code)}</li>`)}</ul>
+		<ul class=${`web-problems ${tone}`}>${items.map((failure, i) => html`<li key=${i}>${[failure.query, failure.url && clip(failure.url, 80)].filter(Boolean).join(" · ")}${failure.query || failure.url ? ": " : ""}${serverText(failure.message, failure.code)}${failure.code === "keyless_limit" ? html` <button class="link-btn" onClick=${() => openServicePage("tavily")}>${t("Get a free Tavily key")}</button>` : null}</li>`)}</ul>
 	</div>` : null);
 }
 

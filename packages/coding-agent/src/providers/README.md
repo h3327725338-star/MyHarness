@@ -6,7 +6,7 @@
 
 产品层的模型运行时：有哪些 Provider 和模型、用哪个凭证、请求失败后怎么恢复。底层的 API 适配器（各家协议的请求与流式解析）在 `packages/ai`，不在这里。
 
-MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.json`、模型缓存、已保存的凭证和扩展注册。
+`@myharness/ai` 没有 Provider catalog。可用的 Provider 和模型来自 `models.json`、模型缓存、已保存的凭证和扩展注册。产品层提供一个现成预设 Nebius Token Factory（`models/nebius-preset.ts`）：用户粘贴 Key 后由 `application/use-cases/nebius-setup.ts` 写入 `models.json`，之后与普通自定义 Provider 相同。
 
 ### runtime/ — 运行时入口
 
@@ -20,6 +20,7 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 | `auth-guidance.ts` | “没有模型 / 没有 API Key”时给用户的提示文案 |
 | `attribution.ts` | 合并 Provider 归因请求头 |
 | `balance-tracker.ts` | 支持余额接口的 Provider 的余额查询与轮询 |
+| `provider-spend.ts` | 本机按模型标价估算的各 Provider 花费（`provider-spend.json`，与 `models.json` 同目录）；`ModelRuntime.stream`/`streamSimple` 在每次请求结束时记账，供没有余额接口的 Provider（Nebius）显示 |
 | `index.ts` | 出口 |
 
 ### models/ — 模型配置
@@ -29,6 +30,7 @@ MyHarness 不内置任何 Provider。可用的 Provider 和模型来自 `models.
 | `config.ts` | `ModelConfig`：`models.json` 的只读快照（不含凭证） |
 | `composer.ts` | 把一个 Provider 的配置组合成可用的 Provider/模型；请求头与兼容请求配置解析；API Key 缓存 |
 | `custom-provider-manager.ts` | 用户自定义 Provider 的增删改、模型发现、把发现结果写回 `models.json` |
+| `nebius-preset.ts` | Nebius Token Factory 预设：Base URL、控制台链接、Nemotron 模型条目（按账户模型列表里的拼写取用）、各项工作用哪个模型（`NEBIUS_ROLE_PLAN`） |
 | `thinking-capability.ts` | 判断一个模型的 Thinking Effort 能力来自哪里（官方文档 > 模型目录 > 探测） |
 | `official-effort.ts` | Provider 官方文档明确写出的“请求档位 → 实际档位” |
 | `store.ts` | 模型缓存（`models-store.json`） |

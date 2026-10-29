@@ -21,6 +21,8 @@ it.skipIf(!installed.length)(
 		const browser = new LocalBrowser({
 			kind: installed.find((item) => item.kind === "chrome")?.kind ?? installed[0]!.kind,
 			rootDir: join(root, "browser"),
+			// Runs in the plain unit suite too: headless, never a window pulled to the front.
+			unattended: true,
 		});
 		try {
 			for (const dir of ["js", "vendor", "css"])

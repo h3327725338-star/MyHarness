@@ -12,7 +12,7 @@ function onWindow(view) {
 }
 
 /** Load browser-view.cjs with a small Electron stand-in: real views cannot be created outside Electron. */
-function loadBrowser() {
+function loadBrowser(options = {}) {
   const file = path.join(__dirname, '../browser-view.cjs');
   const events = [];
   const contents = [];
@@ -81,7 +81,7 @@ function loadBrowser() {
     size: [1200, 800],
     getContentSize() { return this.size; },
   };
-  const browser = module.exports.createBrowser(window, () => {});
+  const browser = module.exports.createBrowser(window, () => {}, options);
   return { browser, events, contents, webRequest, window, download: downloadHandlers['will-download'], permission };
 }
 
@@ -333,6 +333,54 @@ test('downloads report progress, can be cancelled by id and retried after they f
   assert.deepEqual(contents[0].downloaded, [item.url]);
   await assert.rejects(() => browser.command({ action: 'download-cancel', id: 'missing' }), /没有正在进行的下载/);
   browser.destroy();
+});
+
+test('finished downloads stay listed after a restart, a moved file is marked and the list can be cleared', async () => {
+  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'myharness-downloads-'));
+  try {
+    const first = loadBrowser({ profileDir });
+    await first.browser.command({ action: 'open', url: 'https://example.com/', rect: { x: 0, y: 0, width: 300, height: 200 } });
+    const kept = makeDownload();
+    kept.filename = `kept-${Date.now()}.csv`;
+    first.download({}, kept, first.contents[0]);
+    fs.writeFileSync(kept.savePath, 'a,b');
+    kept.received = kept.total;
+    kept.handlers.get('done')({}, 'completed');
+    const gone = makeDownload();
+    gone.filename = `gone-${Date.now()}.csv`;
+    first.download({}, gone, first.contents[0]);
+    gone.handlers.get('done')({}, 'completed');
+    first.browser.destroy();
+    assert.equal(fs.existsSync(path.join(profileDir, 'browser-downloads.json')), true);
+
+    // The next run lists both from the file; the one whose file is not on disk is marked, and neither belongs to a tab.
+    const second = loadBrowser({ profileDir });
+    const listed = (await second.browser.command({ action: 'downloads' })).downloads;
+    assert.deepEqual(listed.map((entry) => [entry.name, entry.state, !!entry.missing, entry.tabId]), [
+      [kept.filename, 'completed', false, undefined],
+      [gone.filename, 'completed', true, undefined],
+    ]);
+    // A download of an earlier run is fetched again in the tab that asks.
+    const tab = await second.browser.command({ action: 'open', url: 'https://example.com/', rect: { x: 0, y: 0, width: 300, height: 200 } });
+    assert.equal((await second.browser.command({ action: 'download-retry', id: listed[1].id, tabId: tab.tabId })).ok, true);
+    assert.deepEqual(second.contents[0].downloaded, [gone.url]);
+    // A new download never reuses an id from the earlier run.
+    const next = makeDownload();
+    next.filename = `next-${Date.now()}.csv`;
+    second.download({}, next, second.contents[0]);
+    const started = second.events.find((event) => event.value?.type === 'download' && event.value.state === 'started');
+    assert.equal(listed.some((entry) => entry.id === started.value.id), false);
+    next.handlers.get('done')({}, 'cancelled');
+    assert.equal((await second.browser.command({ action: 'downloads-clear', id: listed[0].id })).removed, 1);
+    assert.deepEqual((await second.browser.command({ action: 'downloads' })).downloads.map((entry) => entry.name), [gone.filename, next.filename]);
+    assert.equal((await second.browser.command({ action: 'downloads-clear' })).removed, 2);
+    second.browser.destroy();
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(profileDir, 'browser-downloads.json'), 'utf8')).downloads, []);
+    assert.equal(fs.existsSync(kept.savePath), true, 'clearing the list leaves the file on disk');
+    fs.rmSync(kept.savePath, { force: true });
+  } finally {
+    fs.rmSync(profileDir, { recursive: true, force: true });
+  }
 });
 
 test('window resize re-clamps the native view and a zero-sized window hides it', async () => {

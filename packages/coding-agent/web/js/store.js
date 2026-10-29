@@ -204,7 +204,7 @@ export function slotUrl(url) {
 // chat's panel never changes another's. The live values stay in `state.view` so every component keeps reading them; this
 // module remembers them per session and swaps them when the chat on screen changes. The sidebar stays the window's (see
 // applyPanel), and so do display preferences such as website tabs shown as icons only.
-const PANEL_KEYS = ["panelOpen", "panelTab", "wsTabs", "wsActive", "wsRecent", "wsClosed", "changesScope", "panelW", "chatW", "wsMax"];
+const PANEL_KEYS = ["panelOpen", "panelTab", "wsTabs", "wsActive", "wsRecent", "wsClosed", "changesScope", "panelW", "chatW", "wsMax", "wsChatHidden"];
 const PANEL_STATES_MAX = 40;
 // A chat's widths become its own once they have been on screen there (its panel open, its column in collaboration
 // mode); until then (`undefined`) it starts from these: the last widths the user dragged in any chat.
@@ -212,7 +212,7 @@ const panelDefaults = { panelW: prefs.panelW ?? 560, chatW: prefs.chatW ?? 420 }
 const ownWidth = (value) => (Number.isFinite(value) && value > 0 ? Math.round(value) : undefined);
 /** The panel of a conversation that has nothing open: where a new chat starts. */
 function emptyPanel() {
-	return { panelOpen: false, panelTab: "changes", wsTabs: [], wsActive: null, wsRecent: [], wsClosed: [], changesScope: "session", panelW: undefined, chatW: undefined, wsMax: false };
+	return { panelOpen: false, panelTab: "changes", wsTabs: [], wsActive: null, wsRecent: [], wsClosed: [], changesScope: "session", panelW: undefined, chatW: undefined, wsMax: false, wsChatHidden: false };
 }
 /** A saved panel of one conversation, with the tabs that cannot be shown any more dropped and the active one resolved. */
 function normalizePanel(value) {
@@ -237,6 +237,7 @@ function normalizePanel(value) {
 		chatW: ownWidth(source.chatW),
 		// Collaboration mode lasts as long as this page (saved panels never have it): a page opens with the plain layout.
 		wsMax: false,
+		wsChatHidden: false,
 	};
 }
 const panelStates = new Map(); // session id -> the panel that conversation had open
@@ -261,6 +262,10 @@ export const state = {
 	/** Selected target, including cold opens before a server slot exists. Never routes writes to the old chat. */
 	switching: null,
 	toasts: [],
+	/** Cards above the toasts (attention-cards.js): scheduled tasks and other notices that wait for the user. */
+	cards: [],
+	/** The Agent's open requests for the user's help on website tabs, by tab id (attention-cards.js noteBrowserHelp). */
+	helpRequests: {},
 	/** Saved state of each mode (`GET /api/modes/state`): its last chat, model choice and drafts; null until loaded. */
 	modeState: null,
 	/** Changes when either global personal prompt was saved somewhere (`mode_preferences_changed`). */
@@ -300,8 +305,16 @@ export const state = {
 		wsMax: false,
 		/** While a maximized chat is on screen: the sidebar of the plain layout, given back when it ends (see plainSidebar). */
 		wsMaxSidebar: null,
+		/** In collaboration mode, this chat's conversation is tucked away at the right edge (see chatTucked). */
+		wsChatHidden: false,
 		/** Width of this chat's column in collaboration mode. */
 		chatW: panelDefaults.chatW,
+		/** Browser fullscreen (actions.toggleBrowserFull): the website tab fills the screen. Not saved, not per chat. */
+		browserFull: false,
+		/** In browser fullscreen, the conversation is kept as a column on the right instead of peeking in. */
+		browserFullChat: false,
+		/** What browser fullscreen hid, given back when it ends ({ sidebarOpen }), and whether a site started it ({ bySite }). */
+		browserFullPrev: null,
 		expanded: prefs.expanded ?? {},
 		// The open groups of the General sidebar; Coding keeps `expanded` (see chat-modes.js expandedKey).
 		expandedGeneral: prefs.expandedGeneral ?? {},
@@ -330,7 +343,7 @@ export const state = {
 		runMode: runModeOf(prefs.runMode),
 		// 780 was the fixed default before the responsive one; stored as-is by every earlier version, so it means "auto".
 		readWidth: prefs.readWidth === 780 ? "auto" : readWidthValue(prefs.readWidth),
-		lang: normalizeLang(prefs.lang),
+		lang: typeof prefs.lang === "string" ? normalizeLang(prefs.lang) : bootPrefsState().defaultLang,
 		/** The user's own prompts (Session panel → My prompts); a click puts one into the input. */
 		savedPrompts: savedPromptsOf(prefs.savedPrompts),
 		/** Website tabs show only their site icon (the name stays in the tooltip). */
@@ -411,7 +424,17 @@ function applyPanel(sessionId, patch) {
 	for (const name of PANEL_KEYS) next[name] = panel[name];
 	next.panelW = panel.panelW ?? panelDefaults.panelW;
 	next.chatW = panel.chatW ?? panelDefaults.chatW;
-	state.view = { ...next, wsMax: maxed, ...sidebar };
+	state.view = { ...next, wsMax: maxed, wsChatHidden: maxed && panel.wsChatHidden === true, ...sidebar };
+}
+
+/**
+ * The conversation is tucked away at the window's right edge, the way the sidebar hides at the left: in browser
+ * fullscreen unless it is kept as a column, and in collaboration mode after its header's "Hide the conversation". It
+ * then peeks in from the workspace head's "Show the conversation" button (chat-peek.js).
+ */
+export function chatTucked(view = state.view) {
+	if (!view.panelOpen) return false;
+	return view.browserFull ? !view.browserFullChat : view.wsMax && view.wsChatHidden === true;
 }
 
 /**
@@ -424,7 +447,7 @@ export const panelInstance = () => panelShown;
 /**
  * The panel follows the session that the slot on screen holds. A chat can come on screen without a switch: the first
  * chat after the page opened (initialLoad), or a slot whose session was replaced in place (the chat on screen was
- * deleted and its slot got a fresh chat, "Edit and resend" forked it, a followed session was reclaimed). Without this
+ * deleted and its slot got a fresh chat, the chat moved into a worktree copy, a followed session was reclaimed). Without this
  * the panel stays keyed to the old session (or to none) and every workspace command of the chat on screen only changes
  * that chat's saved panel (`onScreen: false` in workspace-host.js): nothing appears until the chat is switched to again.
  */
@@ -438,7 +461,7 @@ function followPanel(sessionId) {
 	// The same slot now holds another session. A panel that session already has (an Agent command that arrived before
 	// this snapshot) is shown; otherwise what is on screen stays where it is and now belongs to the new session.
 	if (panelStates.has(sessionId)) return applyPanel(sessionId);
-	// The session that left keeps a copy (Edit and resend and a worktree move leave the original chat in the sidebar),
+	// The session that left keeps a copy (a worktree move leaves the original chat in the sidebar),
 	// but with new ids for its website tabs: the desktop host keys a native view by tab id, so one id in two chats would
 	// be one page that both drive and that a close in either destroys. The copy opens them again from their addresses.
 	const leaving = panelKey;
@@ -638,9 +661,11 @@ function persistView() {
 	for (const key of PERSISTED) out[key] = state.view[key];
 	rememberPanel();
 	// Collaboration mode lasts as long as this page: the saved panels leave it out (normalizePanel).
-	out.wsPanels = Object.fromEntries([...panelStates].map(([id, { wsMax, wsSidebar, ...panel }]) => [id, panel]));
-	// Collaboration mode hides the sidebar only for its own duration; the saved choice is the sidebar of the plain layout.
-	out.sidebarOpen = plainSidebar();
+	out.wsPanels = Object.fromEntries([...panelStates].map(([id, { wsMax, wsSidebar, wsChatHidden, ...panel }]) => [id, panel]));
+	// Collaboration mode and browser fullscreen hide the sidebar only for their own duration; the saved choice is the
+	// sidebar of the plain layout.
+	const prev = state.view.browserFull ? state.view.browserFullPrev : null;
+	out.sidebarOpen = plainSidebar(prev ? { ...state.view, sidebarOpen: state.view.sidebarOpen || prev.sidebarOpen } : state.view);
 	savePrefs(out);
 	applyAppearance();
 }
@@ -2347,6 +2372,10 @@ function connectEvents() {
 		state.syncStatus = d;
 		emit();
 	});
+	// Scheduled tasks (schedules.js): the list changed here or arrived by sync, a new card, cards dismissed.
+	on("schedules_changed", () => window.dispatchEvent(new CustomEvent("myharness:schedules-changed")));
+	on("schedule_notice", (d) => window.dispatchEvent(new CustomEvent("myharness:schedule-notice", { detail: d.notice && d.sound ? { ...d.notice, sound: d.sound } : d.notice })));
+	on("schedule_notices", (d) => window.dispatchEvent(new CustomEvent("myharness:schedule-notices", { detail: d.notices })));
 	on("sync_applied", async (d, slot) => {
 		state.modePreferencesNonce += 1;
 		window.dispatchEvent(new CustomEvent("myharness:sync-applied"));
@@ -2424,7 +2453,8 @@ function attachEntryId(d) {
 		let match = false;
 		if (item.kind === "toolResult") match = candidate.kind === "toolResult" && candidate.toolCallId === item.toolCallId;
 		else if (item.kind === "assistant") match = candidate.kind === "assistant" && Math.abs(candidate.ts - item.ts) < 60_000;
-		else if (item.kind === "user") match = candidate.kind === "user" && !candidate.pending && candidate.ts === item.ts;
+		// A user row by its time, or by its text within a minute (a server that sent the time the entry was written).
+		else if (item.kind === "user") match = candidate.kind === "user" && !candidate.pending && (candidate.ts === item.ts || (typeof item.text === "string" && candidate.text === item.text && Math.abs(candidate.ts - item.ts) < 60_000));
 		else match = candidate.kind === item.kind && candidate.ts === item.ts;
 		if (match) {
 			const next = items.slice();
@@ -2443,7 +2473,8 @@ function attachEntryId(d) {
 		emit();
 		return;
 	}
-	if (item.kind === "gitStatus" || item.kind === "runChanges" || item.kind === "compaction" || item.kind === "branchSummary") {
+	// A scheduled task's marker comes just before its message, which then shows as the task's card (turns.js).
+	if (item.kind === "gitStatus" || item.kind === "runChanges" || item.kind === "compaction" || item.kind === "branchSummary" || (item.kind === "custom" && item.customType === "scheduled-run")) {
 		appendStreamedItem({ ...item, id: d.id });
 	}
 }

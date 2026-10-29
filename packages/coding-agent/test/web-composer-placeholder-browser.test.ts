@@ -9,7 +9,7 @@ import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/b
 const installed = detectInstalledBrowsers();
 // The empty input box's placeholder (composer.js → draft-editor.js data-placeholder / data-placeholder-short,
 // composer.css @container composer-input): in a narrow box (collaboration column, panel at its widest) the short
-// form is shown, so the "/ commands · @ files · ! shell" hints are never cut off, in English and Chinese alike.
+// form is shown, so the "/ commands · @ files" hints are never cut off, in English and Chinese alike.
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
 	"keeps the composer placeholder whole at narrow input widths in en and zh-CN",
 	async () => {
@@ -35,8 +35,8 @@ const app=document.getElementById('app');
 const WIDTHS=[354,460,700];
 const out=[];
 const draw=()=>render(h('div',{},WIDTHS.map(w=>h('div',{key:w,style:{width:w+'px',marginBottom:'12px'}},h(DraftEditor,{value:'',class:'composer-input',
- placeholder:t('Ask MyHarness to work on something…  / commands · @ files · ! shell'),
- placeholderShort:t('Ask MyHarness…  / commands · @ files · ! shell'),onChange:()=>{}})))),app);
+ placeholder:t('Ask MyHarness to work on something…  / commands · @ files'),
+ placeholderShort:t('Ask MyHarness…  / commands · @ files'),onChange:()=>{}})))),app);
 try {
  for(const lang of ['en','zh-CN']){
   setLang(lang);render(null,app);draw();await wait(150);
@@ -50,12 +50,12 @@ try {
    const need=c.measureText(text).width;
    const room=el.getBoundingClientRect().width-4;
    out.push({lang,w:Math.round(el.getBoundingClientRect().width),need:Math.round(need),room:Math.round(room),text});
-   check(text.includes('/')&&text.includes('@')&&text.includes('!'),lang+': the placeholder lost its hints: '+text);
+   check(text.includes('/')&&text.includes('@')&&!text.includes('!'),lang+': the placeholder lost its hints: '+text);
    check(need<=room+0.5,lang+' at '+Math.round(room+4)+'px: the placeholder is cut ("'+text+'" needs '+Math.round(need)+'px)');
   }
   // A wide box keeps the full sentence.
   const wide=getComputedStyle(boxes[boxes.length-1],'::before').content;
-  check(wide.includes(t('Ask MyHarness to work on something…  / commands · @ files · ! shell')),lang+': the wide box does not show the full placeholder: '+wide);
+  check(wide.includes(t('Ask MyHarness to work on something…  / commands · @ files')),lang+': the wide box does not show the full placeholder: '+wide);
  }
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed '+JSON.stringify(out)+'</p>');
 } catch(error) { document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+' '+JSON.stringify(out)+'</p>'); }

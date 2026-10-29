@@ -23,6 +23,8 @@ it.skipIf(!installed.length)(
 		const browser = new LocalBrowser({
 			kind: installed.find((item) => item.kind === "chrome")?.kind ?? installed[0]!.kind,
 			rootDir: join(root, "browser"),
+			// Runs in the plain unit suite too: headless, never a window pulled to the front.
+			unattended: true,
 		});
 		try {
 			for (const dir of ["js", "vendor", "css"])
@@ -36,7 +38,7 @@ it.skipIf(!installed.length)(
 				join(root, "test.js"),
 				`
 import {h,render} from '/vendor/preact.js';
-import {activateSlot,panelInstance,setView,state} from '/js/store.js';
+import {activateSlot,chatTucked,panelInstance,setView,state} from '/js/store.js';
 import {actions} from '/js/actions.js';
 import {ChangesPanel} from '/js/panel-changes.js';
 import {BranchChip} from '/js/branch-menu.js';
@@ -111,7 +113,7 @@ try{
 
  // Collaboration mode and the widths are the chat's own too. A is widened and maximized; B, whose panel is open as well,
  // keeps its plain layout, its width and the sidebar, and A comes back as it was, also after a chat with nothing open.
- const layout=()=>JSON.stringify({open:state.view.panelOpen,max:state.view.wsMax,panelW:state.view.panelW,chatW:state.view.chatW,sidebar:state.view.sidebarOpen});
+ const layout=()=>JSON.stringify({open:state.view.panelOpen,max:state.view.wsMax,hidden:state.view.wsChatHidden,panelW:state.view.panelW,chatW:state.view.chatW,sidebar:state.view.sidebarOpen});
  must(state.view.sidebarOpen===true&&state.view.panelW===560,'setup: the sidebar or the default width is not the fixture\\'s: '+layout());
  const shownA=panelInstance();
  setView({panelW:640});
@@ -119,6 +121,9 @@ try{
  await wait(400);
  setView({chatW:500});
  must(state.view.wsMax===true&&state.view.sidebarOpen===false,'collaboration mode did not start: '+layout());
+ // A tucks its conversation away at the right edge; that is A's layout too.
+ actions.showConversation(false);
+ must(state.view.wsChatHidden===true&&chatTucked(),'hiding the conversation did not tuck it away: '+layout());
  await activateSlot('b');
  must(panelInstance()!==shownA,'B shows the panel components of A');
  must(state.view.panelOpen===true&&state.view.wsMax===false,'B took the collaboration mode of A: '+layout());
@@ -126,6 +131,7 @@ try{
  setView({panelW:700});
  actions.toggleWorkspaceMax(true);
  await wait(400);
+ must(state.view.wsChatHidden===false&&!chatTucked(),'B started with the conversation tucked away like A: '+layout());
  // B was never maximized: its chat column starts from the width dragged last (in A) and is B's own from now on.
  must(state.view.chatW===500,'B did not start from the last dragged chat column width: '+layout());
  setView({chatW:380});
@@ -136,10 +142,10 @@ try{
  // A chat without a panel of its own starts from the width dragged last.
  must(state.view.panelW===700&&state.view.chatW===380,'a chat without a panel did not start from the last widths: '+layout());
  await activateSlot('a');
- must(state.view.wsMax===true&&state.view.panelW===640&&state.view.chatW===500&&state.view.sidebarOpen===false,'A did not come back as it was: '+layout());
+ must(state.view.wsMax===true&&state.view.panelW===640&&state.view.chatW===500&&state.view.sidebarOpen===false&&state.view.wsChatHidden===true,'A did not come back as it was: '+layout());
  actions.toggleWorkspaceMax(false);
  await wait(400);
- must(state.view.wsMax===false&&state.view.sidebarOpen===true,'leaving collaboration mode did not give the sidebar back: '+layout());
+ must(state.view.wsMax===false&&state.view.sidebarOpen===true&&state.view.wsChatHidden===false,'leaving collaboration mode did not give the sidebar and the conversation back: '+layout());
  await activateSlot('c');
  await activateSlot('a');
  must(state.view.wsMax===false,'collaboration mode came back after the user left it');
@@ -160,7 +166,7 @@ try{
  must(JSON.stringify(saved.wsPanels.a.wsTabs.map(tab=>tab.id))===JSON.stringify(inA),'the saved panel of A is wrong');
  must(saved.wsPanels.a.panelW===640&&saved.wsPanels.a.chatW===500&&saved.wsPanels.b.panelW===700,'the widths of each chat were not saved: '+JSON.stringify(saved.wsPanels));
  must(saved.panelW===700&&saved.chatW===380,'the widths a new chat starts with were not saved: '+JSON.stringify({panelW:saved.panelW,chatW:saved.chatW}));
- must(!('wsMax' in saved.wsPanels.a)&&!('wsSidebar' in saved.wsPanels.a),'collaboration mode was saved: '+JSON.stringify(saved.wsPanels.a));
+ must(!('wsMax' in saved.wsPanels.a)&&!('wsSidebar' in saved.wsPanels.a)&&!('wsChatHidden' in saved.wsPanels.a),'collaboration mode was saved: '+JSON.stringify(saved.wsPanels.a));
  must(saved.sidebarOpen===true,'the sidebar hidden by collaboration mode was saved as hidden');
  must(saved.wsTabs===undefined,'the old global tab list is still written');
  actions.toggleWorkspaceMax(false);

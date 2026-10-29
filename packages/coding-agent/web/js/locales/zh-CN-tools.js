@@ -43,6 +43,7 @@ export const zhToolDescriptions = {
 	session_get: "读取之前聊天的交接摘要与原文",
 	ask_user_question: "向用户提问并等待选择或回答",
 	todo_write: "创建并更新任务清单",
+	schedule: "创建和管理定时提醒与定时任务",
 	web_search: "搜索网络并读取结果",
 	web_fetch: "读取网页及文档",
 };

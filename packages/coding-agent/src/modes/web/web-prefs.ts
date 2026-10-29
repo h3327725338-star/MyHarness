@@ -7,7 +7,13 @@
  * (the page's clock); a write older than the stored one is ignored so a late request cannot undo a newer change.
  */
 
-import { isRecord, readWebPrefs, type StoredWebPrefs, writeWebPrefs } from "../../config/web-prefs.ts";
+import {
+	isRecord,
+	readWebPrefs,
+	type StoredWebPrefs,
+	systemInterfaceLanguage,
+	writeWebPrefs,
+} from "../../config/web-prefs.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
 
 // The file itself lives in config/web-prefs.ts, shared with Google Drive sync (saved prompts travel between devices).
@@ -15,9 +21,12 @@ export { readWebPrefs, type StoredWebPrefs, WEB_PREFS_FILE } from "../../config/
 
 export function registerWebPrefsRoutes(server: WebHttpServer, agentDir: () => string): void {
 	server.route("GET", "/api/web-prefs", () => readWebPrefs(agentDir()) ?? { prefs: null, updatedAt: 0 });
-	// A classic script, so the page has the preferences before its first paint (boot-theme.js runs right after it).
+	// A classic script, so the page has the preferences before its first paint (boot-theme.js runs right after it), and
+	// the language of Windows for a page whose user has not picked a language yet.
 	server.route("GET", "/api/web-prefs.js", ({ res }) => {
-		const text = `globalThis.__MYHARNESS_WEB_PREFS__ = ${JSON.stringify(readWebPrefs(agentDir())).replaceAll("<", "\\u003c")};\n`;
+		const text =
+			`globalThis.__MYHARNESS_WEB_PREFS__ = ${JSON.stringify(readWebPrefs(agentDir())).replaceAll("<", "\\u003c")};\n` +
+			`globalThis.__MYHARNESS_SYSTEM_LANGUAGE__ = ${JSON.stringify(systemInterfaceLanguage() ?? null)};\n`;
 		res.writeHead(200, {
 			"content-type": "text/javascript; charset=utf-8",
 			"cache-control": "no-store",

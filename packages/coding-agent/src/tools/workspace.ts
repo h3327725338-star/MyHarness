@@ -20,6 +20,7 @@ import { loadSystemPrompt } from "../system-prompts/loader/index.ts";
 import { processImage } from "../utils/image-process.ts";
 import type { BusinessToolDefinition } from "./contracts/index.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { bookmarkEntries, bookmarkLine, matchBookmarks, type WorkspaceBookmarkEntry } from "./workspace-bookmarks.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const SLOW_TIMEOUT_MS = 60_000;
@@ -82,6 +83,26 @@ const GUARDED_OPERATIONS = new Set([
 ]);
 /** read_many: pages read side by side. */
 const READ_MANY_LANES = 4;
+/**
+ * Operations that load or change a website tab, after which the page may ask for a sign-in or a human check; the result
+ * then says what to do about it (`type` only when it presses Enter). Reading a tab reports the same in its own line.
+ */
+const ATTENTION_OPERATIONS = new Set([
+	"open",
+	"navigate",
+	"back",
+	"forward",
+	"reload",
+	"click",
+	"mouse",
+	"key",
+	"login",
+	"wait",
+]);
+const HUMAN_CHECK_HINT =
+	"this page is a human check (a bot check or CAPTCHA). It is the user's to pass: do not click, type, run scripts or look for a way around it (other addresses, the site's API, other tools); call handoff with reason \"verify\" on this tab, then continue.";
+const SIGN_IN_HINT =
+	'this page asks for a sign-in. On a bookmarked site with a saved login use login; otherwise call handoff with reason "login" so the user signs in on this tab, then continue. Do not skip the site or work around the sign-in.';
 /** Screenshots are debug artifacts in the temp directory; keep the newest ones and delete older ones. */
 const SCREENSHOT_KEEP = 50;
 
@@ -211,6 +232,53 @@ export function desktopWorkspaceChannel(): DesktopWorkspaceChannel | undefined {
 	return channel;
 }
 
+/** A page as the built-in browser shows it to the user: its markup and where it landed, read with the user's sign-ins. */
+export interface BuiltInBrowserPage {
+	url: string;
+	title: string;
+	html: string;
+	/** It landed on a sign-in page (a password field, a sign-in address) or a human check. */
+	signIn: boolean;
+	challenge: boolean;
+}
+
+/**
+ * Read an address in the desktop app's built-in browser: an off-screen reader page in the session of the website tabs,
+ * so a site the user signed in to there is read signed in. Undefined without a desktop host; rejects when the host could
+ * not read it.
+ */
+export async function readInBuiltInBrowser(url: string, signal?: AbortSignal): Promise<BuiltInBrowserPage | undefined> {
+	const link = desktopWorkspaceChannel();
+	if (!link) return undefined;
+	const timeoutMs = 25_000;
+	const request = link.request({ action: "readUrl", url, html: true, timeoutMs }, timeoutMs + 20_000) as Promise<{
+		ok?: boolean;
+		error?: string;
+		url?: string;
+		title?: string;
+		html?: string;
+		signIn?: boolean;
+		challenge?: boolean;
+	} | null>;
+	const value = await (signal
+		? Promise.race([
+				request,
+				new Promise<never>((_resolve, reject) => {
+					if (signal.aborted) reject(signal.reason ?? new Error("aborted"));
+					signal.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), { once: true });
+				}),
+			])
+		: request);
+	if (!value?.ok) throw new Error(value?.error ?? "the built-in browser did not answer");
+	return {
+		url: typeof value.url === "string" && value.url ? value.url : url,
+		title: typeof value.title === "string" ? value.title : "",
+		html: typeof value.html === "string" ? value.html : "",
+		signIn: value.signIn === true,
+		challenge: value.challenge === true,
+	};
+}
+
 const tabIdSchema = Type.Optional(Type.String({ minLength: 1, description: "Workspace tab id (see operation tabs)" }));
 const maxCharsSchema = Type.Optional(
 	Type.Integer({ minimum: 200, maximum: 100_000, description: "Cap for text output (default 20000)" }),
@@ -238,7 +306,12 @@ const workspaceParametersUnion = Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("open"),
-			type: Type.Union([Type.Literal("browser"), Type.Literal("file")]),
+			// Optional: a call with only a bookmark or a url (as the bookmarks reminder puts it) opens a website.
+			type: Type.Optional(
+				Type.Union([Type.Literal("browser"), Type.Literal("file")], {
+					description: "browser (default when a url or bookmark is given) or file (with path)",
+				}),
+			),
 			url: Type.Optional(Type.String({ minLength: 1, description: "http(s) URL for type=browser" })),
 			bookmark: Type.Optional(
 				Type.String({
@@ -259,7 +332,35 @@ const workspaceParametersUnion = Type.Union([
 		},
 		{ additionalProperties: false },
 	),
-	Type.Object({ operation: Type.Literal("bookmarks") }, { additionalProperties: false }),
+	Type.Object(
+		{
+			operation: Type.Literal("bookmarks"),
+			query: Type.Optional(
+				Type.String({
+					maxLength: 200,
+					description:
+						"Words to find in the bookmarks' names, addresses and notes (all of them); omit to list every bookmark",
+				}),
+			),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("bookmark_note"),
+			bookmark: Type.String({
+				minLength: 1,
+				description: "The bookmark's id (see the bookmarks reminder), or its exact title",
+			}),
+			note: Type.String({
+				minLength: 1,
+				maxLength: 500,
+				description:
+					"What the user does on this site, as one short sentence in the user's language (their tasks there, concretely)",
+			}),
+		},
+		{ additionalProperties: false },
+	),
 	Type.Object(
 		{ operation: Type.Literal("close"), tabId: Type.String({ minLength: 1 }) },
 		{ additionalProperties: false },
@@ -572,6 +673,27 @@ const workspaceParametersUnion = Type.Union([
 	),
 	Type.Object(
 		{
+			operation: Type.Literal("handoff"),
+			tabId: tabIdSchema,
+			reason: Type.Union([Type.Literal("login"), Type.Literal("verify"), Type.Literal("other")], {
+				description:
+					"login: the user must sign in on this page; verify: a human check (CAPTCHA, bot check, device confirmation); other: another step only the user may take",
+			}),
+			message: Type.Optional(
+				Type.String({
+					maxLength: 300,
+					description:
+						"One sentence for the user, in their language: what to do on the page and why you need it (for example which account)",
+				}),
+			),
+			timeoutMinutes: Type.Optional(
+				Type.Integer({ minimum: 1, maximum: 60, description: "How long to wait for the user (default 10)" }),
+			),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
 			operation: Type.Literal("upload"),
 			tabId: tabIdSchema,
 			onUserTab: onUserTabSchema,
@@ -756,12 +878,6 @@ export interface WorkspaceToolDetails {
 	screenshot?: { path: string; bytes: number; width?: number; height?: number };
 }
 
-interface WorkspaceBookmark {
-	id: string;
-	title: string;
-	url: string;
-}
-
 /** What the host's `read` answers (packages/desktop/browser-page-helpers.cjs pageRead). */
 interface PageReading {
 	ok?: boolean;
@@ -775,6 +891,9 @@ interface PageReading {
 	atEnd?: boolean;
 	links?: Array<{ text: string; href: string }>;
 	tables?: string[][][];
+	/** A reader page that landed on a sign-in page or a human check (`readUrl` only). */
+	signIn?: boolean;
+	challenge?: boolean;
 }
 
 /** A reading as text for the model: the page's words, then its links and tables when they were asked for. */
@@ -795,7 +914,13 @@ function formatReading(value: PageReading): string {
 
 function readingLine(value: PageReading): string {
 	const scrolled = value.scrolls ? ` scrolls=${value.scrolls} end=${value.atEnd ? "yes" : "no"}` : "";
-	return `title=${JSON.stringify(value.title ?? "")} lines=${value.lines ?? 0}${scrolled}${value.truncated ? " (text cut at maxChars)" : ""}`;
+	// A hidden reader page cannot be handed to the user: the page is opened as a tab first, then handed over there.
+	const gate = value.challenge
+		? '\n  human_check=yes: this address shows a human check. Do not skip it or get around it: open it as a tab (operation open) and call handoff with reason "verify" there.'
+		: value.signIn
+			? '\n  sign_in=yes: this address needs the user to sign in. Do not skip it: open it as a tab (operation open), then use login on a bookmarked site with a saved login, or call handoff with reason "login" there.'
+			: "";
+	return `title=${JSON.stringify(value.title ?? "")} lines=${value.lines ?? 0}${scrolled}${value.truncated ? " (text cut at maxChars)" : ""}${gate}`;
 }
 
 function truncate(text: string, maxChars: number): { text: string; truncated: boolean } {
@@ -1050,9 +1175,20 @@ export function createWorkspaceToolDefinition(
 		);
 	};
 
-	const bookmarkList = async (): Promise<WorkspaceBookmark[]> => {
-		const value = (await browser({ action: "bookmarks" })) as { bookmarks?: WorkspaceBookmark[] };
-		return (value?.bookmarks || []).map((entry) => ({ id: entry.id, title: entry.title, url: entry.url }));
+	const bookmarkList = async (): Promise<WorkspaceBookmarkEntry[]> =>
+		bookmarkEntries(await browser({ action: "bookmarks" }));
+	/** A bookmark by its id or title (exact, then ignoring case). */
+	const bookmarkNamed = async (wanted: string): Promise<WorkspaceBookmarkEntry> => {
+		const list = await bookmarkList();
+		const match =
+			list.find((entry) => entry.id === wanted) ||
+			list.find((entry) => entry.title === wanted) ||
+			list.find((entry) => entry.title.toLowerCase() === wanted.toLowerCase());
+		if (!match)
+			throw new Error(
+				`workspace: there is no bookmark ${JSON.stringify(wanted)}; list them with operation=bookmarks`,
+			);
+		return match;
 	};
 
 	const mergedTabs = async (): Promise<{
@@ -1081,7 +1217,7 @@ export function createWorkspaceToolDefinition(
 		};
 	};
 
-	const runOne = async (input: WorkspaceToolInput): Promise<WorkspaceResult> => {
+	const runOne = async (input: WorkspaceToolInput, signal?: AbortSignal): Promise<WorkspaceResult> => {
 		const operation = String(input?.operation || "");
 		const fields = input as Record<string, unknown>;
 		const tabId = typeof fields.tabId === "string" ? fields.tabId : undefined;
@@ -1117,21 +1253,16 @@ export function createWorkspaceToolDefinition(
 				};
 			}
 			case "open": {
-				const type = String((input as { type?: string }).type || "");
+				const given = input as { type?: string; path?: string };
+				const type = String(given.type || (given.path ? "file" : "browser"));
 				if (type === "browser") {
 					const wanted = String((input as { bookmark?: string }).bookmark || "");
 					let url = String((input as { url?: string }).url || "");
 					if (wanted) {
-						const list = await bookmarkList();
-						const match =
-							list.find((entry) => entry.id === wanted) ||
-							list.find((entry) => entry.title === wanted) ||
-							list.find((entry) => entry.title.toLowerCase() === wanted.toLowerCase());
-						if (!match)
-							throw new Error(
-								`workspace: there is no bookmark ${JSON.stringify(wanted)}; list them with operation=bookmarks`,
-							);
+						const match = await bookmarkNamed(wanted);
 						url = match.url;
+						// The bookmarks used most recently are listed first when not all of them fit in the context.
+						void browser({ action: "bookmark-used", id: match.id }).catch(() => undefined);
 					}
 					let parsed: URL;
 					try {
@@ -1198,16 +1329,31 @@ export function createWorkspaceToolDefinition(
 				throw new Error("workspace: open needs type=browser with url, or type=file with path");
 			}
 			case "bookmarks": {
-				const list = await bookmarkList();
-				const lines = list.map((entry) => `  ${entry.id} ${JSON.stringify(entry.title)} ${entry.url}`);
+				const all = await bookmarkList();
+				const query = typeof fields.query === "string" ? fields.query.trim() : "";
+				const list = query ? matchBookmarks(all, query) : all;
+				const lines = list.map((entry) => `  ${bookmarkLine(entry).slice(2)}`);
+				const empty = query
+					? `  (no bookmark matches ${JSON.stringify(query)}; ${all.length} in all)`
+					: "  (none yet; the user adds them with the star in the browser bar)";
 				return {
 					content: [
 						{
 							type: "text",
-							text: `[workspace] bookmarks=${list.length} (trusted sites: full control, saved-login sign-in, permissions allowed)\n${lines.join("\n") || "  (none yet; the user adds them with the star in the browser bar)"}`,
+							text: `[workspace] bookmarks=${list.length}${query ? ` of ${all.length} for ${JSON.stringify(query)}` : ""} (trusted sites, each with what it is for: open with bookmark=<id>, saved-login sign-in, permissions allowed)\n${lines.join("\n") || empty}`,
 						},
 					],
 					details: { operation, result: list },
+				};
+			}
+			case "bookmark_note": {
+				// The host refuses to replace a note the user wrote; an app-written one becomes the Agent's.
+				const match = await bookmarkNamed(String(fields.bookmark || ""));
+				const value = await browser({ action: "bookmark-note", id: match.id, note: String(fields.note || "") });
+				const saved = bookmarkEntries(value).find((entry) => entry.id === match.id) ?? match;
+				return {
+					content: [{ type: "text", text: `[workspace] bookmark note saved: ${bookmarkLine(saved).slice(2)}` }],
+					details: { operation, result: saved },
 				};
 			}
 			case "login": {
@@ -1237,6 +1383,63 @@ export function createWorkspaceToolDefinition(
 						},
 					],
 					details: { operation, activeId: id, result: value, browser: live },
+				};
+			}
+			case "handoff": {
+				// A step only the user may take (sign in, a human check): the tab comes to the front of this chat's panel
+				// with the request on it, and the call waits for the user's answer or for the page to finish the step.
+				const id = await resolveBrowserTab(tabId);
+				const reason = ["login", "verify", "other"].includes(String(fields.reason))
+					? String(fields.reason)
+					: "login";
+				const minutes = Math.max(1, Math.min(60, Math.round(Number(fields.timeoutMinutes) || 10)));
+				const message = typeof fields.message === "string" ? fields.message.trim().slice(0, 300) : "";
+				const shown = await page({ action: "activate", tabId: id }).catch(() => undefined);
+				const cancel = () => void browser({ action: "handoff-cancel", tabId: id }).catch(() => undefined);
+				signal?.addEventListener("abort", cancel, { once: true });
+				let value: {
+					outcome?: string;
+					waitedMs?: number;
+					url?: string;
+					title?: string;
+					challenge?: boolean;
+					signIn?: boolean;
+				};
+				try {
+					value = (await browser(
+						{
+							action: "handoff",
+							tabId: id,
+							reason,
+							message,
+							timeoutMs: minutes * 60_000,
+							sessionId: options?.sessionId?.(),
+						},
+						minutes * 60_000 + 30_000,
+					)) as typeof value;
+				} finally {
+					signal?.removeEventListener("abort", cancel);
+				}
+				const outcome = String(value?.outcome || "");
+				const next =
+					outcome === "done" || outcome === "done-auto"
+						? "The user finished the step. Check the page (screenshot or read) before you go on: a sign-in can have a second step."
+						: outcome === "declined"
+							? "The user chose not to do it now. Do not try again or work around it; go on without this page, or ask the user what to do."
+							: outcome === "timeout"
+								? `The user did not answer within ${minutes} minute(s). Tell them what is waiting for them instead of working around it.`
+								: outcome === "closed"
+									? "The tab was closed, so the request ended."
+									: "The request ended without an answer.";
+				const waited = Math.round((Number(value?.waitedMs) || 0) / 1000);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `[workspace] handoff ${id} reason=${reason} outcome=${outcome || "none"} waited=${waited}s${screenLine(shown)}\n  url=${value?.url ?? ""} title=${JSON.stringify(value?.title ?? "")} sign_in=${value?.signIn ? "yes" : "no"} human_check=${value?.challenge ? "yes" : "no"}\n  ${next}`,
+						},
+					],
+					details: { operation, activeId: id, result: value as Record<string, unknown> },
 				};
 			}
 			case "answer_permission": {
@@ -2159,7 +2362,18 @@ export function createWorkspaceToolDefinition(
 	 * One operation, plus what a person does without thinking after acting: follow the navigation it started, and look
 	 * (`screenshot: true` attaches the picture of the tab as it is afterwards).
 	 */
-	const runActing = async (fields: Record<string, unknown>): Promise<WorkspaceResult> => {
+	/** What the page asks of the user, when it does: a human check or a sign-in, and what to do about it. */
+	const attention = async (id: string): Promise<string> => {
+		const state = (await browser({ action: "state", tabId: id }).catch(() => undefined)) as
+			| { challenge?: boolean; signIn?: boolean; help?: unknown }
+			| undefined;
+		if (!state || state.help) return "";
+		if (state.challenge) return `\n  attention: ${HUMAN_CHECK_HINT}`;
+		if (state.signIn) return `\n  attention: ${SIGN_IN_HINT}`;
+		return "";
+	};
+
+	const runActing = async (fields: Record<string, unknown>, signal?: AbortSignal): Promise<WorkspaceResult> => {
 		const operation = String(fields?.operation || "");
 		const guard = await keepOffUserTab(fields);
 		if (guard.arrived) {
@@ -2184,7 +2398,7 @@ export function createWorkspaceToolDefinition(
 		const before = id
 			? ((await browser({ action: "state", tabId: id }).catch(() => undefined)) as { url?: string } | undefined)
 			: undefined;
-		const result = await runOne(fields as WorkspaceToolInput);
+		const result = await runOne(fields as WorkspaceToolInput, signal);
 		if (guard.note) {
 			const first = result.content[0];
 			if (first?.type === "text") first.text += guard.note;
@@ -2194,6 +2408,13 @@ export function createWorkspaceToolDefinition(
 			const moved = await followUp(resultId, before?.url);
 			const first = result.content[0];
 			if (moved && first?.type === "text") first.text += moved;
+		}
+		const pageId = resultId ?? tabIdIn;
+		const mayChange = ATTENTION_OPERATIONS.has(operation) || (operation === "type" && fields.enter === true);
+		if (mayChange && pageId?.startsWith("browser:")) {
+			const note = await attention(pageId);
+			const first = result.content[0];
+			if (note && first?.type === "text") first.text += note;
 		}
 		if (look && resultId) {
 			const picture = await capture(resultId);
@@ -2207,7 +2428,7 @@ export function createWorkspaceToolDefinition(
 	 * Several steps in one call, run in order on the same tab (a step's own tabId wins), stopping at the first failure.
 	 * One picture at the end when `screenshot` is not false, so the model sees where the sequence left the page.
 	 */
-	const runBatch = async (fields: Record<string, unknown>): Promise<WorkspaceResult> => {
+	const runBatch = async (fields: Record<string, unknown>, signal?: AbortSignal): Promise<WorkspaceResult> => {
 		const steps = Array.isArray(fields.steps) ? (fields.steps as Array<Record<string, unknown>>) : [];
 		if (!steps.length) throw new Error("workspace: batch needs steps");
 		if (steps.length > MAX_BATCH_STEPS) throw new Error(`workspace: batch takes at most ${MAX_BATCH_STEPS} steps`);
@@ -2226,7 +2447,7 @@ export function createWorkspaceToolDefinition(
 			if (fields.onUserTab === true) step.onUserTab = true;
 			step.screenshot = operation === "screenshot" ? undefined : false;
 			try {
-				const result = await runActing(step);
+				const result = await runActing(step, signal);
 				lastId = result.details.activeId ?? lastId;
 				for (const part of result.content) {
 					if (part.type === "text") lines.push(`${index + 1}. ${part.text.replace(/^\[workspace\] /, "")}`);
@@ -2268,17 +2489,18 @@ export function createWorkspaceToolDefinition(
 			"Point at elements like a person: `click`, `type`, `mouse` and `scroll` take `label` (the words on the element, its placeholder or accessible name), `selector` or `index`; the element is scrolled into view and pressed with the real mouse (a covered or hidden one falls back to its own click(), and the result says so). `type` with a target clicks the field, replaces its text (`replace: false` appends), picks the matching option of a <select>, and `enter: true` submits. A label copied from a screenshot may be cut off or miss punctuation; when nothing matches, the error lists the closest visible texts. Elements inside web components (shadow DOM) are found too. A click or Enter that starts a navigation is followed and the result says where the page went. `wait` waits for a selector, text or label to appear (or with `gone` to disappear), or for the page to load and go quiet.",
 			'Lists that scroll inside the page (chat lists, mail, feeds): `scroll` with `deltaY` (px or "page") at x,y or at a label scrolls the area under that point; `until: "words"` keeps scrolling until they are on screen and says where. `find` returns the elements that hold the words with their positions. `exec` errors come back with the page\'s real message.',
 			"Fewer round trips: add `screenshot: true` to an action to get the picture of the page after it, and use `batch` with `steps` (click/type/mouse/key/scroll/wait/navigate/back/forward/reload/text/interactive/find/exec/screenshot/state, at most 30) to run a sequence in one call; it stops at the first failing step and ends with one screenshot unless `screenshot: false`.",
-			"Bookmarks are sites the user trusts: `bookmarks` lists them, `open` with `bookmark` opens one, `login` signs in to a bookmarked site with the login the user saved (the password is filled by the app and never shown to you), and their site-permission requests are allowed automatically. `permissions` lists decisions and pending requests of any site; `answer_permission` allows or denies a pending one.",
+			"Bookmarks are sites the user trusts, each with a note of what it is for; the list comes into the conversation by itself (a bookmarks reminder) and `bookmarks` lists or searches them (`query`). When a request concerns what a bookmark is for, use that site on your own initiative, without asking which site: `open` with `bookmark` opens it, `login` signs in to a bookmarked site with the login the user saved (the password is filled by the app and never shown to you), and their site-permission requests are allowed automatically. While you work, keep the notes useful: when a task shows what the user really does on a bookmarked site and its note is missing, generic (it only describes the site) or out of date, set a better one with `bookmark_note` (one short sentence in the user's language on what they do there), without stopping or mentioning it; a note marked as the user's own is never replaced. `permissions` lists decisions and pending requests of any site; `answer_permission` allows or denies a pending one.",
 			"Media tabs support play/pause/seek/volume/mute/rate/subtitles. Every call returns the state that was actually reached; a page that does not answer in time is an error, not a success.",
 			"`open` reports `on_screen`: only `on_screen=yes` means the user can see the tab now. `on_screen=no` means this chat is not the one on the user's screen (the tab waits in this chat's panel), so never tell the user it is open in front of them.",
-			"What it cannot do: solve CAPTCHAs or bot checks, see or type a saved password, confirm payments, or drive anything outside this app's workspace.",
+			"When a page needs the user - a sign-in you cannot do with `login`, a human check (CAPTCHA, bot check), a confirmation on their phone - do not skip it and do not work around it (other addresses, the site's API, guessed parameters, the site's code, other tools): call `handoff` on that tab with the reason and one sentence for the user. The tab comes to the front of this chat's panel with your request and a Done button, and the call waits until the user is done (a human check that clears ends it by itself), declines, or the time runs out; then check the page and continue. Results mark such pages with `attention:`, readings with `sign_in=yes` or `human_check=yes`.",
+			"What it cannot do: solve CAPTCHAs or bot checks (input on such a page is refused; hand it to the user with `handoff`), see or type a saved password, confirm payments, or drive anything outside this app's workspace.",
 		].join("\n"),
 		promptSnippet: loadSystemPrompt("tools/workspace/snippet.md"),
 		parameters,
-		async execute(_toolCallId, input: WorkspaceToolInput): Promise<WorkspaceResult> {
+		async execute(_toolCallId, input: WorkspaceToolInput, signal): Promise<WorkspaceResult> {
 			const fields = input as Record<string, unknown>;
-			if (String(fields?.operation || "") === "batch") return runBatch(fields);
-			return runActing(fields);
+			if (String(fields?.operation || "") === "batch") return runBatch(fields, signal);
+			return runActing(fields, signal);
 		},
 	};
 }

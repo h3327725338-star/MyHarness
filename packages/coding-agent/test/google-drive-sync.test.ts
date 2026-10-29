@@ -15,6 +15,7 @@ import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readWebPrefs, writeWebPrefs } from "../src/config/web-prefs.ts";
 import { WorkspaceStore } from "../src/data/workspace-store.ts";
+import { readScheduleList, scheduleListOf, updateScheduleList } from "../src/schedules/store.ts";
 import { ModeStateStore } from "../src/session/mode-state.ts";
 import { readSessionHeader } from "../src/session/storage/jsonl/index.ts";
 import { mergeBrowserText } from "../src/sync/browser-data.ts";
@@ -869,7 +870,7 @@ describe("Google Drive sync engine", () => {
 		).toBe(true);
 	});
 
-	it("keeps a remote chat version even when the merge itself changes nothing", async () => {
+	it("keeps the later change of a chat entry both devices changed, without asking", async () => {
 		const drive = new FakeDrive();
 		const a = device(drive, "desktop", "device-a");
 		const b = device(drive, "laptop", "device-b");
@@ -884,18 +885,43 @@ describe("Google Drive sync engine", () => {
 			"conversation",
 			readdirSync(join(b.dataRoot, "workspaces", "ws1", "sessions", "s1", "conversation"))[0]!,
 		);
-		// Both devices rewrite entry e1 with the same id but different text: the merge keeps the local entry and
-		// changes nothing else, which used to drop the other version without a copy.
+		// Both devices rewrite entry e1 with the same id but different text; the laptop's change is the later one.
 		writeFileSync(file, readFileSync(file, "utf8").replace('"hello"', '"desktop text"'));
 		writeFileSync(bFile, readFileSync(bFile, "utf8").replace('"hello"', '"laptop text"'));
+		const earlier = new Date(Date.now() - 120_000);
+		const later = new Date(Date.now() - 60_000);
+		utimesSync(file, earlier, earlier);
+		utimesSync(bFile, later, later);
 
 		await sync(a, b);
+		await sync(a, b);
 
-		const conflict = b.engine.status().conflicts.find((item) => item.key === "session:ws1/s1");
-		expect(conflict).toBeTruthy();
-		expect(conflict!.remoteCopyPath).toBeTruthy();
-		expect(readFileSync(conflict!.remoteCopyPath!, "utf8")).toContain("desktop text");
 		expect(readFileSync(bFile, "utf8")).toContain("laptop text");
+		expect(readFileSync(file, "utf8")).toContain("laptop text");
+		expect(readFileSync(file, "utf8")).not.toContain("desktop text");
+		expect(a.engine.status().conflicts).toHaveLength(0);
+		expect(b.engine.status().conflicts).toHaveLength(0);
+	});
+
+	it("drops the review entries older versions left for chat entries both devices changed", async () => {
+		const drive = new FakeDrive();
+		const a = device(drive, "desktop", "device-a");
+		const state = a.store.state("account-1");
+		state.conflicts.push({
+			id: "entry-legacy",
+			key: "session:ws1/s1",
+			kind: "session",
+			reason: "both-modified",
+			at: new Date().toISOString(),
+			deviceName: "laptop",
+			message: "Both devices changed entry e1 of this chat; the local entry was kept.",
+		});
+		a.store.saveState(state);
+		a.engine.loadState();
+
+		await a.engine.runOnce();
+
+		expect(a.engine.status().conflicts).toHaveLength(0);
 	});
 
 	it("never lets a remote timestamp decide where a chat file is written", async () => {
@@ -1084,6 +1110,56 @@ describe("Google Drive sync engine", () => {
 			const saved = readWebPrefs(a.agentDir)!.prefs.savedPrompts as { title: string }[];
 			expect(saved.map((prompt) => prompt.title).sort()).toEqual(["Desk", "Lap", "Review"]);
 			expect(readWebPrefs(b.agentDir)!.prefs.savedPrompts).toEqual(saved);
+			await converged(drive, a, b);
+		});
+
+		it("merges the scheduled tasks both computers changed: edits, runs and deletions all arrive", async () => {
+			const drive = new FakeDrive();
+			const a = device(drive, "desktop", "device-a");
+			const b = device(drive, "laptop", "device-b");
+			const task = (id: string, title: string) => ({
+				id,
+				title,
+				kind: "reminder",
+				text: "",
+				repeat: { type: "daily", time: "08:00" },
+				tz: "Asia/Kuala_Lumpur",
+				enabled: true,
+				createdAt: "2026-10-01T00:00:00.000Z",
+				updatedAt: "2026-10-02T00:00:00.000Z",
+			});
+			const initial = scheduleListOf({ schedules: [task("s1", "Stand up"), task("s2", "Drink water")] }).schedules;
+			updateScheduleList(a.agentDir, (list) => ({ ...list, schedules: initial }));
+			await sync(a, b);
+			expect(readScheduleList(b.agentDir).schedules.map((item) => item.title)).toEqual(["Stand up", "Drink water"]);
+
+			// At the same time: the desktop deletes one task and records a run of the other; the laptop renames that other one.
+			const run = {
+				due: "2026-10-03T00:00:00.000Z",
+				at: "2026-10-03T00:00:01.000Z",
+				status: "done" as const,
+				deviceId: "device-a",
+				deviceName: "desktop",
+			};
+			updateScheduleList(a.agentDir, (list) => ({
+				...list,
+				schedules: list.schedules.filter((item) => item.id !== "s1").map((item) => ({ ...item, lastRun: run })),
+				removed: [{ id: "s1", removedAt: "2026-10-03T00:00:00.000Z" }],
+			}));
+			updateScheduleList(b.agentDir, (list) => ({
+				...list,
+				schedules: list.schedules.map((item) =>
+					item.id === "s2" ? { ...item, title: "Drink more water", updatedAt: "2026-10-03T05:00:00.000Z" } : item,
+				),
+			}));
+			await sync(a, b);
+			await sync(a, b);
+			for (const agentDir of [a.agentDir, b.agentDir]) {
+				const list = readScheduleList(agentDir);
+				expect(list.schedules.map((item) => item.title)).toEqual(["Drink more water"]);
+				expect(list.schedules[0]!.lastRun?.deviceId).toBe("device-a");
+				expect(list.removed.map((entry) => entry.id)).toEqual(["s1"]);
+			}
 			await converged(drive, a, b);
 		});
 
@@ -1378,6 +1454,53 @@ describe("browser file merge", () => {
 		expect(permissions.permissions[0].allowed).toBe(false);
 		expect(mergeBrowserText("vault-0123456789abcdef", "{}", "{}")).toBeUndefined();
 		expect(mergeBrowserText("../settings", "{}", "{}")).toBeUndefined();
+	});
+
+	it("keeps the newer note of a bookmark both computers changed, and the last time either one used it", () => {
+		const school = {
+			id: "bm1",
+			url: "https://elearn.example.edu/",
+			title: "eLearn",
+			addedAt: "2026-10-01T00:00:00.000Z",
+		};
+		const left = {
+			version: 1,
+			bookmarks: [
+				{
+					...school,
+					note: "Course site.",
+					updatedAt: "2026-10-02T00:00:00.000Z",
+					lastUsedAt: "2026-10-20T00:00:00.000Z",
+				},
+				{ id: "bm2", url: "https://mail.example/", title: "Mail", addedAt: "2026-10-03T00:00:00.000Z" },
+			],
+		};
+		const right = {
+			version: 1,
+			bookmarks: [
+				{
+					...school,
+					note: "Course site: assignments and grades.",
+					noteAuto: true,
+					updatedAt: "2026-10-05T00:00:00.000Z",
+					lastUsedAt: "2026-10-04T00:00:00.000Z",
+				},
+				// The same page saved again on the other computer stays once.
+				{ id: "bm3", url: "https://mail.example/", title: "Mail", addedAt: "2026-10-04T00:00:00.000Z" },
+			],
+		};
+		const l = JSON.stringify(left);
+		const r = JSON.stringify(right);
+		const merged = mergeBrowserText("bookmarks", l, r)!;
+		expect(merged).toBe(mergeBrowserText("bookmarks", r, l));
+		const bookmarks = JSON.parse(merged).bookmarks;
+		expect(bookmarks.map((item: { id: string }) => item.id)).toEqual(["bm1", "bm2"]);
+		expect(bookmarks[0]).toMatchObject({
+			note: "Course site: assignments and grades.",
+			noteAuto: true,
+			updatedAt: "2026-10-05T00:00:00.000Z",
+			lastUsedAt: "2026-10-20T00:00:00.000Z",
+		});
 	});
 });
 

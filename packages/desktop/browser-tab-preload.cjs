@@ -151,7 +151,7 @@ globalThis.__myharnessDarkFrames = async (tokens, code, settled) => {
 })();
 
 // ---- Selection translation ---------------------------------------------------------------------------------------
-// Select text on a page and a small "译" button appears beside it (or right-click → 翻译所选文字); the translation comes
+// Select text on a page and a small "Translate" / "译 翻译" button appears beside it (or right-click → Translate selection); the translation comes
 // from the app's own service (Settings → Agent → Assistants → Translation), asked for through the host. The button and the card live
 // in a closed shadow root: the site's scripts and styles (Dark Reader's too) cannot read or restyle them, and the
 // answer is only ever written as text.
@@ -166,13 +166,20 @@ const translator = (() => {
   let state = null;
   // The language translations go into ({ preference, target }), kept between cards and read again when one opens.
   let language = null;
-  // The languages of Settings → Agent → Assistants → Translation; "auto" is the interface language.
-  const TARGETS = [['auto', '跟随界面语言'], ['zh-CN', '简体中文'], ['zh-TW', '繁体中文'], ['en', '英语'], ['ja', '日语'], ['ko', '韩语'], ['fr', '法语'], ['de', '德语'], ['es', '西班牙语'], ['ru', '俄语']];
-  const SOURCES = { zh: '中文', en: '英语', ja: '日语', ko: '韩语', fr: '法语', de: '德语', es: '西班牙语', ru: '俄语' };
+  // The button and the card speak the app's interface language (the host's ui-language.cjs), asked again on every
+  // selection, so a language changed in the app applies without reloading the site. say('English', '中文').
+  let zh = false;
+  const learnLanguage = () => { try { zh = ipcRenderer.sendSync('mh-browser:ui-language') === 'zh-CN'; } catch { zh = false; } };
+  const say = (english, chinese) => (zh ? chinese : english);
+  // The languages of Settings → Agent → Assistants → Translation; "auto" is the interface language. Names as the app's own
+  // card has them (web/js/translate-card.js and its zh-CN locale).
+  const TARGETS = [['auto', 'Interface language', '跟随界面语言'], ['zh-CN', 'Simplified Chinese', '简体中文'], ['zh-TW', 'Traditional Chinese', '繁体中文'], ['en', 'English', '英语'], ['ja', 'Japanese', '日语'], ['ko', 'Korean', '韩语'], ['fr', 'French', '法语'], ['de', 'German', '德语'], ['es', 'Spanish', '西班牙语'], ['ru', 'Russian', '俄语']];
+  const SOURCES = { zh: ['Chinese', '中文'], en: ['English', '英语'], ja: ['Japanese', '日语'], ko: ['Korean', '韩语'], fr: ['French', '法语'], de: ['German', '德语'], es: ['Spanish', '西班牙语'], ru: ['Russian', '俄语'] };
   const languageName = (tag) => {
     const known = TARGETS.find(([value]) => value === tag);
-    if (known) return known[1];
-    return SOURCES[String(tag || '').split('-')[0]] || String(tag || '');
+    if (known) return say(known[1], known[2]);
+    const source = SOURCES[String(tag || '').split('-')[0]];
+    return source ? say(...source) : String(tag || '');
   };
   const STYLE = `
     :host { all: initial; }
@@ -283,9 +290,10 @@ const translator = (() => {
   const showBubble = (text, x, y) => {
     ensure();
     hideBubble();
-    bubble = el('div', 'bubble', '译 翻译');
+    learnLanguage();
+    bubble = el('div', 'bubble', say('Translate', '译 翻译'));
     bubble.setAttribute('role', 'button');
-    bubble.title = '翻译所选文字';
+    bubble.title = say('Translate selection', '翻译所选文字');
     bubble.addEventListener('mousedown', (event) => { event.preventDefault(); event.stopPropagation(); });
     bubble.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); void open(text, x, y); });
     root.append(bubble);
@@ -358,29 +366,29 @@ const translator = (() => {
     if (!card || !state) return;
     card.replaceChildren();
     const head = el('div', 'head');
-    head.title = '拖动可移动';
+    head.title = say('Drag to move', '拖动可移动');
     const pair = el('span', 'pair');
     const entry = state.status === 'done' ? state.answer?.entry : null;
-    pair.append(el('span', 'src', entry?.source ? languageName(entry.source) : '自动检测'), el('span', 'dim', '→'));
+    pair.append(el('span', 'src', entry?.source ? languageName(entry.source) : say('Detect language', '自动检测')), el('span', 'dim', '→'));
     const lang = el('button', `lang${state.menu ? ' open' : ''}`, `${languageName(state.target || state.preference || 'auto')} ▾`);
-    lang.title = '翻译成';
+    lang.title = say('Translate into', '翻译成');
     lang.addEventListener('click', () => { state.menu = !state.menu; render(); });
     pair.append(lang);
-    const copy = el('button', 'btn', state.copied ? '已复制' : '复制');
+    const copy = el('button', 'btn', state.copied ? say('Copied', '已复制') : say('Copy', '复制'));
     copy.hidden = state.status !== 'done';
     copy.addEventListener('click', () => {
       navigator.clipboard.writeText(String(state?.answer?.translation || '')).then(() => { if (state) { state.copied = true; render(); } }, () => undefined);
     });
-    const shut = el('button', 'btn', '关闭');
+    const shut = el('button', 'btn', say('Close', '关闭'));
     shut.addEventListener('click', () => close(true));
-    head.append(el('span', 'logo', '译'), pair, el('span', 'grow'), copy, shut);
+    head.append(el('span', 'logo', say('文A', '译')), pair, el('span', 'grow'), copy, shut);
     draggable(head);
     card.append(head);
     if (state.menu) {
       const menu = el('div', 'menu');
-      for (const [value, label] of TARGETS) {
+      for (const [value, english, chinese] of TARGETS) {
         const chosen = value === (state.preference || 'auto');
-        const item = el('button', chosen ? 'on' : '', `${label}${chosen ? ' ✓' : ''}`);
+        const item = el('button', chosen ? 'on' : '', `${say(english, chinese)}${chosen ? ' ✓' : ''}`);
         item.addEventListener('click', () => {
           state.menu = false;
           if (chosen) return render();
@@ -391,8 +399,8 @@ const translator = (() => {
       card.append(menu);
     }
     const body = el('div', 'body');
-    if (state.status === 'loading') body.append(el('div', 'dim', '翻译中…'));
-    else if (state.status === 'error') body.append(el('div', 'error', state.error || '翻译失败。'));
+    if (state.status === 'loading') body.append(el('div', 'dim', say('Translating…', '翻译中…')));
+    else if (state.status === 'error') body.append(el('div', 'error', state.error || say('Translation failed.', '翻译失败。')));
     else if (entry) {
       const speaker = (lang, title) => {
         if (typeof speechSynthesis === 'undefined') return null;
@@ -405,12 +413,12 @@ const translator = (() => {
       const english = /^en(?:-|$)/i.test(entry.source || '');
       const word = el('div');
       word.append(el('span', 'term', state.text));
-      const say = english ? null : speaker(entry.source, '朗读');
-      if (say) word.append(say);
+      const aloud = english ? null : speaker(entry.source, say('Read aloud', '朗读'));
+      if (aloud) word.append(aloud);
       body.append(word);
       if (english) {
         const voices = el('div', 'voices');
-        for (const [label, lang, phonetic, title] of [['英', 'en-GB', entry.phonetic, '英式发音'], ['美', 'en-US', entry.phoneticUs || entry.phonetic, '美式发音']]) {
+        for (const [label, lang, phonetic, title] of [[say('UK', '英'), 'en-GB', entry.phonetic, say('British pronunciation', '英式发音')], [say('US', '美'), 'en-US', entry.phoneticUs || entry.phonetic, say('American pronunciation', '美式发音')]]) {
           const voice = el('span', 'voice');
           voice.append(el('span', 'accent', label));
           if (phonetic) voice.append(el('span', 'phonetic', phonetic));
@@ -433,7 +441,7 @@ const translator = (() => {
       }
     } else {
       const source = el('div', `source${state.showSource ? ' open' : ''}`, state.text);
-      source.title = state.showSource ? '收起' : '展开原文';
+      source.title = state.showSource ? say('Collapse', '收起') : say('Show the original', '展开原文');
       source.addEventListener('click', () => { state.showSource = !state.showSource; render(); });
       body.append(source, el('div', 'target', String(state.answer?.translation || '')));
     }
@@ -471,7 +479,7 @@ const translator = (() => {
     theme(lastLook);
     card = el('div', 'card');
     card.setAttribute('role', 'dialog');
-    card.setAttribute('aria-label', '翻译');
+    card.setAttribute('aria-label', say('Translation', '翻译'));
     card.tabIndex = -1;
     card.addEventListener('mousedown', (event) => event.stopPropagation());
     // Focus moving to something else on the page closes the card (a click on plain text closes it in mousedown below).
@@ -511,10 +519,11 @@ const translator = (() => {
   addEventListener('scroll', hideBubble, true);
   addEventListener('pagehide', () => close());
   return {
-    /** Right-click → 翻译所选文字: the host's menu passes the text and the click point. */
+    /** Right-click → Translate selection: the host's menu passes the text and the click point. */
     fromMenu(text, x, y) {
       const value = String(text || '').trim().slice(0, MAX_TRANSLATION_CHARS);
       if (!value) return;
+      learnLanguage();
       const end = endOfSelection();
       void open(value, end ? end.x : x, end ? end.y : y);
     },
@@ -717,11 +726,23 @@ ipcRenderer.on('mh-browser:agent-login', async (_event, request) => {
   }
 });
 
+// Whether the page shows a password field, told to the host each time it changes (the tab's `signIn` state, and the end
+// of a sign-in the Agent asked the user for). Only the main frame reports.
+let fieldsShown = null;
+const reportFields = () => {
+  if (window.top !== window) return;
+  const shown = passwordFields().length > 0;
+  if (shown === fieldsShown) return;
+  fieldsShown = shown;
+  ipcRenderer.send('mh-browser:password-fields', { visible: shown });
+};
+
 let scheduled = 0;
 const schedule = () => {
   if (scheduled) return;
   scheduled = setTimeout(() => {
     scheduled = 0;
+    reportFields();
     void fill();
   }, 250);
 };
@@ -729,7 +750,10 @@ const schedule = () => {
 const start = () => {
   // The page this navigation produced: does it still show a password field? The host decides from this whether a
   // sign-in submitted on the previous page worked.
-  setTimeout(() => ipcRenderer.send('mh-browser:form-state', { passwordVisible: passwordFields().length > 0 }), 1200);
+  setTimeout(() => {
+    ipcRenderer.send('mh-browser:form-state', { passwordVisible: passwordFields().length > 0 });
+    reportFields();
+  }, 1200);
   schedule();
   // Single-page sign-in forms appear after the first paint.
   new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });

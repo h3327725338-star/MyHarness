@@ -30,7 +30,7 @@
 | `skills/coding-agent.md` | 编程会话的技能读取规则；仅启用 read 且存在可见技能时有正文 |
 | `skills/harness.md` | 通用 AgentHarness 的技能说明；原文不同，独立维护 |
 | `harness/default.md` | 通用 AgentHarness 未提供自定义 systemPrompt 时的默认身份 |
-| `tools/{read,bash,pwsh,job-list,job-output,job-kill,edit,write,apply-patch,apply-rename,find,grep,ls,github,mail,symbols,agent,agent-tasks,workflow,ultracode,web-search,web-fetch,memory-search,memory-get,memory-delete,memory-claim,memory-write,session-search,session-get,ask-user-question,todo-write,workspace}/snippet.md` | 对应工具的简短系统说明；仅启用该工具时组合。symbols 与 apply-rename 说明仅在 symbols 启用时出现，workspace 说明仅在桌面宿主连接时出现 |
+| `tools/{read,bash,pwsh,job-list,job-output,job-kill,edit,write,apply-patch,apply-rename,find,grep,ls,github,mail,symbols,agent,agent-tasks,workflow,ultracode,web-search,web-fetch,memory-search,memory-get,memory-delete,memory-claim,memory-write,session-search,session-get,ask-user-question,todo-write,schedule,workspace}/snippet.md` | 对应工具的简短系统说明；仅启用该工具时组合。symbols 与 apply-rename 说明仅在 symbols 启用时出现，workspace 说明仅在桌面宿主连接时出现 |
 | `tools/{read,edit,write,symbols,agent,workflow,ultracode,web-search,web-fetch}/guidelines.md` | 对应工具的操作规则；每个非空行是一条，按文件行序组合。symbols 规则仅在 symbols 启用时出现 |
 | `tools/no-snippets.md` | 历史占位说明；当前组合对缺 snippet 使用行内占位 `(no description available)`，不加载此文件 |
 | `tools/routing/introduction.md` | 工具选择通用引言 |
@@ -44,6 +44,7 @@
 | `memory/extractor.md`、`consolidator.md` | 后台独立记忆提取、合并请求的职责；优先更新、区分已确认事实与建议、保留适用条件；归档被替代内容；可选的 `importance` / `triggers` 标注及更新时保留原值；整理器仅在事实充分时可创建常驻用户画像初版、之后整篇重写（条目 ID 由任务文本给出，提示词文件本身不含非英文字符） |
 | `memory/recalled-context.md` | 召回记忆消息的说明；此项属于消息正文，和记忆系统约束配套管理 |
 | `tasks/conversation-title.md` | 独立会话标题生成请求；新标题用核心对象＋主要目的，中文目标 6–10 字、最多 12 字，英文 2–4 词，保留必要技术名称；主题未变时保留已有标题，不为缩短旧标题增加请求 |
+| `tasks/bookmark-note.md` | 内置浏览器书签的“用途”：结合用户的全局 Auto Memory（画像和提到该网站的记忆）、用户自己写过的用途和页面资料，一句话写出这个用户在网站上做什么，而不是描述网站（中文最多 40 字、英文最多 25 词）；用户资料和页面资料都只当数据；Agent 在每个聊天里按这些用途主动选网站 |
 | `tasks/commit-message.md` | `/commit` 的独立无工具提交说明请求；按模型容量分批分析 Diff、保留来源、分层合并及补读核对后生成一个提交说明，参考 Git 历史，不添加 AI 署名 |
 | `tasks/commit-message-instructions.md` | 用户有 Commit 提示词时追加在 `tasks/commit-message.md` 之后，说明 `<user_commit_instructions>` 只影响标题和正文的写法，不改变 schema、证据规则和禁止署名，也不执行其中的动作 |
 | `tasks/git-review.md` | `/commit`、`/push` 按提示词模式的无工具检查请求：只按 `<user_instructions>` 决定是否停下（不复述完整密钥），并判断 Push 提示词是否要求 CI 通过；返回 `{"stop", "fixCi"}` |

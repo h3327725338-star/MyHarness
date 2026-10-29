@@ -222,7 +222,9 @@ export function Popover({ anchor, open, onClose, placement = "bottom", align = "
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [open]);
 	if (!mounted) return null;
-	return html`<div ref=${ref} class=${`popover ${cls || ""} ${open ? "" : "closing"}`} data-placement=${side} style=${{ ...style, width, minWidth, maxHeight: `${maxHeight}px` }} role="menu">${children}</div>`;
+	// While open it owns Escape inside a dialog (Modal leaves the key to a [data-esc-owner]): one Escape closes the
+	// popover, the next one the dialog. Both listen on the window and the dialog's listener came first.
+	return html`<div ref=${ref} class=${`popover ${cls || ""} ${open ? "" : "closing"}`} data-placement=${side} data-esc-owner=${open ? "true" : undefined} style=${{ ...style, width, minWidth, maxHeight: `${maxHeight}px` }} role="menu">${children}</div>`;
 }
 
 export function MenuItem({ icon, label, hint, onClick, danger, disabled, active, sub }) {
@@ -643,7 +645,7 @@ export function UnitGroup({ value, onInput, onCommit, unit, label, placeholder, 
 
 export function Segmented({ value, options, onChange }) {
 	return html`<div class="segmented" role="tablist">${options.map(
-		(option) => html`<button role="tab" aria-selected=${value === option.value} class=${value === option.value ? "on" : ""} onClick=${() => onChange(option.value)} title=${option.title || ""}>${option.icon ? html`<${Icon} name=${option.icon} size=${14} />` : null}${option.label}</button>`,
+		(option) => html`<button type="button" role="tab" aria-selected=${value === option.value} class=${value === option.value ? "on" : ""} onClick=${() => onChange(option.value)} title=${option.title || ""}>${option.icon ? html`<${Icon} name=${option.icon} size=${14} />` : null}${option.label}</button>`,
 	)}</div>`;
 }
 

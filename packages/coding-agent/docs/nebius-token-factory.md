@@ -2,7 +2,7 @@
 
 This page documents one concrete, verified-by-configuration Provider setup: NVIDIA Nemotron models served by [Nebius Token Factory](https://api.tokenfactory.nebius.com/v1/), used as the model backend for a MyHarness coding session.
 
-MyHarness ships an empty built-in Provider catalog (`getBuiltinProviders()` returns `[]`, `MODELS` is `{}`). Nebius is therefore added as a **custom Provider** through the ordinary `openai-completions` path — there is no Nebius-specific code in the repository, and none is required.
+The `@myharness/ai` catalog stays empty (`getBuiltinProviders()` returns `[]`, `MODELS` is `{}`). Nebius Token Factory is offered ready-made by the Coding Agent product layer instead: a preset (`src/providers/models/nebius-preset.ts`) that is written into `models.json` as an ordinary `openai-completions` Provider once the user pastes a key (`src/application/use-cases/nebius-setup.ts`). After that it is a custom Provider like any other: it can be edited or deleted, and requests use no Nebius-specific code.
 
 ## Why this page exists
 
@@ -34,7 +34,33 @@ Prices recorded in the example configuration are `$1 / $3` (Ultra), `$0.3 / $0.9
 
 The same Provider entry can also carry non-NVIDIA models served by Token Factory (for example `zai-org/GLM-5.3-Flash` for cheap fast turns) as long as at least one NVIDIA open-source model is part of the workflow when the project is used to demonstrate Token Factory usage.
 
-## Setup in the Web UI
+## Built-in setup (one key)
+
+1. Open `/settings` → **Providers**. **Nebius Token Factory** is always first in the list ("Built in · NVIDIA Nemotron"); an empty list opens on it, and the welcome screen's "No model is available yet" link leads there.
+2. Click **Get an API key**. Settings closes and `https://tokenfactory.nebius.com/project/api-keys` opens in a website tab of the built-in browser (the system browser when there is no built-in browser or links are set to open there). Sign in and create a key.
+3. Paste the key into the strip above that page and click **Save key** (or paste it into the card in Settings and click **Save and set up**).
+
+What happens on save (`POST /api/providers/nebius/setup`):
+
+- The key is checked with the account's model list (`GET /v1/models`, free). A `401`/`403` stops here and nothing is written.
+- The Nemotron models the list names are added under the spelling the list uses: Ultra, Lightning and Super VL, plus Nano (`nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` in third-party listings; only added when the account's list names a Nano model). If the list cannot be read, only the three IDs checked on 2026-10-25 are added. An existing `nebius` entry keeps its own Base URL, models and edits; only missing models are appended.
+- The key goes to the credential store (`auth.json`), not `models.json`.
+- Every job that has no model of its own gets one; a job with its own model keeps it:
+
+| Model | Jobs |
+|-------|------|
+| Nemotron 3 Ultra | main model (only when there is no usable main model yet) |
+| Nemotron 3.5 Lightning | sub-agents, compaction, fallback model, Auto Memory, hand-off notes, commit descriptions, bookmark notes, scheduled tasks, worktree naming, branch summaries |
+| Nemotron 3 Nano | conversation naming, translation (Lightning when the account has no Nano) |
+| Nemotron 3.5 Super VL | vision assistant |
+
+- Conversation naming, the vision assistant, sub-agents and the fallback model are turned on when the user never touched them; one the user turned off stays off.
+
+Nano is declared without `compat.supportsReasoningEffort` (like Super VL), so MyHarness never sends `reasoning_effort` to it; its 16,384-token output cap is a conservative value, since Token Factory does not publish one.
+
+**Balance and spending.** Token Factory has no balance API (the balance and **Top up** are in the console's navigation). Once set up, the Nebius card shows **Balance and top up** (opens `https://tokenfactory.nebius.com/`), **Get an API key**, **Set up jobs again** (runs the setup with the saved key; it only fills jobs that have no model), and this computer's estimate: every finished model request adds `usage.cost.total` to `provider-spend.json` next to `models.json` (prices from the model entries; the Token Factory bill is what counts). A request refused with HTTP `402`, or with an error that names the balance, is explained as a balance problem. The exact error Token Factory returns for a negative balance has not been observed.
+
+## Setup in the Web UI by hand
 
 1. Start MyHarness (`.\dev-desktop.cmd`, or the Web entry described in the root README).
 2. Open `/settings` → **Providers** → **添加 Provider** → **创建自定义 Provider**.

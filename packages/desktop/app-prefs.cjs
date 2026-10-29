@@ -1,5 +1,5 @@
 // Preferences of the desktop host itself (not of the Web UI): what the window's close button does, the zoom of the app
-// window (Ctrl + "+" / "-" / 0), and whether
+// window (Ctrl + "+" / "-" / 0), how long the last start took (the starting page's hint, start-page.cjs), and whether
 // MyHarness starts when the user signs in to Windows. They live in the host profile next to the browser data, so a
 // development run and the installed app keep their own copies. Start-at-login is not stored here: Windows' own Run
 // entry is the truth, read back through Electron every time.
@@ -8,7 +8,9 @@ const { join } = require('node:path');
 const { cleanZoom } = require('./zoom.cjs');
 
 const CLOSE_ACTIONS = ['ask', 'tray', 'quit'];
-const DEFAULTS = Object.freeze({ closeAction: 'ask', appZoom: 1 });
+const DEFAULTS = Object.freeze({ closeAction: 'ask', appZoom: 1, lastStartMs: null });
+/** A start time worth keeping: whole milliseconds, more than nothing and less than the host's own 180-second limit. */
+const startTime = (value) => (Number.isFinite(value) && value > 0 && value < 180000 ? Math.round(value) : null);
 
 function createAppPrefs(profileDir) {
   const file = join(profileDir, 'desktop-prefs.json');
@@ -17,6 +19,7 @@ function createAppPrefs(profileDir) {
     const saved = JSON.parse(readFileSync(file, 'utf8'));
     if (CLOSE_ACTIONS.includes(saved?.closeAction)) prefs.closeAction = saved.closeAction;
     if (saved && 'appZoom' in saved) prefs.appZoom = cleanZoom(saved.appZoom);
+    if (saved && 'lastStartMs' in saved) prefs.lastStartMs = startTime(saved.lastStartMs);
   } catch { /* missing or unreadable: defaults */ }
   return {
     get: () => ({ ...prefs }),
@@ -29,6 +32,7 @@ function createAppPrefs(profileDir) {
         next.closeAction = patch.closeAction;
       }
       if ('appZoom' in patch) next.appZoom = cleanZoom(patch.appZoom);
+      if ('lastStartMs' in patch) next.lastStartMs = startTime(patch.lastStartMs);
       const temp = `${file}.tmp`;
       writeFileSync(temp, JSON.stringify(next, null, 2));
       renameSync(temp, file);

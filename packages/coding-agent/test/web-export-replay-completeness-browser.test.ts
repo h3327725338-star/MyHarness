@@ -598,7 +598,7 @@ describe.runIf(shouldRun)("web-export-replay-completeness-browser", () => {
 		expect(entries.filterInputs).toBeGreaterThan(0);
 		expect(entries.fileInputs).toBe(0);
 
-		// 2) 命令面板：Ctrl+Alt+K 打开后，写服务端/开设置/改语言主题/再导出的条目全部消失，
+		// 2) 命令面板：Ctrl+K 打开后，写服务端/开设置/改语言主题/再导出的条目全部消失，
 		//    保留「显示/隐藏侧栏」与对话跳转，且过滤后没有空分组。
 		const HIDDEN_LABELS = [
 			"新对话",
@@ -618,7 +618,7 @@ describe.runIf(shouldRun)("web-export-replay-completeness-browser", () => {
 			"语言：简体中文",
 		];
 		await browser.evaluate(`(function() {
-			window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK", ctrlKey: true, altKey: true, bubbles: true, cancelable: true }));
+			window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK", ctrlKey: true, bubbles: true, cancelable: true }));
 			return true;
 		})()`);
 		await new Promise((r) => setTimeout(r, 600));
@@ -642,7 +642,7 @@ describe.runIf(shouldRun)("web-export-replay-completeness-browser", () => {
 		})()`);
 		await new Promise((r) => setTimeout(r, 400));
 
-		// 3) 快捷键 Ctrl+Alt+N：包一层 fakeFetch 计数，派发后 fetch 增量为 0、无 toast（改前会发出被 405 拒绝的新对话 POST）。
+		// 3) 快捷键 Ctrl+O（新对话）：包一层 fakeFetch 计数，派发后 fetch 增量为 0、无 toast（改前会发出被 405 拒绝的新对话 POST）。
 		const counter = await browser.evaluate(`(function() {
 			var E = window.__MYHARNESS_EXPORT__;
 			if (E && typeof E.fetch === "function" && !E.__W125_ORIG_FETCH__) {
@@ -655,7 +655,7 @@ describe.runIf(shouldRun)("web-export-replay-completeness-browser", () => {
 		expect(counter.installed).toBe(true);
 		expect(counter.paletteOpen).toBe(false);
 		await browser.evaluate(`(function() {
-			window.dispatchEvent(new KeyboardEvent("keydown", { key: "n", code: "KeyN", ctrlKey: true, altKey: true, bubbles: true, cancelable: true }));
+			window.dispatchEvent(new KeyboardEvent("keydown", { key: "o", code: "KeyO", ctrlKey: true, bubbles: true, cancelable: true }));
 			return true;
 		})()`);
 		await new Promise((r) => setTimeout(r, 600));

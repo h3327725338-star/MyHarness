@@ -51,24 +51,51 @@ function keyFailure(status: number): { code: "rate_limited" | "http"; reason: st
 	return undefined;
 }
 
+/** Where a free Tavily API key is created (1,000 searches a month, no card). */
+export const TAVILY_API_KEY_URL = "https://app.tavily.com/";
+
+/**
+ * Without a key Tavily answers through its free keyless access (`X-Tavily-Access-Mode: keyless`, same results, a rate
+ * limit set by Tavily). Once that limit is hit, a free key is what lets the searches go on.
+ */
+async function searchKeyless(body: Record<string, unknown>, context: Parameters<SearchEngine["search"]>[1]) {
+	const page = await context.http.postJson(`${TAVILY_API}/search`, body, {
+		headers: { Accept: "application/json", "X-Tavily-Access-Mode": "keyless" },
+		label: "Tavily API",
+		signal: context.signal,
+	});
+	if (
+		page.status === 429 ||
+		page.status === 432 ||
+		page.status === 433 ||
+		page.status === 401 ||
+		page.status === 403
+	) {
+		throw new WebSearchError(
+			"keyless_limit",
+			`Tavily 免费通道已到上限（HTTP ${page.status}）。在 设置 → 网页搜索 填一个免费的 Tavily API Key（每月 1000 次，不用信用卡）就能继续。`,
+		);
+	}
+	if (page.status !== 200) throw new WebSearchError("http", `Tavily API 返回 HTTP ${page.status}。`);
+	try {
+		return parseTavily(JSON.parse(page.text));
+	} catch (error) {
+		throw new WebSearchError("invalid_response", "Tavily API 返回的不是有效 JSON。", { cause: error });
+	}
+}
+
 /**
  * Official Tavily Search API (`search_depth: basic`, one credit per search). Never used as a fallback.
  * With several keys they are tried in order: a key that is refused, rate limited or out of credits hands the
- * search to the next one.
+ * search to the next one. Without a key it uses Tavily's free keyless access.
  */
 export const tavily: SearchEngine = {
 	id: "tavily",
 	label: "Tavily API",
-	description: "官方 API，结果稳定；需要填写 API Key",
+	description: "官方 API，结果稳定；不填 Key 也能用（免费通道有限速），填免费 Key 每月 1000 次",
 	requiresApiKey: true,
 	async search(query, context) {
 		const keys = query.apiKeys ?? [];
-		if (!keys.length) {
-			throw new WebSearchError(
-				"missing_api_key",
-				"Tavily API 尚未填写 API Key。请在 /settings → Web Search → Search Engines 中填写。",
-			);
-		}
 		const body: Record<string, unknown> = {
 			query: query.query,
 			search_depth: "basic",
@@ -76,6 +103,7 @@ export const tavily: SearchEngine = {
 			include_published_date: true,
 		};
 		if (query.timeRange) body.time_range = query.timeRange;
+		if (!keys.length) return searchKeyless(body, context);
 		const failures: Array<{ code: "rate_limited" | "http"; text: string }> = [];
 		// One notice per search, however many keys it took, once Tavily answered at all.
 		let reached = false;

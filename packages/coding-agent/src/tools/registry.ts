@@ -194,6 +194,7 @@ import { createFindTool, createFindToolDefinition, type FindToolOptions } from "
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./files/grep.ts";
 import { createGitHubTool, createGitHubToolDefinition, type GitHubToolOptions } from "./github/tool.ts";
 import { createMailTool, createMailToolDefinition, type MailToolOptions } from "./mail/tool.ts";
+import { createScheduleTool, createScheduleToolDefinition, type ScheduleToolOptions } from "./schedule.ts";
 import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./shell/bash.ts";
 import { createWorkspaceTool, createWorkspaceToolDefinition, type WorkspaceToolOptions } from "./workspace.ts";
 
@@ -305,6 +306,7 @@ export type ToolName =
 	| "todo_write"
 	| "web_search"
 	| "web_fetch"
+	| "schedule"
 	| "workspace";
 export const allToolNames: Set<ToolName> = new Set([
 	"read",
@@ -338,6 +340,7 @@ export const allToolNames: Set<ToolName> = new Set([
 	"todo_write",
 	"web_search",
 	"web_fetch",
+	"schedule",
 	"workspace",
 ]);
 
@@ -360,6 +363,7 @@ export interface ToolsOptions {
 	memory?: MemoryToolOptions;
 	sessionHistory?: SessionHistoryToolOptions;
 	webSearch?: WebSearchToolOptions;
+	schedule?: ScheduleToolOptions;
 	workspace?: WorkspaceToolOptions;
 }
 
@@ -427,6 +431,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createWebSearchToolDefinition(cwd, options?.webSearch);
 		case "web_fetch":
 			return createWebFetchToolDefinition(cwd, options?.webSearch);
+		case "schedule":
+			return createScheduleToolDefinition(options?.schedule);
 		case "workspace":
 			return createWorkspaceToolDefinition(options?.workspace);
 		default:
@@ -498,6 +504,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createWebSearchTool(cwd, options?.webSearch);
 		case "web_fetch":
 			return createWebFetchTool(cwd, options?.webSearch);
+		case "schedule":
+			return createScheduleTool(options?.schedule);
 		case "workspace":
 			return createWorkspaceTool(options?.workspace);
 		default:
@@ -539,6 +547,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		todo_write: createTodoWriteToolDefinition(),
 		web_search: webSearchTools.web_search,
 		web_fetch: webSearchTools.web_fetch,
+		schedule: createScheduleToolDefinition(options?.schedule),
 		workspace: createWorkspaceToolDefinition(options?.workspace),
 	};
 }
@@ -594,6 +603,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		todo_write: createTodoWriteTool(),
 		web_search: createWebSearchTool(cwd, options?.webSearch),
 		web_fetch: createWebFetchTool(cwd, options?.webSearch),
+		schedule: createScheduleTool(options?.schedule),
 		workspace: createWorkspaceTool(options?.workspace),
 	};
 }

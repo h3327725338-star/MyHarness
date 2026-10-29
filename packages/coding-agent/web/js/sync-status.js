@@ -185,6 +185,7 @@ export function reviewTitle(conflict) {
 			prompt: t("Personal prompt"),
 			draft: t("Draft"),
 			"saved-prompts": t("My prompts"),
+			schedules: t("Scheduled tasks"),
 		}[conflict.kind] || conflict.kind;
 	const reason =
 		conflict.reason === "deleted-locally"

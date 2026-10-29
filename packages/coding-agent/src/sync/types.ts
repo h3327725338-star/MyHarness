@@ -9,7 +9,8 @@
 /** What a record represents. Applied by a kind-specific adapter, never by copying whole directories blindly. */
 /**
  * `prompt` is the General personal prompt; `saved-prompts` is the Web UI's list of saved prompts (My prompts);
- * `browser` is one file of the built-in browser's desktop profile (browser-data.ts).
+ * `browser` is one file of the built-in browser's desktop profile (browser-data.ts); `schedules` is the list of
+ * scheduled tasks (schedules/store.ts).
  */
 export type SyncEntityKind =
 	| "memory"
@@ -19,7 +20,8 @@ export type SyncEntityKind =
 	| "draft"
 	| "prompt"
 	| "saved-prompts"
-	| "browser";
+	| "browser"
+	| "schedules";
 
 /** Per-device logical clock. A record is newer when its vector dominates the other one. */
 export type VersionVector = Record<string, number>;

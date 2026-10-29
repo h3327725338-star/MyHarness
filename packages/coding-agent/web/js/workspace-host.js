@@ -6,6 +6,7 @@ import { actions, closeAppDialog } from "./actions.js";
 import { panelSessionId, saveStoredPanel, state, storedPanel } from "./store.js";
 import { browserTabId, normalizeWorkspaceTab, PANEL_TAB_TYPES } from "./workspace-model.js";
 import { externalWebUrl, linkTargetOf } from "./link-target.js";
+import { forgetBrowserHelp, noteBrowserHelp } from "./attention-cards.js";
 
 const PANE = ".panel-pane";
 
@@ -290,8 +291,15 @@ export function installWorkspaceHost() {
 		if (!value || typeof value.tabId !== "string") return;
 		// Sound is kept for every website tab, also those of chats not on screen: the speaker on the tab and the mark of
 		// its chat in the sidebar (store.js playingChatsKey) follow it.
-		if (value.type === "state" && value.state) actions.setBrowserAudio(value.tabId, value.state);
-		else if (value.type === "closed") actions.forgetBrowserAudio(value.tabId);
+		if (value.type === "state" && value.state) {
+			actions.setBrowserAudio(value.tabId, value.state);
+			// A request of the Agent for the user's help on this tab (sign in, a human check) gets a card while the user
+			// is elsewhere.
+			noteBrowserHelp(value.tabId, value.state);
+		} else if (value.type === "closed") {
+			actions.forgetBrowserAudio(value.tabId);
+			forgetBrowserHelp(value.tabId);
+		}
 		const tab = state.view.wsTabs.find((item) => item.id === value.tabId && item.type === "browser");
 		// A popup closed itself (a finished sign-in): its tab goes away and the page that opened it comes back.
 		if (value.type === "closed" && value.selfClosed) {

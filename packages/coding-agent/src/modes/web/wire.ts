@@ -30,6 +30,11 @@ const FAST_DETAILS_MAX_CHARS = 64_000;
  * the card stays in the conversation. Like every custom entry it never enters the model's messages.
  */
 export const RUN_CHANGES_ENTRY = "web-run-changes";
+/**
+ * Written just before the message a scheduled Agent task sends (routes-schedules.ts): which task it is, so the chat
+ * shows that message as the task's card instead of as something the user typed. Never sent to the model.
+ */
+export const SCHEDULED_RUN_ENTRY = "scheduled-run";
 
 /**
  * Custom entry written when a message sent with "interrupt" ended the run before it: it sits between the stopped

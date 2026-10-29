@@ -8,6 +8,7 @@ import lockfile from "proper-lockfile";
 import { getSessionConversationDir, getWorkspaceMetadataPath } from "../config/paths/index.ts";
 import { WEB_PREFS_FILE } from "../config/web-prefs.ts";
 import { WorkspaceStore } from "../data/workspace-store.ts";
+import { SCHEDULES_FILE } from "../schedules/store.ts";
 import { listMemoryFilesAsync } from "../session/memory/store.ts";
 import { ModeStateStore } from "../session/mode-state.ts";
 import {
@@ -20,6 +21,7 @@ import {
 	applyMemory,
 	applyPrompt,
 	applySavedPrompts,
+	applySchedules,
 	applySession,
 	applyWorkspace,
 	DeferredSessionError,
@@ -39,6 +41,7 @@ import {
 	isSessionMetadataId,
 	mergeDraft,
 	mergeSavedPrompts,
+	mergeSchedules,
 	mergeText,
 	mergeTextFile,
 	newerFileVersion,
@@ -858,7 +861,13 @@ export class SyncEngine {
 		try {
 			this.stateWatcher = watch(this.options.agentDir, (_event, filename) => {
 				// The preferences file also holds the saved prompts; a pass only uploads when that list changed.
-				if (!filename || filename === "chat-mode-state.json" || filename === WEB_PREFS_FILE) this.scheduleSoon();
+				if (
+					!filename ||
+					filename === "chat-mode-state.json" ||
+					filename === WEB_PREFS_FILE ||
+					filename === SCHEDULES_FILE
+				)
+					this.scheduleSoon();
 			});
 			this.stateWatcher.on("error", () => {});
 		} catch {
@@ -2090,7 +2099,7 @@ export class SyncEngine {
 				delete this.state.tombstones[operation.key];
 				// A merge that changed nothing can still have refused a differing entry or header; keep that version.
 				// Record it before the save, so a crash cannot persist the vector without the recoverable copy.
-				this.recordSessionConflicts(operation, batch, data, outcome);
+				this.recordSessionConflicts(operation, data, outcome);
 				this.hadChanges = true;
 				this.saveState();
 			}
@@ -2124,50 +2133,20 @@ export class SyncEngine {
 				}
 			}
 		}
-		if (operation.kind === "session" && data) this.recordSessionConflicts(operation, batch, data, outcome);
+		if (operation.kind === "session" && data) this.recordSessionConflicts(operation, data, outcome);
 		this.hadChanges = true;
 		this.saveState();
 		return outcome;
 	}
 
-	/** Keep one copy of a remote chat version whose entries or header could not be merged into the local file. */
-	private recordSessionConflicts(
-		operation: SyncOperation,
-		batch: SyncBatch,
-		data: Uint8Array,
-		outcome: ApplyOutcome,
-	): void {
+	/**
+	 * Entries or a header both devices changed went to the later change without asking (apply.ts). When this device's
+	 * version was the later one, the other device's whole version is still kept once as a recoverable copy, quietly.
+	 */
+	private recordSessionConflicts(operation: SyncOperation, data: Uint8Array, outcome: ApplyOutcome): void {
 		const entries = outcome.entryConflicts ?? [];
-		if (entries.length === 0 && !outcome.headerConflict) return;
-		const localFile = conversationPath(this.options.dataRoot, operation);
-		// Keep the whole remote version once, so an entry or header both devices changed can still be read.
-		const copy = this.store.recoverCopy("session", operation.key, "conversation.jsonl", data);
-		for (const entryId of entries.slice(0, 10)) {
-			this.store.addConflict(this.state, {
-				id: `entry-${sha256(`${operation.key}:${entryId}`).slice(0, 12)}`,
-				key: operation.key,
-				kind: "session",
-				reason: "both-modified",
-				at: nowIso(),
-				deviceName: batch.deviceName || batch.deviceId,
-				...(localFile ? { localPath: localFile } : {}),
-				remoteCopyPath: copy,
-				message: `Both devices changed entry ${entryId} of this chat; the local entry was kept.`,
-			});
-		}
-		if (outcome.headerConflict) {
-			this.store.addConflict(this.state, {
-				id: `header-${sha256(operation.key).slice(0, 12)}`,
-				key: operation.key,
-				kind: "session",
-				reason: "both-modified",
-				at: nowIso(),
-				deviceName: batch.deviceName || batch.deviceId,
-				...(localFile ? { localPath: localFile } : {}),
-				remoteCopyPath: copy,
-				message: "Both devices renamed this chat; the local title was kept and the other version was saved.",
-			});
-		}
+		if ((entries.length === 0 && !outcome.headerConflict) || outcome.remoteWon) return;
+		this.store.recoverCopy("session", operation.key, "conversation.jsonl", data);
 	}
 
 	private async applyPut(operation: SyncOperation, data: Uint8Array | undefined): Promise<ApplyOutcome> {
@@ -2197,6 +2176,9 @@ export class SyncEngine {
 			case "browser":
 				if (!data) throw new DeferredBatchError(`Waiting for ${operation.key}`);
 				return applyBrowser(context, operation, data);
+			case "schedules":
+				if (!data) throw new DeferredBatchError(`Waiting for ${operation.key}`);
+				return applySchedules(context, data);
 			default:
 				return { applied: false, workspacesChanged: false, sessionsChanged: false, memoriesChanged: false };
 		}
@@ -2271,10 +2253,11 @@ export class SyncEngine {
 			};
 			return undefined;
 		}
-		if (operation.kind === "browser") {
+		if (operation.kind === "browser" || operation.kind === "schedules") {
 			// A browser file is never removed by another computer: bookmarks or settings missing there (a reset profile,
 			// a desktop host that never ran) are no reason to empty them here. This file is published again past the
-			// deletion and the other computer gets it back.
+			// deletion and the other computer gets it back. The scheduled tasks delete task by task inside their list
+			// (tombstones), so a deletion of the whole list is treated the same way.
 			this.markForceUpload(operation.key);
 			this.state.entities[operation.key] = { ...local, vector: mergeVectors(local.vector, operation.vector) };
 			this.hadChanges = true;
@@ -2449,6 +2432,8 @@ export class SyncEngine {
 				return this.mergeRemoteInline(operation, data, local, mergeDraft);
 			case "saved-prompts":
 				return this.mergeRemoteInline(operation, data, local, mergeSavedPrompts);
+			case "schedules":
+				return this.mergeRemoteInline(operation, data, local, mergeSchedules);
 			case "file":
 				return this.mergeRemoteFile(operation, data, local);
 			default:
@@ -2716,6 +2701,8 @@ export class SyncEngine {
 				return join(this.options.agentDir, "chat-mode-state.json");
 			case "saved-prompts":
 				return join(this.options.agentDir, WEB_PREFS_FILE);
+			case "schedules":
+				return join(this.options.agentDir, SCHEDULES_FILE);
 			default:
 				return undefined;
 		}
@@ -2730,6 +2717,16 @@ export class SyncEngine {
 	private async resolveRecordConflictsFromCopies(): Promise<void> {
 		if (this.legacyRecordConflictsMerged) return;
 		this.legacyRecordConflictsMerged = true;
+		// A chat entry or title both devices changed now goes to the later change without asking; the review entries
+		// older versions left for them go (their copies stay on disk).
+		const sessionEntries = this.state.conflicts.filter(
+			(conflict) => conflict.kind === "session" && conflict.reason === "both-modified",
+		);
+		if (sessionEntries.length > 0) {
+			this.state.conflicts = this.state.conflicts.filter((conflict) => !sessionEntries.includes(conflict));
+			this.hadChanges = true;
+			this.saveState();
+		}
 		const conflicts = this.state.conflicts.filter(
 			(conflict) =>
 				conflict.reason === "both-modified" && MERGED_KINDS.has(conflict.kind) && Boolean(conflict.remoteCopyPath),
@@ -2910,7 +2907,8 @@ function isSafeRecordIdentity(operation: SyncOperation): boolean {
 		operation.kind === "workspace" ||
 		operation.kind === "draft" ||
 		operation.kind === "prompt" ||
-		operation.kind === "saved-prompts"
+		operation.kind === "saved-prompts" ||
+		operation.kind === "schedules"
 	)
 		return part.test(operation.id);
 	if (operation.kind === "browser") return browserFileOf(operation.id) !== undefined;
@@ -2973,7 +2971,7 @@ function tracksBase(kind: SyncEntityKind): boolean {
 }
 
 /** Kinds that merge in mergeRemoteRecord, so an older version's review entry for them is merged from its copy. */
-const MERGED_KINDS = new Set<SyncEntityKind>(["prompt", "draft", "saved-prompts", "file"]);
+const MERGED_KINDS = new Set<SyncEntityKind>(["prompt", "draft", "saved-prompts", "schedules", "file"]);
 
 function vectorSum(vector: VersionVector | undefined): number {
 	let sum = 0;
@@ -2996,6 +2994,7 @@ const KIND_RANK: Record<SyncEntityKind, number> = {
 	prompt: 1,
 	"saved-prompts": 1,
 	browser: 1,
+	schedules: 1,
 	memory: 2,
 	draft: 3,
 	session: 4,
@@ -3047,6 +3046,7 @@ const ENTITY_KINDS = new Set<SyncEntityKind>([
 	"prompt",
 	"saved-prompts",
 	"browser",
+	"schedules",
 ]);
 
 /** The changes a snapshot stands for: each record as a put, each deletion as a delete, small contents attached. */

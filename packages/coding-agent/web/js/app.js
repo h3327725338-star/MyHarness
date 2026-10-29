@@ -1,9 +1,10 @@
 // Application shell: sidebar + conversation + optional inspector panel, plus global overlays and shortcuts.
 import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, autofocusOnMount, Collapse, FoldIn, Icon, Modal, Overlay, Resizer, Spinner, usePresence, useRetainedRows } from "./ui.js";
-import { api, applyColumnWidths, attempt, dismissToast, panelInstance, post, setView, state, useStore } from "./store.js";
+import { api, applyColumnWidths, attempt, chatTucked, dismissToast, panelInstance, post, setView, state, useStore } from "./store.js";
 import { actions, confirmDialog, resolveConfirm } from "./actions.js";
 import { Sidebar } from "./sidebar.js";
 import { peekButtonEnter, peekButtonLeave } from "./sidebar-peek.js";
+import { chatPeekButtonEnter, chatPeekButtonLeave, chatPeekEnter, chatPeekLeave } from "./chat-peek.js";
 import { modeRevealActive } from "./mode-transition.js";
 import { Transcript } from "./transcript.js";
 import { Composer } from "./composer.js";
@@ -22,11 +23,13 @@ import { ImageLightboxHost } from "./lightbox.js";
 import { useWorkspaceTitle } from "./workspace-title.js";
 import { WindowControls } from "./window-controls.js";
 import { AppZoomBadge } from "./app-zoom.js";
+import { AttentionCards } from "./attention-cards.js";
+import { ScheduleCards } from "./schedules.js";
 import { SourcesPageHost } from "./sources-page.js";
 import { clip, fmtBytes, plural } from "./util.js";
 import { count, t, N_, serverText } from "./i18n.js";
 
-import { eventShortcut, SHORTCUTS, shortcutFor } from "./shortcuts.js";
+import { eventShortcut, SHORTCUTS, shortcutFor, withShortcut } from "./shortcuts.js";
 
 const OUTCOME_UI = {
 	completed: { label: N_("Completed"), cls: "", icon: "checkCircle" },
@@ -66,8 +69,11 @@ function Header() {
 	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
 	const panelOpen = useStore((s) => s.view.panelOpen);
 	// Collaboration mode puts the workspace at the window's left edge and this column at its right edge: the sidebar
-	// button then lives in the workspace's header and the close-panel button here, so each stays in its window corner.
-	const maxed = useStore((s) => s.view.wsMax) && panelOpen;
+	// button then lives in the workspace's header, and here is the button that tucks this column away at the right edge
+	// (as the sidebar hides at the left), so each stays in its window corner. Browser fullscreen with the conversation
+	// kept is the same layout (a second sidebar button here made the narrow column's header run under the window buttons).
+	const maxed = useStore((s) => s.view.wsMax || s.view.browserFull) && panelOpen;
+	const rightColumn = useStore((s) => (s.view.wsMax || s.view.browserFull) && s.view.panelOpen && !chatTucked(s.view));
 	const wsActive = useStore((s) => s.view.wsActive);
 	const wsTabs = useStore((s) => s.view.wsTabs);
 	const runningBash = useStore((s) => s.snap?.flags?.bashRunning);
@@ -93,7 +99,7 @@ function Header() {
 	const tabBtn = (tab, icon, label, badge) => html`<button class=${`icon-btn ${panelOpen && wsActive === tab ? "active" : ""}`} aria-pressed=${panelOpen && wsActive === tab} data-export-offline=${["changes", "files", "terminal"].includes(tab) ? "true" : undefined} title=${label} aria-label=${label} onClick=${() => actions.togglePanel(tab)}><${Icon} name=${icon} size=${17} />${badge ? html`<span class="tab-badge">${badge}</span>` : null}</button>`;
 	const browserActive = panelOpen && wsTabs.some((tab) => tab.id === wsActive && tab.type === "browser");
 	return html`<header class="main-header">
-		${!sidebarOpen && !maxed ? html`<button class="icon-btn" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })} onPointerEnter=${peekButtonEnter} onPointerLeave=${peekButtonLeave}><${Icon} name="sidebar" size=${17} /></button>` : null}
+		${!sidebarOpen && !maxed ? html`<button class="icon-btn" title=${withShortcut(t("Show sidebar"), "sidebar", state.view.shortcuts)} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })} onPointerEnter=${peekButtonEnter} onPointerLeave=${peekButtonLeave}><${Icon} name="sidebar" size=${17} /></button>` : null}
 		${editing
 			? html`<input class="field title-input" autofocus ref=${autofocusOnMount} value=${value} onInput=${(e) => setValue(e.target.value)} onBlur=${() => finish(true)} onKeyDown=${(e) => (e.key === "Enter" ? finish(true) : e.key === "Escape" && finish(false))} />`
 			: title ? html`<button class="title-btn truncate" title=${t("{title} — double-click to rename", { title })} onDblClick=${() => { if (snap?.session?.file) { ended.current = false; setValue(snap.session.name || title); setEditing(true); } }}>${title}</button>` : null}
@@ -107,7 +113,7 @@ function Header() {
 		${tabBtn("terminal", "terminal", t("Terminal"), runningBash ? "•" : "")}
 		${tabBtn("context", "layers", t("Session"))}
 		${window.myHarnessDesktop && !exportReadOnly() ? html`<button class=${`icon-btn ${browserActive ? "active" : ""}`} aria-pressed=${browserActive} title=${t("Browser")} aria-label=${t("Browser")} onClick=${() => actions.openBrowser()}><${Icon} name="globe" size=${17} /></button>` : null}
-		${maxed ? html`<button class="icon-btn" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="panelRight" size=${17} /></button>` : null}
+		${rightColumn ? html`<button class="icon-btn chat-hide" aria-label=${t("Hide the conversation")} title=${t("Hide the conversation")} onClick=${() => actions.showConversation(false)}><${Icon} name="panelRight" size=${17} /></button>` : null}
 	</header>`;
 }
 
@@ -119,7 +125,12 @@ function PanelContainer() {
 	const activeId = useStore((s) => s.view.wsActive);
 	const closedCount = useStore((s) => s.view.wsClosed.length);
 	const wsMax = useStore((s) => s.view.wsMax);
+	const browserFull = useStore((s) => s.view.browserFull);
+	const fullChat = useStore((s) => s.view.browserFullChat);
 	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
+	// Collaboration mode with the conversation tucked away: the head ends with the button that brings it back, as the
+	// head starts with the sidebar's when that is hidden (browser fullscreen has its own pair of buttons).
+	const chatHidden = useStore((s) => s.view.wsMax && !s.view.browserFull && chatTucked(s.view));
 	// Another chat's panel is another panel: its tabs mount afresh instead of showing the tree, search or viewer state a
 	// tab of the same name had in the chat before.
 	const instance = useStore(() => panelInstance());
@@ -153,7 +164,7 @@ function PanelContainer() {
 			${section === "browser" ? html`<button class="icon-btn sm ws-new-tab" title=${t("New browser tab")} aria-label=${t("New browser tab")} onClick=${() => actions.openBrowserTab()}><${Icon} name="plus" size=${15} /></button>` : null}`
 		: null;
 	// A head too narrow for the section names folds them into icons, and narrower still the sections into one menu.
-	const fold = useRowFold(headRef, `${section}|${rowTabs?.length ?? 0}|${closedCount > 0}|${browserEntry}|${wsMax}|${sidebarOpen}`);
+	const fold = useRowFold(headRef, `${section}|${rowTabs?.length ?? 0}|${closedCount > 0}|${browserEntry}|${wsMax}|${browserFull}|${fullChat}|${sidebarOpen}|${chatHidden}`);
 	useWidthClass(panelRef, [], [440, 440]);
 	// Panel tabs stay mounted while another tab is shown (their tree, filters and scroll survive a switch); file and
 	// browser tabs mount only while active — a browser tab's page lives in the host process and is not reloaded.
@@ -166,12 +177,17 @@ function PanelContainer() {
 	};
 	return html`<aside class="panel" aria-label=${t("Details")} ref=${panelRef}>
 		<div class="panel-head" ref=${headRef}>
-			${wsMax && !sidebarOpen ? html`<button class="icon-btn sm panel-sidebar" title=${`${t("Show sidebar")} (${shortcutFor("sidebar", state.view.shortcuts)})`} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })} onPointerEnter=${peekButtonEnter} onPointerLeave=${peekButtonLeave}><${Icon} name="sidebar" size=${16} /></button>` : null}
+			${(wsMax || browserFull) && !sidebarOpen ? html`<button class="icon-btn sm panel-sidebar" title=${withShortcut(t("Show sidebar"), "sidebar", state.view.shortcuts)} aria-label=${t("Show sidebar")} onClick=${() => setView({ sidebarOpen: true })} onPointerEnter=${peekButtonEnter} onPointerLeave=${peekButtonLeave}><${Icon} name="sidebar" size=${16} /></button>` : null}
 			<${PanelNav} section=${section} browser=${browserEntry} fold=${fold} onRestore=${closedCount > 0 ? () => actions.reopenWorkspaceTab() : null} onShow=${(value) => actions.showWorkspaceSection(value)}>${strip}<//>
 			<span class="grow" />
 			${closedCount > 0 && fold !== "tight" ? html`<button class="icon-btn sm" title=${t("Restore closed tab")} aria-label=${t("Restore closed tab")} onClick=${() => actions.reopenWorkspaceTab()}><${Icon} name="undo" size=${14} /></button>` : null}
-			<button class=${`icon-btn sm panel-max ${wsMax ? "active" : ""}`} aria-pressed=${wsMax} title=${`${t(wsMax ? "Restore the workspace (Esc)" : "Maximize the workspace and keep chatting beside it")} (${shortcutFor("workspaceMax", state.view.shortcuts)})`} aria-label=${t(wsMax ? "Restore the workspace" : "Maximize the workspace")} onClick=${() => actions.toggleWorkspaceMax()}><${Icon} name=${wsMax ? "minimize" : "maximize"} size=${14} /></button>
-			${wsMax ? null : html`<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="panelRight" size=${15} /></button>`}
+			${browserFull
+				? html`<button class=${`icon-btn sm panel-chat ${fullChat ? "active" : ""}`} aria-pressed=${fullChat} title=${t(fullChat ? "Hide the conversation" : "Show the conversation")} aria-label=${t(fullChat ? "Hide the conversation" : "Show the conversation")} onClick=${() => setView({ browserFullChat: !fullChat })} onPointerEnter=${chatPeekButtonEnter} onPointerLeave=${chatPeekButtonLeave}><${Icon} name="chat" size=${15} /></button>
+					<button class="icon-btn sm panel-full active" aria-pressed="true" title=${`${t("Exit fullscreen")} (F11)`} aria-label=${t("Exit fullscreen")} onClick=${() => actions.toggleBrowserFull(false)}><${Icon} name="exitFullscreen" size=${14} /></button>`
+				: null}
+			${browserFull ? null : html`<button class=${`icon-btn sm panel-max ${wsMax ? "active" : ""}`} aria-pressed=${wsMax} title=${t(wsMax ? "Restore the workspace (Esc)" : "Maximize the workspace and keep chatting beside it")} aria-label=${t(wsMax ? "Restore the workspace" : "Maximize the workspace")} onClick=${() => actions.toggleWorkspaceMax()}><${Icon} name=${wsMax ? "minimize" : "maximize"} size=${14} /></button>`}
+			${chatHidden ? html`<button class="icon-btn sm panel-chat-show" title=${t("Show the conversation")} aria-label=${t("Show the conversation")} onClick=${() => actions.showConversation(true)} onPointerEnter=${chatPeekButtonEnter} onPointerLeave=${chatPeekButtonLeave}><${Icon} name="panelRight" size=${15} /></button>` : null}
+			${wsMax || browserFull ? null : html`<button class="icon-btn sm panel-close" aria-label=${t("Close panel")} title=${t("Close panel")} onClick=${() => actions.closePanel()}><${Icon} name="panelRight" size=${15} /></button>`}
 		</div>
 		<div class="panel-body" key=${instance}>
 			${tabs.map((item) => html`<div class="panel-pane" key=${item.id} data-ws-tab=${item.id} hidden=${item.id !== active?.id}>
@@ -186,7 +202,7 @@ export function Toasts() {
 	const toasts = useStore((s) => s.toasts);
 	// A dismissed toast stays while it fades and folds away, so the ones below it slide up instead of jumping.
 	const { rows, present } = useRetainedRows(toasts, "id");
-	return html`<div class="toasts" aria-live="polite">${rows.map((item) => html`<${Collapse} key=${item.id} open=${present.has(item.id)} class="toast-slot"><div class=${`toast ${item.type}`} role=${item.type === "error" ? "alert" : "status"}>
+	return html`<div class="toasts" aria-live="polite"><${AttentionCards} />${rows.map((item) => html`<${Collapse} key=${item.id} open=${present.has(item.id)} class="toast-slot"><div class=${`toast ${item.type}`} role=${item.type === "error" ? "alert" : "status"}>
 		<${Icon} name=${item.type === "error" ? "alertCircle" : item.type === "warning" ? "alertTriangle" : "info"} size=${15} class=${item.type === "error" ? "c-danger" : item.type === "warning" ? "c-warn" : "c-dim"} />
 		<span class="msg grow">${item.message}</span>
 		<button class="icon-btn sm" aria-label=${t("Dismiss")} onClick=${() => dismissToast(item.id)}><${Icon} name="x" size=${13} /></button>
@@ -356,23 +372,25 @@ function BootDialogs({ dialogs }) {
 function useShortcuts() {
 	useEffect(() => {
 		const onKey = (e) => {
-			if (e.defaultPrevented || e.target.closest?.(".xterm, [data-shortcut-editor]")) return;
+			// The terminal, the shortcut fields and the editors of files keep their own keys (Ctrl+B is bold there).
+			if (e.defaultPrevented || e.target.closest?.(".xterm, [data-shortcut-editor], .markdown-edit-body, .cm-editor")) return;
 			const key = eventShortcut(e);
-			const item = SHORTCUTS.find((item) => shortcutFor(item.id, state.view.shortcuts) === key);
-			if (!item) return;
-			// Read-only export copies ignore the shortcuts whose actions do not exist there (D-18): no new chat,
-			// no settings panel, no composer focus. Palette/sidebar/filter stay available as pure view features.
-			if (exportReadOnly() && (item.id === "newChat" || item.id === "settings" || item.id === "focus")) return;
+			const item = key && SHORTCUTS.find((item) => shortcutFor(item.id, state.view.shortcuts) === key);
+			if (!item || (item.desktop && !window.myHarnessDesktop)) return;
+			// Read-only export copies ignore the shortcuts whose actions do not exist there (D-18): no new chat, no
+			// settings, no uploads, no panel tabs to open. The palette and the sidebar stay as pure view features.
+			if (exportReadOnly() && item.id !== "palette" && item.id !== "sidebar") return;
 			e.preventDefault();
 			e.stopPropagation();
 			if (e.repeat) return;
 			if (item.id === "palette") setView({ palette: !state.view.palette });
-			else if (item.id === "newChat") actions.newChat();
+			// In the workspace of the chat on screen, or in Default when it has none.
+			else if (item.id === "newChat") actions.newChatHere();
+			else if (item.id === "uploadFile" || item.id === "uploadFolder") window.dispatchEvent(new CustomEvent("myharness:composer-pick", { detail: { folder: item.id === "uploadFolder" } }));
 			else if (item.id === "sidebar") setView({ sidebarOpen: !state.view.sidebarOpen });
+			else if (item.id === "panel") actions.toggleRightPanel();
+			else if (item.id === "browser") actions.openBrowser();
 			else if (item.id === "settings") setView({ settingsOpen: true });
-			else if (item.id === "focus") document.querySelector(".composer-input")?.focus();
-			else if (item.id === "workspaceMax") actions.toggleWorkspaceMax();
-			else if (item.id === "filter") { setView({ sidebarOpen: true }); document.querySelector(".sidebar-search input")?.focus(); }
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
@@ -428,6 +446,28 @@ function useWorkspaceMaxEscape(active) {
 	}, [active]);
 }
 
+/** F11 switches browser fullscreen while a website tab is on screen; Esc ends it, as in a browser. */
+function useBrowserFullKeys(active) {
+	useEffect(() => {
+		const onKey = (event) => {
+			if (event.defaultPrevented || event.isComposing) return;
+			if (event.key === "F11" && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+				event.preventDefault();
+				actions.toggleBrowserFull();
+				return;
+			}
+			if (!active || event.key !== "Escape") return;
+			const target = event.target;
+			if (target?.closest?.("input, textarea, select, [contenteditable='true'], .xterm, [role='menu'], [aria-modal='true']")) return;
+			if (document.querySelector(".overlay-host [aria-modal='true'], .local-file-menu, .ws-menu, .popover, .lightbox-scrim, .composer.expanded, .floating-quote-bar, .quote-note-card, .ws-side-pop, .ws-bookmarks-pop")) return;
+			event.preventDefault();
+			actions.toggleBrowserFull(false);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [active]);
+}
+
 function useWidthClass(ref, deps, limits = [430, 620]) {
 	useLayoutEffect(() => {
 		const el = ref.current;
@@ -464,6 +504,11 @@ export function App() {
 	const panelOpen = useStore((s) => s.view.panelOpen);
 	const sidebarOpen = useStore((s) => s.view.sidebarOpen);
 	const wsMax = useStore((s) => s.view.wsMax);
+	const browserFullOn = useStore((s) => s.view.browserFull);
+	const fullChat = useStore((s) => s.view.browserFullChat);
+	const wsChatHidden = useStore((s) => s.view.wsChatHidden);
+	// Browser fullscreen belongs to a website tab on screen.
+	const fullAllowed = useStore((s) => s.view.panelOpen && s.view.wsTabs.some((tab) => tab.id === s.view.wsActive && tab.type === "browser"));
 	const instance = useStore(() => panelInstance());
 	const connected = useStore((s) => s.connected);
 	const everConnected = useStore((s) => s.everConnected);
@@ -473,8 +518,13 @@ export function App() {
 	// The panel stays mounted while it slides out, and only turns "open" a frame after it is mounted, so both directions animate.
 	const panel = usePresence(panelOpen, 320);
 	const mainRef = useRef(null);
-	useWidthClass(mainRef, [snap != null, panelOpen, sidebarOpen, wsMax]);
-	useWorkspaceMaxEscape(wsMax);
+	useWidthClass(mainRef, [snap != null, panelOpen, sidebarOpen, wsMax, browserFullOn, fullChat, wsChatHidden]);
+	useWorkspaceMaxEscape(wsMax && !browserFullOn);
+	useBrowserFullKeys(browserFullOn);
+	// Closing the panel or leaving the website tab ends browser fullscreen.
+	useEffect(() => {
+		if (browserFullOn && !fullAllowed) actions.toggleBrowserFull(false);
+	}, [browserFullOn, fullAllowed]);
 	// Entering or leaving collaboration mode swaps the order of the columns; their widths must not animate across the
 	// swap (the conversation would sweep through the middle), so the layout switches at once and the motion is the View
 	// Transition of layout-morph.js, which moves each column's picture from its old box to its new one.
@@ -515,28 +565,37 @@ export function App() {
 	}
 	// Inside a mode reveal the panel is drawn open at once: the reveal is the motion, the new mode appears as it stays.
 	const panelShown = panel.shown || (panelOpen && modeRevealActive());
-	const layoutClass = `app ${panelShown ? "panel-open" : ""} ${wsMax && panel.mounted ? "ws-max" : ""}`;
+	const browserFull = browserFullOn && fullAllowed && panel.mounted;
+	// Browser fullscreen is the collaboration layout with the conversation tucked away at the right edge (or kept there
+	// as its column): the website fills the rest. Collaboration mode tucks the conversation away the same way when the
+	// user hides it (`chat-tucked`, store.js chatTucked).
+	const tucked = browserFull ? !fullChat : wsMax && wsChatHidden && panelOpen && panel.mounted;
+	const layoutClass = `app ${panelShown ? "panel-open" : ""} ${(wsMax || browserFull) && panel.mounted ? "ws-max" : ""} ${browserFull ? `browser-full ${fullChat ? "full-chat" : ""}` : ""} ${tucked ? "chat-tucked" : ""}`;
+	// The tucked-away conversation is off screen, and its toasts with it: they float over the window instead.
+	const toastsOutside = tucked;
 	// The panel's width handle lives on the conversation's side of the line between them: a website in the panel is drawn
 	// by the desktop host above the page and would take every click on a handle inside the panel.
 	const panelHandle =
-		!wsMax && panelShown
+		!wsMax && !browserFull && panelShown
 			? html`<${Resizer} invert min=${360} max=${Math.round(window.innerWidth * 0.72)} getValue=${() => appRef.current?.querySelector(".panel")?.offsetWidth || state.view.panelW} onChange=${onPanelWidth} onEnd=${() => setView({ panelW: state.view.panelW })} />`
 			: null;
 	return html`<div class=${layoutClass} ref=${appRef}>
 		<${Sidebar} />
-		<main class="main" ref=${mainRef}>
-			${wsMax ? html`<${Resizer} invert min=${chatColumnMin()} max=${Math.round(window.innerWidth * 0.6)} getValue=${() => mainRef.current?.offsetWidth || state.view.chatW} onChange=${onChatWidth} onEnd=${() => setView({ chatW: state.view.chatW })} />` : null}
+		<main class="main" ref=${mainRef} onPointerEnter=${chatPeekEnter} onPointerLeave=${chatPeekLeave}>
+			${(wsMax || browserFull) && !tucked ? html`<${Resizer} invert min=${chatColumnMin()} max=${Math.round(window.innerWidth * 0.6)} getValue=${() => mainRef.current?.offsetWidth || state.view.chatW} onChange=${onChatWidth} onEnd=${() => setView({ chatW: state.view.chatW })} />` : null}
 			${panelHandle}
 			<${FoldIn} content=${!restarting && everConnected && !connected ? html`<div class="conn-banner" role="status">${t("Connection to the local server lost — reconnecting…")}</div>` : null} />
 			<${Header} />
 			<${Transcript} />
 			${exportReadOnly() ? null : html`<${Composer} />`}
 			${exportReadOnly() ? null : html`<${SourcesPageHost} />`}
-			<${Toasts} />
+			${toastsOutside ? null : html`<${Toasts} />`}
 			<${AppZoomBadge} />
 			${exportReadOnly() ? null : html`<${FloatingQuoteToolbar} />`}
 		</main>
 		${panel.mounted ? html`<div class="panel-slot"><${PanelContainer} /></div>` : null}
+		${toastsOutside ? html`<div class="app-toasts"><${Toasts} /></div>` : null}
+		<${ScheduleCards} />
 		<${SettingsOverlayHost} />
 		<${ProviderEditorOverlayHost} />
 		<${PaletteOverlayHost} />

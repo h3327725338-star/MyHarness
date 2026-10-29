@@ -42,6 +42,7 @@ import { plainHttpFetch } from "../../tools/web-search/http.ts";
 import { HttpTransport } from "../../tools/web-search/transport.ts";
 import type { WebHost } from "./host.ts";
 import { HttpError, type WebHttpServer } from "./http-server.ts";
+import { bookmarkNoteModel } from "./routes-bookmarks.ts";
 
 type SettingType = "boolean" | "enum" | "number" | "numberUnit" | "text" | "modelRef" | "multi" | "tokens";
 
@@ -333,6 +334,28 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 		const compaction = s.getCompactionModelSettings();
 		const commitDescription = s.getCommitDescriptionSettings();
 		const translation = s.getTranslationSettings();
+		const bookmarkNotes = s.getBookmarkNotesSettings();
+		/** Which model writes bookmark notes, since "unset" falls back to the Conversation naming model first. */
+		const bookmarkNotesUsing = (): string => {
+			try {
+				const { model, source } = bookmarkNoteModel(host);
+				return `${model.provider}/${model.id} · ${source}`;
+			} catch {
+				return "";
+			}
+		};
+		const scheduledTasks = s.getScheduledTasksSettings();
+		/** Which model runs scheduled Agent tasks: its own when set, else the main model (what a new chat uses). */
+		const scheduledTasksUsing = (): string => {
+			if (scheduledTasks.provider && scheduledTasks.model) {
+				const own = session.modelRuntime.getModel(scheduledTasks.provider, scheduledTasks.model);
+				return own ? `${own.provider}/${own.id} · own model` : "";
+			}
+			const main = session.model;
+			return main && session.modelRuntime.getModel(main.provider, main.id)
+				? `${main.provider}/${main.id} · main model`
+				: "";
+		};
 		const worktreeNaming = s.getWorktreeNamingSettings();
 		const branchSummaryModel = s.getBranchSummaryModelSettings();
 		const context = s.getContextWindowSettings();
@@ -520,6 +543,26 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 					"Model that translates text you select (Translate on the selection toolbar, and in built-in browser pages). “Use the main model” follows the main chat's model and effort.",
 				type: "modelRef",
 				value: { ...modelRef(translation) },
+			},
+			{
+				id: "bookmarkNotes",
+				section: "Assistants",
+				label: "Bookmark notes",
+				description:
+					"Model that writes what each bookmark of the built-in browser is for, from the page and what Auto Memory knows about you. Unset uses the Conversation naming model, then the main model.",
+				using: bookmarkNotesUsing(),
+				type: "modelRef",
+				value: { ...modelRef(bookmarkNotes) },
+			},
+			{
+				id: "scheduledTasks",
+				section: "Assistants",
+				label: "Scheduled tasks",
+				description:
+					"Model and thinking effort that run scheduled Agent tasks (Settings → Scheduled tasks), in the chat each run starts. Unset uses the main model.",
+				using: scheduledTasksUsing(),
+				type: "modelRef",
+				value: { ...modelRef(scheduledTasks) },
 			},
 			{
 				id: "translation.targetLanguage",
@@ -1168,6 +1211,24 @@ export function registerSettingsRoutes(server: WebHttpServer, host: WebHost): vo
 			case "translation": {
 				const ref = modelRefValue(value);
 				s.setTranslationSettings({
+					provider: ref.provider,
+					model: ref.model,
+					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,
+				});
+				return;
+			}
+			case "bookmarkNotes": {
+				const ref = modelRefValue(value);
+				s.setBookmarkNotesSettings({
+					provider: ref.provider,
+					model: ref.model,
+					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,
+				});
+				return;
+			}
+			case "scheduledTasks": {
+				const ref = modelRefValue(value);
+				s.setScheduledTasksSettings({
 					provider: ref.provider,
 					model: ref.model,
 					thinkingLevel: ref.thinkingLevel as ThinkingLevel | undefined,

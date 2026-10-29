@@ -12,6 +12,7 @@
  *   beside it as `<name> (conflicted copy <hash>)<extension>`.
  */
 
+import { mergeScheduleLists, scheduleListOf, scheduleListText } from "../schedules/store.ts";
 import { mergePlainText } from "./memory-merge.ts";
 import { savedPromptsOf } from "./saved-prompts.ts";
 import { stableJson } from "./util.ts";
@@ -115,6 +116,20 @@ export function mergeSavedPrompts(base: string | undefined, local: string, remot
 	const there = savedPromptsFrom(remote);
 	if (!here || !there) return undefined;
 	return stableJson(savedPromptsOf(mergeItems(savedPromptsFrom(base), here, there)));
+}
+
+/** The scheduled tasks: task by task, the later edit and the latest run win, deletions stay (no common base needed). */
+export function mergeSchedules(_base: string | undefined, local: string, remote: string): string | undefined {
+	try {
+		return scheduleListText(
+			mergeScheduleLists(
+				scheduleListOf(JSON.parse(local) as unknown),
+				scheduleListOf(JSON.parse(remote) as unknown),
+			),
+		);
+	} catch {
+		return undefined;
+	}
 }
 
 export function isSessionMetadataId(id: string): boolean {

@@ -3,13 +3,16 @@
 // the page. The view cannot take part in the page's layout, animations or stacking, so `browser-view-sync.js` shows it
 // only while this tab is active, its box is at rest and nothing lies over it; otherwise the box shows the last picture.
 import { html, Icon, Menu, MenuItem, MenuSep, Toggle, useClickOutside, useEffect, usePresence, useRef, useState } from "./ui.js";
-import { useStore } from "./store.js";
+import { api, post, setView, state, useStore } from "./store.js";
 import { actions } from "./actions.js";
 import { createBrowserViewSync } from "./browser-view-sync.js";
 import { resolveBrowserAddress, rememberSearchEngine, savedSearchEngine, SEARCH_ENGINES } from "./browser-address.js";
-import { BookmarkEditor, BookmarksBar } from "./browser-bookmarks.js";
+import { BookmarkEditor, BookmarkManager, BookmarksBar } from "./browser-bookmarks.js";
+import { DownloadsButton, DownloadsList, useDownloads } from "./browser-downloads.js";
+import { HelpRequest } from "./browser-help.js";
 import { SpeedDial } from "./browser-speed-dial.js";
 import { NOTICE_CATEGORIES, rememberNoticePrefs, savedNoticePrefs } from "./browser-notices.js";
+import { KeyPasteStrip } from "./service-keys.js";
 import { t } from "./i18n.js";
 import { BROWSER_LANGUAGES } from "./lang.js";
 
@@ -28,11 +31,42 @@ const DARK_SITE = [
 /** How long the browser's own notice stays on the toolbar. */
 const NOTICE_MS = 5000;
 
+/** Electron's names of site permissions as people say them, in the request, the notices and the list; others stay as they are. */
+const PERMISSION_LABELS = {
+	geolocation: "location",
+	notifications: "notifications",
+	media: "camera or microphone",
+	"clipboard-read": "clipboard reading",
+	"clipboard-sanitized-write": "clipboard writing",
+	"display-capture": "screen capture",
+	"idle-detection": "idle detection",
+	midi: "MIDI devices",
+	midiSysex: "full MIDI access",
+	pointerLock: "mouse pointer lock",
+	keyboardLock: "keyboard lock",
+	openExternal: "opening other apps",
+	"window-management": "window management",
+	"storage-access": "cross-site cookies",
+	"top-level-storage-access": "cross-site cookies",
+	"speaker-selection": "speaker selection",
+	fileSystem: "file access",
+	mediaKeySystem: "protected media",
+};
+/** A request for the camera or the microphone names which one it is when the site said so. */
+const permissionLabel = (permission, mediaTypes = []) => {
+	if (permission === "media" && mediaTypes.length) {
+		const video = mediaTypes.includes("video");
+		const audio = mediaTypes.includes("audio");
+		if (video && audio) return t("camera and microphone");
+		if (video || audio) return t(video ? "camera" : "microphone");
+	}
+	return PERMISSION_LABELS[permission] ? t(PERMISSION_LABELS[permission]) : permission;
+};
+
 /** Names of the notice categories, as the site-permission bubble lists them. */
 const NOTICE_LABELS = {
 	permission: "Permission notices",
 	credential: "Sign-in notices",
-	download: "Download notices",
 	other: "Other notices",
 };
 
@@ -137,6 +171,27 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 	const barSlot = useRef(null);
 	const barButton = useRef(null);
 	const [bookmarkDraft, setBookmarkDraft] = useState(null);
+	// Every bookmark with its note, searchable (the list button at the end of the bar); "fill" is the progress of writing
+	// the notes that are missing.
+	const [managerOpen, setManagerOpen] = useState(false);
+	const managerPresence = usePresence(managerOpen, 110);
+	const managerCard = useRef(null);
+	const [fill, setFill] = useState(null);
+	// Which model writes the notes (Settings → Agent → Assistants → Bookmark notes), shown in the editor and the list,
+	// and which model wrote each note the page just got (saved with the bookmark as its writer).
+	const [noteModel, setNoteModel] = useState(null);
+	const noteWriters = useRef(new Map());
+	useEffect(() => {
+		if (!bookmarkDraft && !managerOpen) return undefined;
+		let live = true;
+		api("/api/bookmarks/note-model")
+			.then((value) => live && setNoteModel(value || null))
+			.catch(() => live && setNoteModel(null));
+		return () => {
+			live = false;
+		};
+	}, [!!bookmarkDraft, managerOpen]);
+	const openNoteSettings = () => setView({ settingsOpen: true, settingsSection: "agent" });
 	// The bookmark editor and the site bubble float over the page like the bookmarks bar (opening them used to push
 	// the page down). A closing editor keeps showing the draft it had while it fades out.
 	const editorPresence = usePresence(!!bookmarkDraft, 110);
@@ -149,6 +204,13 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 	// The bubble and the shield that opened it: a click on either one is not "somewhere else".
 	const permissionCard = useRef(null);
 	const permissionButton = useRef(null);
+	// The downloads list (browser-downloads.js) floats over the page like the site bubble; the list itself is shared by
+	// every website tab.
+	const [downloadsOpen, setDownloadsOpen] = useState(false);
+	const downloadsPresence = usePresence(downloadsOpen, 110);
+	const downloadsCard = useRef(null);
+	const downloadsButton = useRef(null);
+	const downloadState = useDownloads(host);
 	const siteOrigin = (() => {
 		try {
 			return new URL(status.url || address).origin;
@@ -195,15 +257,98 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 		}
 	};
 	const toggleBar = () => setBarVisible((current) => !current);
+	const browserFull = useStore((s) => s.view.browserFull);
 	const editBookmark = (bookmark) => {
 		setPermissionOpen(false);
-		setBookmarkDraft(bookmark ? { ...bookmark } : { title: status.title || "", url: status.url || "" });
+		setManagerOpen(false);
+		// A new bookmark of the page on screen gets its note written at once (BookmarkEditor "suggest").
+		setBookmarkDraft(bookmark ? { ...bookmark } : { title: status.title || "", url: status.url || "", suggest: true });
 	};
-	const saveBookmark = async ({ title, url: target }) => {
+	/**
+	 * A note for a bookmark: what the page says about itself (the page on screen: its description, headings and text;
+	 * any other address: a hidden reading of it with the user's sign-ins), turned into one sentence about what this user
+	 * does there by the helper model, which also hears the notes the user wrote for other bookmarks (and, on the server,
+	 * what Auto Memory knows about the user).
+	 */
+	const suggestNote = async ({ title, url: target }) => {
+		let info = {};
+		if (hasView && target === status.url) info = (await send({ action: "page-info" }).catch(() => null)) || {};
+		else {
+			const read = await send({ action: "readUrl", url: target, maxChars: 1500, timeoutMs: 15000 }).catch(() => null);
+			if (read?.ok) info = { title: read.title, text: read.text };
+		}
+		const value = await post("/api/bookmarks/purpose", {
+			url: target,
+			title: title || info.title || "",
+			siteName: info.siteName,
+			description: info.description,
+			headings: info.headings,
+			text: info.text,
+			uiLanguage: state.view.lang,
+			ownNotes: bookmarks
+				.filter((bookmark) => bookmark.note && !bookmark.noteAuto && bookmark.url !== target)
+				.slice(0, 8)
+				.map((bookmark) => ({ title: bookmark.title, url: bookmark.url, note: bookmark.note })),
+		});
+		const note = value?.note || "";
+		if (note && value?.model) noteWriters.current.set(note, value.model);
+		return note;
+	};
+	/**
+	 * Notes written by the note model, three sites at a time; the list follows as each one is saved. "missing": the
+	 * bookmarks without a note; "rewrite": also the notes the note model wrote before (the user's own notes and the ones
+	 * the Agent wrote from real use stay).
+	 */
+	const fillNotes = async (mode = "missing") => {
+		const todo = bookmarks.filter((bookmark) => !bookmark.note || (mode === "rewrite" && bookmark.noteAuto && bookmark.noteBy !== "agent"));
+		if (!todo.length || fill) return;
+		let done = 0;
+		setFill({ done, total: todo.length });
+		const queue = [...todo];
+		const worker = async () => {
+			for (let bookmark = queue.shift(); bookmark; bookmark = queue.shift()) {
+				try {
+					const note = await suggestNote({ title: bookmark.title, url: bookmark.url });
+					if (note) {
+						const value = await send({ action: "bookmark-note", id: bookmark.id, note, by: noteWriters.current.get(note) || "" });
+						setBookmarks(value?.bookmarks || []);
+					}
+				} catch (error) {
+					showNotice("other", error.message);
+				}
+				done += 1;
+				setFill({ done, total: todo.length });
+			}
+		};
+		await Promise.all([worker(), worker(), worker()]);
+		setFill(null);
+	};
+	/** The note of a site from the new-tab page: its bookmark's (same address, else same site), or a new bookmark. */
+	const editSitePurpose = (site) => {
+		let origin = "";
+		try {
+			origin = new URL(site.url).origin;
+		} catch {
+			return;
+		}
+		const sameSite = (bookmark) => {
+			try {
+				return new URL(bookmark.url).origin === origin;
+			} catch {
+				return false;
+			}
+		};
+		const match = bookmarks.find((bookmark) => bookmark.url === site.url) || bookmarks.find(sameSite);
+		setPermissionOpen(false);
+		setManagerOpen(false);
+		setBookmarkDraft(match ? { ...match } : { title: site.title || "", url: site.url, suggest: true });
+	};
+	const saveBookmark = async ({ title, url: target, note, noteAuto }) => {
+		const noteBy = noteAuto ? noteWriters.current.get(note) || (bookmarkDraft?.note === note ? bookmarkDraft?.noteBy : "") || "" : "";
 		try {
 			const value = bookmarkDraft?.id
-				? await send({ action: "bookmark-update", id: bookmarkDraft.id, title, url: target })
-				: await send({ action: "bookmark-add", title, url: target });
+				? await send({ action: "bookmark-update", id: bookmarkDraft.id, title, url: target, note, noteAuto, noteBy })
+				: await send({ action: "bookmark-add", title, url: target, note, noteAuto, noteBy });
 			setBookmarks(value?.bookmarks || []);
 			setBookmarkDraft(null);
 		} catch (error) {
@@ -241,8 +386,8 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 			showNotice(
 				"permission",
 				allow
-					? t("Allowed {permission} for {origin}. You will not be asked again.", { permission: request.permission, origin: request.origin })
-					: t("Denied {permission} for {origin}.", { permission: request.permission, origin: request.origin }),
+					? t("Allowed {permission} for {origin}. You will not be asked again.", { permission: permissionLabel(request.permission, request.mediaTypes), origin: request.origin })
+					: t("Denied {permission} for {origin}.", { permission: permissionLabel(request.permission, request.mediaTypes), origin: request.origin }),
 			);
 			await loadPermissions();
 		} catch (error) {
@@ -258,6 +403,16 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 			setStatus((current) => ({ ...current, error: error.message }));
 		}
 	};
+	const toggleDownloads = () => {
+		if (downloadsOpen) {
+			setDownloadsOpen(false);
+			return;
+		}
+		setBookmarkDraft(null);
+		setPermissionOpen(false);
+		setManagerOpen(false);
+		setDownloadsOpen(true);
+	};
 	const togglePermissions = async () => {
 		if (permissionOpen) {
 			setPermissionOpen(false);
@@ -271,6 +426,14 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 		if (!host?.browser) throw new Error(t("The built-in browser is available in the desktop app only."));
 		return host.browser({ tabId, ...command });
 	};
+	// Browser fullscreen ended (its button, F11 or Esc in the workspace) while the site was full screen too (a video's
+	// button took the workspace there): the site leaves its own fullscreen with it, as in a browser.
+	const wasFull = useRef(browserFull);
+	useEffect(() => {
+		const was = wasFull.current;
+		wasFull.current = browserFull;
+		if (was && !browserFull && hasView && host?.browser) send({ action: "exitFullscreen" }).catch(() => undefined);
+	}, [browserFull]);
 	const chooseEngine = (id) => {
 		rememberSearchEngine(window.localStorage, id);
 		setEngine(id);
@@ -333,7 +496,9 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 	// The permission list belongs to the shield that opened it: a click anywhere else, Escape, or the window losing
 	// focus puts it away, the way a browser's own site bubble closes.
 	useClickOutside([permissionCard, permissionButton], () => setPermissionOpen(false), permissionOpen);
+	useClickOutside([downloadsCard, downloadsButton], () => setDownloadsOpen(false), downloadsOpen);
 	useClickOutside([barSlot, barButton], () => setBarVisible(false), barVisible);
+	useClickOutside([managerCard], () => setManagerOpen(false), managerOpen);
 	useEffect(() => {
 		if (!barVisible) return undefined;
 		const close = () => setBarVisible(false);
@@ -352,6 +517,19 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 		// time must not leave the user without the bar that was already dismissed.
 		if (status.loading) setChallengeHidden(false);
 	}, [status.loading, status.url]);
+	useEffect(() => {
+		if (!downloadsOpen) return undefined;
+		const close = () => setDownloadsOpen(false);
+		const onKey = (event) => {
+			if (event.key === "Escape") close();
+		};
+		window.addEventListener("blur", close);
+		window.addEventListener("keydown", onKey);
+		return () => {
+			window.removeEventListener("blur", close);
+			window.removeEventListener("keydown", onKey);
+		};
+	}, [downloadsOpen]);
 	useEffect(() => {
 		if (!permissionOpen) return undefined;
 		const close = () => setPermissionOpen(false);
@@ -388,6 +566,8 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 		send({ action: "speeddial" })
 			.then((value) => setSpeedDial(value?.items || []))
 			.catch(() => setSpeedDial([]));
+		// A new tab without a page gets no state from the host, so its dark-mode menu asks for the current choice.
+		void refreshDarkChoice();
 	}, [host]);
 	/** Show the user's arrangement at once, then the host's cleaned copy (it also fetches icons for new sites). */
 	const saveSpeedDial = async (items) => {
@@ -433,6 +613,8 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 				if (value.shortcut === "new-tab") actions.openBrowserTab();
 				else if (value.shortcut === "close-tab") actions.closeWorkspaceTab(tabId);
 				else if (value.shortcut === "bookmarks-bar") toggleBar();
+				else if (value.shortcut === "fullscreen") actions.toggleBrowserFull();
+				else if (value.shortcut === "site-fullscreen") actions.toggleBrowserFull(value.on === true, { bySite: true });
 				return;
 			}
 			if (value.type === "credential-saved") {
@@ -473,7 +655,8 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 				// The picture is taken while the native view fills the page box, so it is exactly that box's size. It is drawn
 				// at that size from the top-left corner: when the panel then narrows or widens (sidebar, collaboration mode) the
 				// picture is cut or uncovered at the edge, like a real browser before it repaints, instead of being squashed.
-				// The host sends the native view's box with it: the Agent's scaled desktop view covers only the top-left part.
+				// The host sends the native view's box with it: while the Agent acts in a narrow panel the page is laid out wider
+				// than the panel (browser-view.cjs `widenForAgent`), and its picture is cut at the panel's edge like the view.
 				const box = target.current?.getBoundingClientRect();
 				const width = Math.round(value.width || box?.width || 0);
 				const height = Math.round(value.height || box?.height || 0);
@@ -508,17 +691,6 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 				setStatus((current) => ({ ...current, error: t("This browser tab was closed.") }));
 				return;
 			}
-			if (value.type === "download") {
-				showNotice(
-					"download",
-					value.state === "completed"
-						? t("Downloaded {name} to {path}", { name: value.name, path: value.savePath })
-						: value.state === "failed"
-							? t("Download of {name} failed ({reason}).", { name: value.name, reason: value.reason })
-							: t("Downloading {name} ({received} of {total} bytes)…", { name: value.name, received: value.received ?? 0, total: value.total ?? 0 }),
-				);
-				return;
-			}
 			if (value.type === "permission-request") {
 				setPermissionAsk({ requestId: value.requestId, permission: value.permission, origin: value.origin || "", mediaTypes: value.mediaTypes || [] });
 				return;
@@ -527,7 +699,7 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 				setPermissionAsk((current) => (current && current.requestId === value.requestId ? null : current));
 				// A saved decision applied again was already announced once, when it was made.
 				if (value.reused) return;
-				const words = { permission: value.permission, origin: value.origin };
+				const words = { permission: permissionLabel(value.permission, value.mediaTypes), origin: value.origin };
 				showNotice(
 					"permission",
 					value.by === "bookmark"
@@ -621,9 +793,11 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 		}
 	};
 	/** A bookmark opens in this tab (a tab without a page gets its first one), or in a new tab on a middle click. */
-	const openBookmark = async (target, newTab) => {
+	const openBookmark = async (target, newTab, bookmark) => {
 		// Choosing one answers the bubble's question, so it puts itself away.
 		setBarVisible(false);
+		setManagerOpen(false);
+		if (bookmark?.id) send({ action: "bookmark-used", id: bookmark.id }).catch(() => undefined);
 		if (newTab) {
 			actions.openWorkspace({ type: "browser", url: target });
 			return;
@@ -674,7 +848,23 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 			setStatus((current) => ({ ...current, error: error.message }));
 		}
 	};
-	const setDarkMode = (mode) => send({ action: "darkMode", mode }).catch((error) => showNotice("other", error.message));
+	// The Agent's request for help on this tab: the answer goes to the host, which ends the Agent's wait.
+	const answerHelp = (outcome) => {
+		const help = status.help;
+		if (!help) return;
+		setStatus((current) => ({ ...current, help: null }));
+		send({ action: "handoff-answer", helpId: help.id, outcome }).catch((error) => showNotice("other", error.message));
+	};
+	// The host's answer carries the general mode and this site's own choice; a tab that has not opened a page yet hears
+	// of them from nothing else. Picking a general mode here also clears this site's own choice (`clearSite`).
+	const takeDarkChoice = (value) => {
+		if (value && typeof value.darkMode === "string") setStatus((current) => ({ ...current, darkMode: value.darkMode, darkSite: value.darkSite ?? null }));
+	};
+	const setDarkMode = (mode) =>
+		send({ action: "darkMode", mode, clearSite: true })
+			.then(takeDarkChoice)
+			.catch((error) => showNotice("other", error.message));
+	const refreshDarkChoice = () => send({ action: "darkMode" }).then(takeDarkChoice).catch(() => undefined);
 	const setDarkSite = (value) =>
 		send({ action: "darkSite", value })
 			.then((state) => setStatus((current) => ({ ...current, ...state })))
@@ -699,7 +889,7 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 				${(close) => SEARCH_ENGINES.map((item) => html`<${MenuItem} key=${item.id} label=${item.label} active=${item.id === engine} onClick=${() => { close(); chooseEngine(item.id); }} />`)}
 			</${Menu}></form>
 			${status.zoom && Math.abs(status.zoom - 1) > 0.001 ? html`<button class="btn sm ws-zoom" title=${t("Page zoom {percent}. Click to reset.", { percent: `${Math.round(status.zoom * 100)}%` })} onClick=${() => send({ action: "zoom", factor: 1 }).then((value) => setStatus((current) => ({ ...current, zoom: value?.zoom ?? 1 }))).catch(() => undefined)}>${Math.round(status.zoom * 100)}%</button>` : null}
-			<${Menu} align="end" trigger=${({ toggle, open: expanded }) => html`<button type="button" class=${`icon-btn sm ws-dark ${status.dark ? "on" : ""} ${expanded ? "active" : ""}`} title=${status.dark ? t(status.darkNative ? "This page uses its own dark theme" : "Dark mode is on for this page") : t("Dark mode for websites")} aria-label=${t("Dark mode for websites")} aria-haspopup="menu" aria-expanded=${expanded} onClick=${toggle}><${Icon} name="moon" size=${14} /></button>`}>
+			<${Menu} align="end" trigger=${({ toggle, open: expanded }) => html`<button type="button" class=${`icon-btn sm ws-dark ${status.dark ? "on" : ""} ${expanded ? "active" : ""}`} title=${status.dark ? t(status.darkNative ? "This page uses its own dark theme" : "Dark mode is on for this page") : status.darkSite === "off" ? t("Dark mode is off for this site (its own setting)") : t("Dark mode for websites")} aria-label=${t("Dark mode for websites")} aria-haspopup="menu" aria-expanded=${expanded} onClick=${() => { if (!expanded) void refreshDarkChoice(); toggle(); }}><${Icon} name="moon" size=${14} /></button>`}>
 				${(close) => html`<div class="menu-caption">${t("Dark mode for websites")}</div>
 					${DARK_MODES.map((mode) => html`<${MenuItem} key=${mode.value} label=${t(mode.label)} active=${(status.darkMode || "auto") === mode.value} onClick=${() => { close(); void setDarkMode(mode.value); }} />`)}
 					<${MenuSep} />
@@ -713,9 +903,10 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 					${BROWSER_LANGUAGES.map((item) => html`<${MenuItem} key=${item.value} label=${item.label} active=${status.language === item.value} onClick=${() => { close(); if (status.language !== item.value) void setLanguage(item.value); }} />`)}`}
 			</${Menu}>
 			<button class=${`icon-btn sm ws-star ${pageBookmark ? "on" : ""}`} title=${pageBookmark ? t("Edit bookmark") : t("Bookmark this page")} aria-label=${pageBookmark ? t("Edit bookmark") : t("Bookmark this page")} aria-pressed=${!!pageBookmark} disabled=${!status.url} onClick=${() => (bookmarkDraft ? setBookmarkDraft(null) : editBookmark(pageBookmark))}><${Icon} name="star" size=${15} /></button>
-			<button class="icon-btn sm" title=${t("New browser tab")} aria-label=${t("New browser tab")} onClick=${() => actions.openBrowserTab()}><${Icon} name="plus" size=${15} /></button>
+			<${DownloadsButton} ...${downloadState} list=${downloadState.downloads} open=${downloadsOpen} buttonRef=${downloadsButton} onToggle=${toggleDownloads} />
 			<button ref=${barButton} class=${`icon-btn sm ${barVisible ? "active" : ""}`} title=${`${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} (Ctrl+Shift+B)`} aria-label=${t(barVisible ? "Hide bookmarks bar" : "Show bookmarks bar")} aria-expanded=${barVisible} onClick=${toggleBar}><${Icon} name="bookmark" size=${14} /></button>
 			<button ref=${permissionButton} class=${`icon-btn sm ${permissionOpen ? "active" : ""}`} title=${t("Site permissions")} aria-label=${t("Site permissions")} aria-expanded=${permissionOpen} onClick=${togglePermissions}><${Icon} name="shield" size=${14} /></button>
+			<button class=${`icon-btn sm ${browserFull ? "active" : ""}`} title=${`${t(browserFull ? "Exit fullscreen" : "Fullscreen")} (F11)`} aria-label=${t(browserFull ? "Exit fullscreen" : "Fullscreen")} aria-pressed=${browserFull} onClick=${() => actions.toggleBrowserFull()}><${Icon} name=${browserFull ? "exitFullscreen" : "fullscreen"} size=${14} /></button>
 			<button class="icon-btn sm" title=${t("Open in system browser")} aria-label=${t("Open in system browser")} disabled=${!status.url} onClick=${() => host.external(status.url).catch((e) => setStatus((current) => ({ ...current, error: e.message })))}><${Icon} name="externalLink" size=${14} /></button>
 			${noticePresence.mounted && shownNotice ? html`<div class=${`notice warn ws-notice ${noticePresence.shown ? "" : "closing"}`} role="status" title=${shownNotice.text}
 				onMouseEnter=${() => setNoticeHeld(true)} onMouseLeave=${() => setNoticeHeld(false)}>
@@ -736,14 +927,16 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 			<button class="icon-btn sm" type="submit" title=${t("Next match")} aria-label=${t("Next match")} disabled=${!found.matches}><${Icon} name="chevronDown" size=${14} /></button>
 			<button class="icon-btn sm" type="button" title=${t("Close find")} aria-label=${t("Close find")} onClick=${closeFind}><${Icon} name="x" size=${14} /></button>
 		</form>` : null}
-		${status.challenge && !challengeHidden ? html`<div class="notice warn ws-challenge" role="status">
+		<${KeyPasteStrip} tabId=${tabId} />
+		${status.help ? html`<${HelpRequest} help=${status.help} onAnswer=${answerHelp} />` : null}
+		${status.challenge && !challengeHidden && !status.help ? html`<div class="notice warn ws-challenge" role="status">
 			<span class="grow">${t("This site is asking for a human check. Complete it in this panel, or open the page in your normal browser.")}</span>
 			<button class="btn sm" disabled=${!hasView} onClick=${() => act("reload")}>${t("Try again")}</button>
 			<button class="btn sm" disabled=${!status.url} onClick=${() => host.external(status.url).catch(() => undefined)}>${t("Open in system browser")}</button>
 			<button class="icon-btn sm" title=${t("Dismiss this notice")} aria-label=${t("Dismiss this notice")} onClick=${() => setChallengeHidden(true)}><${Icon} name="x" size=${13} /></button>
 		</div>` : null}
 		${permissionAsk ? html`<div class="notice warn ws-permission-ask" role="alertdialog" aria-label=${t("Site permission request")}>
-			<p>${t("{origin} asks for {permission}. It is denied unless you allow it; the answer is remembered for this site.", { origin: permissionAsk.origin || t("This site"), permission: permissionAsk.permission })}</p>
+			<p>${t("{origin} asks for {permission}. It is denied unless you allow it; the answer is remembered for this site.", { origin: permissionAsk.origin || t("This site"), permission: permissionLabel(permissionAsk.permission, permissionAsk.mediaTypes) })}</p>
 			<div class="row">
 				<button class="btn sm primary" onClick=${() => answerPermission(true)}>${t("Allow for this site")}</button>
 				<button class="btn sm" onClick=${() => answerPermission(false)}>${t("Deny")}</button>
@@ -751,10 +944,16 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 		</div>` : null}
 		<div class="ws-bookmarks-anchor">
 			${barPresence.mounted
-				? html`<div class=${`ws-bookmarks-pop ${barPresence.shown ? "" : "closing"}`} ref=${barSlot}><${BookmarksBar} bookmarks=${bookmarks} onOpen=${openBookmark} onEdit=${editBookmark} /></div>`
+				? html`<div class=${`ws-bookmarks-pop ${barPresence.shown ? "" : "closing"}`} ref=${barSlot}><${BookmarksBar} bookmarks=${bookmarks} onOpen=${openBookmark} onEdit=${editBookmark} onManage=${() => { setBarVisible(false); setBookmarkDraft(null); setPermissionOpen(false); setManagerOpen(true); }} /></div>`
 				: null}
 			${editorPresence.mounted && shownDraft
-				? html`<div class=${`ws-side-pop ${editorPresence.shown ? "" : "closing"}`}><${BookmarkEditor} key=${shownDraft.id || "new"} draft=${shownDraft} onSave=${saveBookmark} onRemove=${removeBookmark} onCancel=${() => setBookmarkDraft(null)} /></div>`
+				? html`<div class=${`ws-side-pop ${editorPresence.shown ? "" : "closing"}`}><${BookmarkEditor} key=${shownDraft.id || "new"} draft=${shownDraft} onSave=${saveBookmark} onRemove=${removeBookmark} onCancel=${() => setBookmarkDraft(null)} onSuggest=${suggestNote} noteModel=${noteModel} onNoteSettings=${openNoteSettings} /></div>`
+				: null}
+			${managerPresence.mounted
+				? html`<div class=${`ws-side-pop ${managerPresence.shown ? "" : "closing"}`} inert=${!managerOpen} ref=${managerCard}><${BookmarkManager} bookmarks=${bookmarks} onOpen=${openBookmark} onEdit=${editBookmark} onFill=${(mode) => void fillNotes(mode)} fill=${fill} noteModel=${noteModel} onNoteSettings=${openNoteSettings} onClose=${() => setManagerOpen(false)} /></div>`
+				: null}
+			${downloadsPresence.mounted
+				? html`<div class=${`ws-side-pop ${downloadsPresence.shown ? "" : "closing"}`} inert=${!downloadsOpen} ref=${downloadsCard}><${DownloadsList} host=${host} tabId=${tabId} list=${downloadState.downloads} folder=${downloadState.folder} onError=${(text) => showNotice("other", text)} /></div>`
 				: null}
 			${permissionPresence.mounted ? html`<div class=${`ws-side-pop ${permissionPresence.shown ? "" : "closing"}`} inert=${!permissionOpen}><div class="ws-permissions" ref=${permissionCard}>
 			<div class="row ws-permissions-head">
@@ -764,7 +963,7 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 			<div class="dim ws-permissions-note">${siteOrigin ? t("Decisions for {origin} are remembered until you revoke them.", { origin: siteOrigin }) : t("Open a page to review its permissions.")}</div>
 			${!siteOrigin ? null : siteDecisions.length
 				? siteDecisions.map((entry) => html`<div class="row ws-permission-row" key=${entry.permission}>
-					<span class="grow truncate">${entry.permission}</span>
+					<span class="grow truncate ws-permission-name" title=${entry.permission}>${permissionLabel(entry.permission)}</span>
 					<span class=${`ws-permission-state ${entry.allowed ? "on" : "off"}`}>${entry.allowed ? t("Allowed") : t("Denied")}</span>
 					<button class="btn sm" onClick=${() => revokePermission(entry.permission)}>${t("Revoke")}</button>
 				</div>`)
@@ -792,7 +991,7 @@ export function BrowserPanel({ tabId, url, muted = false }) {
 		</div>
 		<div class="desktop-browser-target" ref=${target}>
 			${(!hasView || !status.url) && !status.loading && !status.error && speedDial
-				? html`<${SpeedDial} items=${speedDial} bookmarks=${bookmarks} onOpen=${openBookmark} onSave=${saveSpeedDial} />`
+				? html`<${SpeedDial} items=${speedDial} bookmarks=${bookmarks} onOpen=${openBookmark} onSave=${saveSpeedDial} onPurpose=${editSitePurpose} />`
 				: null}
 			<div class="pad">
 				<p role="status">${status.error || (status.loading ? t("Loading…") : "")}</p>

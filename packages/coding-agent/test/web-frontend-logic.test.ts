@@ -183,6 +183,11 @@ describe("Web UI: Coding / General modes", () => {
 		expect(taskCounts(tasks)).toEqual({ waiting: 1, failed: 1, completed: 1 });
 		expect(modeSignal(slots, "coding")).toBe("failed");
 		expect(modeSignal([], "general")).toBeNull();
+		// A run redirected by an interrupting message answered it: a finished reply. An unknown result is left out.
+		const redirected = slot("r", "general", { unread: true, lastOutcome: "redirected", lastActivityAt: 6 });
+		expect(slotSignal(redirected)).toBe("completed");
+		expect(modeSignal([redirected], "general")).toBe("completed");
+		expect(modeTasks([slot("u", "general", { unread: true, lastOutcome: "something-new" })], "general")).toEqual([]);
 	});
 });
 

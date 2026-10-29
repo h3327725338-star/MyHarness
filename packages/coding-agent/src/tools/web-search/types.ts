@@ -10,6 +10,8 @@ export type WebSearchFailureCode =
 	| "no_results"
 	| "no_engines"
 	| "missing_api_key"
+	/** Tavily's free keyless access hit its limit: a free API key lets the searches go on. */
+	| "keyless_limit"
 	| "rate_limited"
 	| "captcha"
 	| "forbidden"

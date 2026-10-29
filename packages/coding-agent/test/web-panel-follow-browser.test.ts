@@ -123,7 +123,7 @@ try{
  must(ids(storedPanel('a-1')).length===0,'(2) A\\'s snapshot after the reversed reveal took B\\'s tabs: '+show(ids(storedPanel('a-1'))));
  must(ids(storedPanel('b-1')).includes('file:C:/fixture/b.txt'),'(2) B lost its tab');
 
- // (3) A opens two websites and a file, closes one website, and is forked in place (Edit and resend): the new session
+ // (3) A opens two websites and a file, closes one website, and is replaced in place (as a worktree move does): the new session
  // keeps the live tabs, the original keeps copies whose website tabs have new ids.
  const host=[];
  window.myHarnessDesktop={browser:async(command)=>{host.push(command);return {};}};

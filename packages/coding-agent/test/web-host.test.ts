@@ -581,7 +581,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		await expect(fx.get("/api/translate/voice?text=problem&accent=au")).rejects.toThrow(/^400:/);
 	});
 
-	async function start(options: { authFile?: boolean } = {}): Promise<Fixture> {
+	async function start(options: { authFile?: boolean; nebiusBaseUrl?: string } = {}): Promise<Fixture> {
 		const project = tempDir("myharness-web-project");
 		const dataRoot = tempDir("myharness-web-data");
 		const agentDir = tempDir("myharness-web-agent");
@@ -627,8 +627,9 @@ describe("Web host (real runtime with a faux provider)", () => {
 		const settingsManagers: SettingsManager[] = [];
 		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
 			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
-			// Other tests queue faux responses for foreground tasks only.
+			// Other tests queue faux responses for foreground tasks only; the memory tests turn Auto Memory back on.
 			services.settingsManager.setConversationNamingSettings({ enabled: false });
+			services.settingsManager.setAutoMemorySettings({ enabled: false });
 			settingsManagers.push(services.settingsManager);
 			return {
 				...(await createAgentSessionFromServices({
@@ -664,7 +665,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 		registerSettingsRoutes(server, host);
 		registerTranslateRoutes(server, host, () => agentDir);
 		// An undecided thinking-effort test is tried again; the tests do not wait between the attempts.
-		registerProviderRoutes(server, host, hub);
+		registerProviderRoutes(server, host, hub, { nebiusBaseUrl: options.nebiusBaseUrl });
 		await hub.addPrimary(runtimeHost, dialogs);
 		const address = await server.listen(0);
 		cleanups.push(() => server.close());
@@ -1061,6 +1062,9 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(announced).toHaveLength(1);
 		// Only the fields the live-item id back-fill matches on go out: no second copy of text, images or details.
 		expect(announced[0].data.item).toEqual({ kind: "user", ts: expect.any(Number), text: "edit me later" });
+		// With the live row's own time: the entry is written a moment after the message is made, and the page matches the
+		// two by time, so the entry's time left the row without an id (and without Rewind / Fork) until a reload.
+		expect(announced[0].data.item.ts).toBe(live?.data.item?.ts);
 		// The announced id is the persisted entry's id, so a fork can branch before this message.
 		const persisted = (await fx.get("/api/transcript")).items.find(
 			(item: { id?: string }) => item.id === announced[0].data.id,
@@ -1070,6 +1074,52 @@ describe("Web host (real runtime with a faux provider)", () => {
 		// before this message right away, without a reload or a second transcript read.
 		const owner = fx.hub.get((await fx.get("/api/state")).slot)!;
 		expect(owner.session.sessionManager.getEntry(announced[0].data.id)?.type).toBe("message");
+	});
+
+	it("forks a chat into a new chat before a message, leaving it as it is, and rewinds a chat to before a message", async () => {
+		const fx = await start();
+		fx.faux.setResponses([
+			fauxAssistantMessage([fauxText("first answer")]),
+			fauxAssistantMessage([fauxText("second answer")]),
+		]);
+		const source = (await fx.get("/api/state")).slot;
+		await fx.post("/api/prompt", { text: "first question" });
+		await fx.waitFor("agent_settled");
+		fx.events.length = 0;
+		await fx.post("/api/prompt", { text: "second question" });
+		await fx.waitFor("agent_settled");
+		const owner = fx.hub.get(source)!;
+		const sourceFile = owner.session.sessionFile!;
+		// The ids the page has for the two questions.
+		const items = (await fx.get("/api/transcript", source)).items;
+		const userId = (text: string) => items.find((item: any) => item.kind === "user" && item.text === text).id;
+		const before = readFileSync(sourceFile, "utf8");
+
+		// Fork from the second question: a new chat with the first question and answer only, in its own slot.
+		const forked = await fx.post("/api/sessions/fork-new", { entryId: userId("second question") }, source);
+		expect(forked.slot).not.toBe(source);
+		const forkedItems = (await fx.get("/api/transcript", forked.slot)).items;
+		expect(forkedItems.map((item: any) => item.kind)).toEqual(["user", "assistant"]);
+		expect(JSON.stringify(forkedItems)).toContain("first answer");
+		expect(JSON.stringify(forkedItems)).not.toContain("second");
+		expect(fx.hub.get(forked.slot)!.session.sessionFile).not.toBe(sourceFile);
+		// The chat it came from is only read: same file, same content, still on screen in its own slot.
+		expect(owner.session.sessionFile).toBe(sourceFile);
+		expect(readFileSync(sourceFile, "utf8")).toBe(before);
+
+		// Fork from the first question: nothing before it, so the new chat starts empty.
+		const empty = await fx.post("/api/sessions/fork-new", { entryId: userId("first question") }, source);
+		expect(empty.slot).not.toBe(source);
+		expect((await fx.get("/api/transcript", empty.slot)).items).toEqual([]);
+		await expect(fx.post("/api/sessions/fork-new", { entryId: "not-an-entry" }, source)).rejects.toThrow(/^404:/);
+
+		// Rewind to the second question: the chat goes back to before it, and the text comes back for the input box.
+		const rewound = await fx.post("/api/sessions/navigate", { targetId: userId("second question") }, source);
+		expect(rewound).toEqual({ cancelled: false, editorText: "second question" });
+		const after = (await fx.get("/api/transcript", source)).items;
+		expect(after.map((item: any) => item.kind)).toEqual(["user", "assistant"]);
+		expect(JSON.stringify(after)).toContain("first answer");
+		expect(JSON.stringify(after)).not.toContain("second");
 	});
 
 	it("runs a prompt through the real Agent loop, streams events and reports the file change with a diff", async () => {
@@ -1963,6 +2013,108 @@ describe("Web host (real runtime with a faux provider)", () => {
 		await expect(fx.post("/api/providers/custom/delete", { id: "form-provider" })).rejects.toThrow(
 			/No such provider/,
 		);
+	});
+
+	it("sets up Nebius Token Factory from one pasted key and gives each unset job its Nemotron model", async () => {
+		// Token Factory's model list, as the account sees it: Nano under the listed spelling, and one model of another maker.
+		const nebius = await startEndpoint((req, res) => {
+			if (req.headers.authorization !== "Bearer nb-good") {
+				res.statusCode = 401;
+				res.end('{"detail":"Invalid API key"}');
+				return;
+			}
+			res.setHeader("content-type", "application/json");
+			res.end(
+				JSON.stringify({
+					data: [
+						{ id: "nvidia/Nemotron-3-Ultra-550b-a55b" },
+						{ id: "nvidia/Nemotron-3_5-Lightning" },
+						{ id: "nvidia/Nemotron-3.5-Super-VL" },
+						{ id: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B" },
+						{ id: "zai-org/GLM-5.3-Flash" },
+					],
+				}),
+			);
+		});
+		const fx = await start({ nebiusBaseUrl: nebius.baseUrl });
+		const mainBefore = fx.faux.getModel();
+
+		expect(await fx.get("/api/providers/nebius")).toMatchObject({
+			configured: false,
+			hasKey: false,
+			apiKeysUrl: "https://tokenfactory.nebius.com/project/api-keys",
+			consoleUrl: "https://tokenfactory.nebius.com/",
+			spend: null,
+		});
+		// Without a key there is nothing to check; a refused key writes nothing.
+		expect(await fx.post("/api/providers/nebius/setup", {})).toMatchObject({ ok: false, code: "missing_key" });
+		expect(await fx.post("/api/providers/nebius/setup", { apiKey: "nb-wrong" })).toMatchObject({
+			ok: false,
+			code: "rejected_key",
+		});
+		expect((await fx.get("/api/providers/custom")).providers).toEqual([]);
+
+		const result = await fx.post("/api/providers/nebius/setup", { apiKey: " nb-good " });
+		expect(result).toMatchObject({ ok: true, missing: [], listError: null });
+		expect(result.models.map((m: any) => [m.slot, m.id])).toEqual([
+			["ultra", "nvidia/Nemotron-3-Ultra-550b-a55b"],
+			["lightning", "nvidia/Nemotron-3_5-Lightning"],
+			["vision", "nvidia/Nemotron-3.5-Super-VL"],
+			["nano", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"],
+		]);
+		// The faux model already works, so the main model stays; every helper job had no model and gets one.
+		expect(result.kept).toEqual(["main"]);
+		expect(result.assigned).toEqual(
+			expect.arrayContaining(["compactionModel", "subAgent", "conversationNaming", "visionAssistant"]),
+		);
+		// Vision and sub-agents were never touched, so they are turned on; naming was turned off by the user and stays off.
+		expect(result.turnedOn).toEqual(expect.arrayContaining(["visionAssistant", "subAgent", "fallbackModel"]));
+		expect(result.turnedOn).not.toContain("conversationNaming");
+
+		const custom = await fx.get("/api/providers/custom");
+		const entry = custom.providers.find((p: any) => p.id === "nebius");
+		expect(entry.config).toMatchObject({
+			name: "Nebius Token Factory",
+			baseUrl: nebius.baseUrl,
+			api: "openai-completions",
+		});
+		expect(entry.config.models).toHaveLength(4);
+		expect(JSON.stringify(custom)).not.toContain("nb-good");
+		const listed = (await fx.get("/api/providers")).providers.find((p: any) => p.id === "nebius");
+		expect(listed).toMatchObject({ configured: true, enabled: true, modelCount: 4 });
+
+		const settings = (await fx.get("/api/settings")).items as Array<{ id: string; value: any }>;
+		const value = (id: string) => settings.find((s) => s.id === id)?.value;
+		expect(value("compactionModel")).toMatchObject({ provider: "nebius", model: "nvidia/Nemotron-3_5-Lightning" });
+		expect(value("subAgent")).toMatchObject({
+			provider: "nebius",
+			model: "nvidia/Nemotron-3_5-Lightning",
+			enabled: true,
+		});
+		expect(value("conversationNaming")).toMatchObject({
+			provider: "nebius",
+			model: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+			enabled: false,
+		});
+		expect(value("translation")).toMatchObject({
+			provider: "nebius",
+			model: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+		});
+		expect(value("visionAssistant")).toMatchObject({
+			provider: "nebius",
+			model: "nvidia/Nemotron-3.5-Super-VL",
+			enabled: true,
+		});
+		expect(fx.hub.host.session.model?.id).toBe(mainBefore.id);
+
+		// Again, with the saved key: nothing is added twice and every job keeps what it has.
+		const again = await fx.post("/api/providers/nebius/setup", {});
+		expect(again).toMatchObject({ ok: true, assigned: [], turnedOn: [] });
+		expect(
+			(await fx.get("/api/providers/custom")).providers.find((p: any) => p.id === "nebius").config.models,
+		).toHaveLength(4);
+		expect(await fx.get("/api/providers/nebius")).toMatchObject({ configured: true, hasKey: true });
+		expect(nebius.requests.every((r) => r.url === "/v1/models")).toBe(true);
 	});
 
 	it("keeps a key typed in the provider form, reports the provider as configured and takes the same key again", async () => {

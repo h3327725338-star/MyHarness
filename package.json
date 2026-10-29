@@ -22,6 +22,7 @@
 		"build": "cd packages/ai && npm run build && cd ../agent && npm run build && cd ../storage/sqlite-node && npm run build && cd ../../coding-agent && npm run build",
 		"desktop:dev": "node packages/desktop/dev.mjs",
 		"desktop:pack": "npm run build && node packages/desktop/build.mjs",
+		"desktop:installer": "npm run build && node packages/desktop/build.mjs --installer",
 		"desktop:test": "node --test packages/desktop/test/*.test.cjs",
 		"build:offline": "cd packages/ai && npm run build:offline && cd ../agent && npm run build && cd ../storage/sqlite-node && npm run build && cd ../../coding-agent && npm run build",
 		"check": "biome check --write --error-on-warnings . && node scripts/run-checks-parallel.mjs",

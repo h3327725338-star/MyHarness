@@ -28,6 +28,8 @@ describe("explainProviderError", () => {
 		["529 overloaded_error", "负载过高"],
 		["429 Too Many Requests", "限流"],
 		["429 insufficient_quota: You exceeded your current quota", "额度或余额不足"],
+		["402 status code (no body)", "额度或余额不足"],
+		['403 {"detail":"Your balance is negative"}', "额度或余额不足"],
 		["401 Unauthorized", "认证失败"],
 		['403 {"error":"forbidden"}', "拒绝访问"],
 		["404 model_not_found: The model `gpt-x` does not exist", "找不到请求的模型"],

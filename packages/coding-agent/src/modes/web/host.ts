@@ -64,6 +64,7 @@ import {
 	messageToWire,
 	RUN_CHANGES_ENTRY,
 	runChangesToWire,
+	SCHEDULED_RUN_ENTRY,
 	sanitizeDetails,
 	subAgentStateToWire,
 	toWireModel,
@@ -1338,11 +1339,21 @@ export class WebHost {
 			// pencil depends on (web/js/transcript.js renders it only with an id; web/js/store.js attachEntryId
 			// fills live items from this event). Only the fields that back-fill matches on go out, so the text,
 			// images and details already sent with message_start/message_end are not shipped a second time.
+			// The live row carries the message's own time (message_start); the entry's time is when it was written, a
+			// moment later (longer when pictures are saved first), so the match key carries the message's time.
 			const item = entriesToWire([entry])[0];
-			if (item) this.broadcast("entry_appended", { id: entry.id, item: appendedMatchKey(item) });
+			const ts = typeof entry.message.timestamp === "number" ? entry.message.timestamp : undefined;
+			if (item)
+				this.broadcast("entry_appended", {
+					id: entry.id,
+					item: appendedMatchKey(ts === undefined ? item : { ...item, ts }),
+				});
 		} else if (
 			entry.type === "custom_message" ||
-			(entry.type === "custom" && (entry.customType === "web-git-status" || entry.customType === RUN_CHANGES_ENTRY))
+			(entry.type === "custom" &&
+				(entry.customType === "web-git-status" ||
+					entry.customType === RUN_CHANGES_ENTRY ||
+					entry.customType === SCHEDULED_RUN_ENTRY))
 		) {
 			const items = entriesToWire([entry]);
 			if (items.length > 0) this.broadcast("entry_appended", { id: entry.id, item: items[0] });
@@ -1792,7 +1803,8 @@ export class WebHost {
 				persisted: manager.isPersisted(),
 				header: manager.getHeader() ? { timestamp: manager.getHeader()?.timestamp } : null,
 			},
-			model: model ? toWireModel(model) : null,
+			// The agent core's placeholder (provider "unknown") stands for "no model set up yet": the composer shows that.
+			model: model && model.provider !== "unknown" ? toWireModel(model) : null,
 			thinking: {
 				level: session.thinkingLevel,
 				levels: session.getAvailableThinkingLevels(),

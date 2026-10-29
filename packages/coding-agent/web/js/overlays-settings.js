@@ -14,12 +14,14 @@ import { ModelRefPicker } from "./model-menu.js";
 import { playNotificationSound } from "./notification-sounds.js";
 import { notificationPermission } from "./notifications.js";
 import { ProvidersPage } from "./providers-page.js";
+import { openServicePage } from "./service-keys.js";
 import { RUN_MODES, runModeOf } from "./run-modes.js";
 import { allowBrowserNotifications, saveSetting } from "./settings-apply.js";
 import { SearchableMultiSelect } from "./settings-multiselect.js";
 import { Select } from "./select.js";
 import { SyncPage } from "./sync-page.js";
 import { ConnectPage } from "./connect-page.js";
+import { SchedulesPage } from "./schedules.js";
 import { AppZoomControl } from "./app-zoom.js";
 
 export { ProviderEditorHost, deleteCustomProvider } from "./providers-page.js";
@@ -32,6 +34,7 @@ export const NAV = [
 	{ id: "git", label: N_("Git"), icon: "gitBranch" },
 	{ id: "providers", label: N_("Providers"), icon: "key" },
 	{ id: "connect", label: N_("Connections"), icon: "plug" },
+	{ id: "schedules", label: N_("Scheduled tasks"), icon: "bell" },
 	{ id: "sync", label: N_("Google Drive"), icon: "drive" },
 	{ id: "search", label: N_("Web search"), icon: "globe" },
 	{ id: "code", label: N_("Code Intelligence"), icon: "wrench" },
@@ -78,7 +81,7 @@ function Row({ label, description, children, stack, off, wide, note }) {
 function Card({ title, description, action, children, collapsible = false }) {
 	const [open, setOpen] = useState(false);
 	const body = html`<div class="set-card-body">${children}</div>`;
-	return html`<section class="set-card">
+	return html`<section class=${`set-card ${collapsible ? "collapsible" : ""}`}>
 		${title ? html`<div class="set-card-head">${collapsible ? html`<button class="set-card-toggle grow" aria-expanded=${open} onClick=${() => setOpen(!open)}><${Icon} name="chevronRight" size=${13} class="disclose" /><strong>${title}</strong></button>` : html`<div class="col grow"><strong>${title}</strong>${description ? html`<span class="set-card-desc">${description}</span>` : null}</div>`}${action || null}</div>` : null}
 		${collapsible ? html`<${Collapse} open=${open}>${body}<//>` : body}
 	</section>`;
@@ -375,6 +378,14 @@ const describe = (item) => {
 		const base = t("Note where each chat stands, in the background (extra model calls). Unset: compaction model, then main model.");
 		return item.using ? `${base} ${t("Now: {model}", { model: item.using.replace(/ · own model$/, ` · ${t("own model")}`).replace(/ · compaction model$/, ` · ${t("compaction model")}`).replace(/ · main model$/, ` · ${t("main model")}`) })}` : `${base} ${t("No usable model right now.")}`;
 	}
+	if (item.id === "bookmarkNotes") {
+		const base = t("Write what each bookmark is for, from the page and what Auto Memory knows about you. Unset: Conversation naming model, then main model.");
+		return item.using ? `${base} ${t("Now: {model}", { model: item.using.replace(/ · own model$/, ` · ${t("own model")}`).replace(/ · conversation naming model$/, ` · ${t("conversation naming model")}`).replace(/ · main model$/, ` · ${t("main model")}`) })}` : `${base} ${t("No usable model right now.")}`;
+	}
+	if (item.id === "scheduledTasks") {
+		const base = t("Runs scheduled Agent tasks, in the chat each run starts. Unset: main model.");
+		return item.using ? `${base} ${t("Now: {model}", { model: item.using.replace(/ · own model$/, ` · ${t("own model")}`).replace(/ · main model$/, ` · ${t("main model")}`) })}` : `${base} ${t("No usable model right now.")}`;
+	}
 	if (SHORT_DESCRIPTION[item.id]) return t(SHORT_DESCRIPTION[item.id]);
 	const text = item.section === "Terminal" ? String(item.description || "").replace(/^Terminal UI: /, "") : item.description;
 	return text ? serverText(text.charAt(0).toUpperCase() + text.slice(1)) : "";
@@ -511,7 +522,8 @@ function TavilyKeyRow({ off }) {
 		if (!(await confirmDialog({ title: t("Delete this API key?"), message: t("The Tavily key “{label}” is removed from this computer.", { label: key.label }), confirmLabel: t("Delete API key"), danger: true }))) return;
 		await act(() => post("/api/settings/tavily-key/delete", { id: key.id }, ""), t("API key deleted"));
 	};
-	const total = !configured ? t("Not configured")
+	// Without a key Tavily still searches, through its free keyless access (rate limited by Tavily).
+	const total = !configured ? t("Free keyless access, rate limited")
 		: known.total === undefined ? (usage.loading || !Object.keys(known.byId).length ? t("Checking…") : t("Could not check"))
 		: known.total === null ? t("Unlimited")
 		: known.unknown ? `${t("{count} searches left", { count: known.total })} · ${t("{n} keys unavailable", { n: known.unknown })}`
@@ -532,7 +544,7 @@ function TavilyKeyRow({ off }) {
 			<span class="set-label">Tavily API Key</span>
 			<span class="set-desc row tavily-usage" role="status" title=${stale && usage.error ? serverText(usage.error, usage.error) : undefined}><span class="truncate">${total}</span>${stale ? html`<span class="dim tavily-usage-stale">${t("not updated")}</span>` : null}${configured ? html`<button class="icon-btn sm" disabled=${usage.loading} title=${t("Refresh")} aria-label=${t("Refresh")} onClick=${refresh}>${usage.loading ? html`<${Spinner} />` : html`<${Icon} name="refresh" size=${12} />`}</button>` : null}</span>
 		</div>
-		<div class="set-control"><button class="btn sm" aria-expanded=${open} onClick=${() => setOpen(!open)}><${Icon} name="chevronRight" size=${13} class="disclose" />${count ? t("Keys ({n})", { n: count }) : t("Add API key")}</button></div>
+		<div class="set-control row"><button class="btn sm ghost" title=${t("Opens Tavily: sign in, create a free key and paste it in the strip above the page.")} onClick=${() => openServicePage("tavily")}><${Icon} name="externalLink" size=${13} />${t("Get a free key")}</button><button class="btn sm" aria-expanded=${open} onClick=${() => setOpen(!open)}><${Icon} name="chevronRight" size=${13} class="disclose" />${count ? t("Keys ({n})", { n: count }) : t("Add API key")}</button></div>
 	</div>
 	<${Collapse} open=${open}>
 		<div class="tavily-keys">
@@ -670,29 +682,51 @@ function LanguageModule({ module, progress, busy, open, onOpen, onInstall, onEna
 	</div>`;
 }
 
+/** A key combination as key caps: "Ctrl+Shift+F5" → Ctrl Shift F5 ("Ctrl++" is Ctrl and the plus key). */
+const keyCaps = (key) => key.split(/\+(?!$)/).map((part, index) => html`<kbd class="kbd" key=${index}>${part}</kbd>`);
+
+/** One shortcut. Focus it and press a combination to change it; Backspace, Delete or × removes it, Escape leaves it as it
+ *  was (and does not close Settings). A combination that collides with another is shown in red with what it collides
+ *  with, and not saved. */
+function ShortcutField({ item, values }) {
+	const [recording, setRecording] = useState(false);
+	const [refused, setRefused] = useState("");
+	const saved = shortcutFor(item.id, values);
+	const why = refused ? shortcutConflict(item.id, refused, values) : "";
+	const save = (key) => {
+		setRefused("");
+		setView({ shortcuts: { ...values, [item.id]: key } });
+	};
+	const onKeyDown = (event) => {
+		if (event.key === "Tab" && !event.ctrlKey && !event.altKey) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const bare = !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+		if (bare && event.key === "Escape") return event.currentTarget.blur();
+		if (bare && (event.key === "Backspace" || event.key === "Delete")) return save("");
+		const key = eventShortcut(event);
+		if (!key || key === saved) return setRefused("");
+		if (shortcutConflict(item.id, key, values)) setRefused(key);
+		else save(key);
+	};
+	const shown = refused || saved;
+	return html`<${Row} label=${t(item.label)} note=${why ? html`<span class="set-desc c-danger" role="alert">${why}</span>` : null}>
+		<div class=${`shortcut-field ${why ? "invalid" : ""}`}>
+			<button type="button" class="shortcut-keys" data-shortcut-editor data-esc-owner=${recording ? "true" : undefined} aria-label=${t(item.label)} aria-invalid=${!!why} title=${t("Click, then press the keys you want")} onFocus=${() => setRecording(true)} onBlur=${() => { setRecording(false); setRefused(""); }} onKeyDown=${onKeyDown}>
+				${recording && !refused ? html`<span class="shortcut-hint">${t("Press keys…")}</span>` : shown ? keyCaps(shown) : html`<span class="shortcut-hint">${t("None")}</span>`}
+			</button>
+			<button type="button" class="icon-btn sm shortcut-clear" title=${t("Remove the shortcut")} aria-label=${t("Remove the shortcut")} disabled=${!saved} onPointerDown=${(event) => event.preventDefault()} onClick=${() => save("")}><${Icon} name="x" size=${12} /></button>
+		</div>
+	<//>`;
+}
+
 function Shortcuts() {
-	const values = useStore((s) => s.view.shortcuts);
-	const [drafts, setDrafts] = useState({});
-	const [error, setError] = useState("");
-	const current = { ...values, ...drafts };
-	return html`<${Card} title=${t("Keyboard shortcuts")} description=${t("Focus a field and press Ctrl+Alt and a character key. Changes apply immediately.")}>
-		${SHORTCUTS.map((item) => {
-			const value = shortcutFor(item.id, current);
-			const conflict = shortcutConflict(item.id, value, current);
-			return html`<${Row} key=${item.id} label=${t(item.label)} description=${conflict}><input data-shortcut-editor class=${`field ${conflict ? "invalid" : ""}`} style=${conflict ? { borderColor: "var(--danger)", color: "var(--danger)" } : {}} readonly aria-invalid=${!!conflict} aria-label=${t(item.label)} value=${value} onKeyDown=${(event) => {
-				event.preventDefault(); event.stopPropagation();
-				const key = eventShortcut(event);
-				if (!key) return;
-				const next = { ...current, [item.id]: key };
-				const warning = shortcutConflict(item.id, key, next);
-				setDrafts((old) => ({ ...old, [item.id]: key }));
-				setError(warning);
-				if (warning) toast(warning, "warning");
-				else { setView({ shortcuts: next }); setDrafts({}); }
-			}} /><//>`;
-		})}
-		${error ? html`<div class="notice danger" role="alert">${error}</div>` : null}
-		<button class="btn sm" onClick=${() => { setView({ shortcuts: {} }); setDrafts({}); setError(""); }}>${t("Reset to defaults")}</button>
+	const values = useStore((s) => s.view.shortcuts) || {};
+	const items = SHORTCUTS.filter((item) => !item.desktop || builtinBrowserAvailable());
+	const changed = items.some((item) => Object.hasOwn(values, item.id));
+	const reset = html`<button class="btn ghost sm" disabled=${!changed} onClick=${() => setView({ shortcuts: {} })}><${Icon} name="undo" size=${13} />${t("Reset to defaults")}</button>`;
+	return html`<${Card} title=${t("Keyboard shortcuts")} description=${t("Click a shortcut and press the keys you want; Backspace or × removes it. Changes apply at once.")} action=${reset}>
+		${items.map((item) => html`<${ShortcutField} key=${item.id} item=${item} values=${values} />`)}
 	<//>`;
 }
 
@@ -1066,6 +1100,8 @@ const GIT_CARDS = {
  */
 function GitPreferences() {
 	const [saved, setSaved] = useState(null);
+	// The instruction boxes start folded, like the personal prompts; the modes stay in view.
+	const [unfolded, setUnfolded] = useState({ commit: false, push: false });
 	const [text, setText] = useState({ commit: "", push: "" });
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -1119,8 +1155,15 @@ function GitPreferences() {
 						<${Toggle} checked=${!!part.skipHooks} disabled=${!direct} label=${t("Skip Git hooks")} onChange=${(on) => apply({ commit: { skipHooks: on } })} />
 					<//>`
 				: null}
-			<${Row} wide label=${t(GIT_CARDS[key].instructions)} description=${t("Used in “With instructions” mode. Whatever they say, checks are never bypassed, nothing is force-pushed and pushed commits are never rewritten.")} off=${direct}>
-				<div class="col git-instructions">
+			<div class=${`git-instr ${direct ? "off" : ""}`}>
+				<button type="button" class="git-instr-toggle" aria-expanded=${unfolded[key]} onClick=${() => setUnfolded({ ...unfolded, [key]: !unfolded[key] })}>
+					<${Icon} name="chevronRight" size=${13} class="disclose" />
+					<span class="set-text">
+						<span class="set-label">${t(GIT_CARDS[key].instructions)}</span>
+						<span class="set-desc">${t("Used in “With instructions” mode. Whatever they say, checks are never bypassed, nothing is force-pushed and pushed commits are never rewritten.")}</span>
+					</span>
+				</button>
+				<${Collapse} open=${unfolded[key]}><div class="col git-instructions">
 					<div class="personal-expand">
 						<textarea
 							class="field personal-prompt"
@@ -1146,8 +1189,8 @@ function GitPreferences() {
 						</button>
 					</div>
 					${text[key] !== part.defaultInstructions ? html`<div class="row"><button class="link-btn" onClick=${() => setText({ ...text, [key]: part.defaultInstructions })}>${t("Restore default")}</button></div>` : null}
-				</div>
-			<//>
+				</div><//>
+			</div>
 		<//>`;
 	};
 	return html`
@@ -1174,48 +1217,152 @@ function GitPreferences() {
 
 function About() {
 	const snap = useStore((s) => s.snap);
-	const runMode = runModeOf(useStore((s) => s.view.runMode));
-	const shortcuts = useStore((s) => s.view.shortcuts);
+	// The shortcuts have their own page (Keyboard shortcuts).
 	return html`
 		<${Card} title=${t("MyHarness")}>
 			<div class="kv about-kv"><span>${t("Version")}</span><span>${snap?.app.version}</span><span>${t("Platform")}</span><span>${snap?.app.platform}</span><span>${t("Server started")}</span><span>${snap ? new Date(snap.app.startedAt).toLocaleString(getLang()) : ""}</span><span>${t("Workspace")}</span><span class="mono truncate">${snap?.cwd}</span></div>
 			<div class="set-desc about-note">${t("The Web UI is served only on this computer (127.0.0.1). The terminal UI and this UI share the same sessions, settings and providers.")}</div>
-		<//>
-		<${Card} title=${t("Keyboard shortcuts")}>
-			<div class="kv shortcuts about-kv">
-				${[
-					["Enter", t("Send (while running: {action})", { action: t(RUN_MODES[runMode].label) })],
-					["Shift+Enter", t("New line")],
-					["Alt+Enter", t("While running: queue the message for after the run")],
-					["Esc", t("Stop the running task (input box empty)")],
-					["↑ / ↓", t("Message history in the input box")],
-					["/  ·  @  ·  !", t("Commands & skills · mention a file · run a shell command")],
-					...SHORTCUTS.map((item) => [shortcutFor(item.id, shortcuts), t(item.label)]),
-				].map(([key, what]) => html`<span class="mono" key=${key}>${key}</span><span>${what}</span>`)}
-			</div>
 		<//>
 		${snap?.extensionErrors?.length ? html`<${Card} title=${t("Recent extension errors")}>${snap.extensionErrors.map((e, i) => html`<div class="notice danger" key=${i}>${e.extensionPath}: ${clip(e.error, 300)}</div>`)}<//>` : null}
 		${snap?.diagnostics?.length ? html`<${Card} title=${t("Startup diagnostics")}>${snap.diagnostics.map((d, i) => html`<div class=${`notice ${d.type === "error" ? "danger" : ""}`} key=${i}>${d.message}</div>`)}<//>` : null}
 		<div class="row"><button class="btn danger" onClick=${actions.shutdown}><${Icon} name="quit" size=${14} />${t("Quit MyHarness")}</button></div>`;
 }
 
+/** Rows the pages draw themselves (the server's settings list has the rest), for the search: page, name, note, and
+ *  "desktop" for a row only the desktop app has. */
+const SEARCH_ROWS = [
+	["appearance", N_("UI language"), N_("Interface only; not messages.")],
+	["appearance", N_("Display mode"), N_("System follows Windows.")],
+	["appearance", N_("Animations"), N_("Loading, folds and fades.")],
+	["appearance", N_("Reading width"), N_("620–1100 px; empty: auto.")],
+	["appearance", N_("Color theme"), N_("Saved for the current chat mode. Dark colors only; light uses the shared palette.")],
+	["appearance", N_("Open web links in"), N_("Links in chats and file previews. Sign-in pages always use the system browser."), "desktop"],
+	["appearance", N_("Interface zoom"), N_("Ctrl + / Ctrl − / Ctrl 0, or Ctrl + mouse wheel. A website tab zooms on its own."), "desktop"],
+	["appearance", N_("Start with Windows"), N_("Opens MyHarness when you sign in to Windows."), "desktop"],
+	["appearance", N_("Close button"), N_("Minimize to tray keeps running tasks going in the background."), "desktop"],
+	["conversation", N_("While a task is running")],
+	["conversation", N_("Run steps"), N_("Default state after a reply.")],
+	["personal", N_("Coding mode global personal prompt"), N_("Injected into the next requests of Coding chats only, ahead of the built-in system prompt.")],
+	["personal", N_("General mode global personal prompt"), N_("Injected into the next requests of General chats only, ahead of the built-in system prompt.")],
+	["git", N_("Commit"), N_("Checks the changes and writes the description as your instructions ask; repairs failed pre-commit checks.")],
+	["git", N_("Push"), N_("Checks the commits as your instructions ask and pushes; CI is followed in the background and repaired when they ask for it.")],
+	["git", N_("Skip Git hooks"), N_("Direct mode only: commit with --no-verify, so pre-commit checks do not run.")],
+	["git", N_("Commit instructions")],
+	["git", N_("Push instructions")],
+	["providers", N_("API keys")],
+	["sync", N_("Sync with Google Drive")],
+	["sync", N_("Cloud folder")],
+	["sync", N_("Automatic sync")],
+	["sync", N_("What syncs")],
+	["sync", N_("Bookmarks, shortcuts and site settings")],
+	["sync", N_("File conflicts")],
+	["sync", N_("Advanced: your own Google OAuth client")],
+	["code", N_("Language modules")],
+	["about", N_("Version")],
+	["about", N_("Quit MyHarness")],
+];
+
+/** Everything the search looks through: the pages, the server's settings and the rows the pages draw themselves. Each
+ *  entry keeps its English words too, so a search in either language finds it. */
+function searchEntries(settings) {
+	const desktop = builtinBrowserAvailable();
+	const entries = NAV.map((page) => ({ key: `page:${page.id}`, section: page.id, label: t(page.label), description: PAGE_NOTE[page.id] ? t(PAGE_NOTE[page.id]) : "", words: [page.label, PAGE_NOTE[page.id] || ""], page: true }));
+	for (const item of settings?.items || []) {
+		const section = sectionOf(item);
+		if (NAV.some((page) => page.id === section)) entries.push({ key: `item:${item.id}`, section, label: serverText(item.label), description: describe(item), words: [item.label, item.description || ""] });
+	}
+	for (const [section, label, description, only] of SEARCH_ROWS) {
+		if (only !== "desktop" || desktop) entries.push({ key: `row:${section}:${label}`, section, label: t(label), description: description ? t(description) : "", words: [label, description || ""] });
+	}
+	for (const item of SHORTCUTS) {
+		if (!item.desktop || desktop) entries.push({ key: `shortcut:${item.id}`, section: "shortcuts", label: t(item.label), description: shortcutFor(item.id, state.view.shortcuts), words: [item.label] });
+	}
+	return entries;
+}
+
+/** The entries with every word of `query` in their name, note or English words; those with all of them in the name first. */
+export function searchSettings(entries, query) {
+	const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+	if (!terms.length) return [];
+	const has = (text) => terms.every((term) => text.toLowerCase().includes(term));
+	const found = entries.filter((entry) => has([entry.label, entry.description, ...entry.words].join("\n")));
+	return found.sort((a, b) => Number(!has(a.label)) - Number(!has(b.label)) || Number(!a.page) - Number(!b.page));
+}
+
+/** After a jump to a search result: brings its row into view, unfolds it when it folds, and marks it for a moment. The
+ *  page may still be loading (Git, Google Drive), so it looks again for a while. */
+function revealSetting(label) {
+	let tries = 0;
+	const look = () => {
+		const body = document.querySelector(".settings-body");
+		const name = body && [...body.querySelectorAll(".set-label, .set-card-head strong")].find((node) => node.textContent.trim() === label || node.firstChild?.textContent?.trim() === label);
+		if (!name) {
+			if (++tries < 20) setTimeout(look, 100);
+			return;
+		}
+		const fold = name.closest(".set-card-toggle, .git-instr-toggle");
+		if (fold?.getAttribute("aria-expanded") === "false") fold.click();
+		const row = name.closest(".set-row, .git-instr-toggle, .set-card-head") || name;
+		row.scrollIntoView({ block: "center", behavior: motionEnabled() ? "smooth" : "auto" });
+		for (const node of document.querySelectorAll(".set-hit")) node.classList.remove("set-hit");
+		row.classList.add("set-hit");
+		setTimeout(() => row.classList.remove("set-hit"), 1600);
+	};
+	requestAnimationFrame(look);
+}
+
+function SearchResults({ results, query, onPick }) {
+	const pageOf = (section) => NAV.find((page) => page.id === section);
+	return html`<div class="settings-title"><h2>${t("Search results")}</h2><span class="set-desc">${results.length ? t("{count} matching settings", { count: results.length }) : t("Nothing matches “{query}”.", { query })}</span></div>
+		${results.length
+			? html`<section class="set-card settings-results">${results.slice(0, 60).map((entry) => {
+					const page = pageOf(entry.section);
+					return html`<button key=${entry.key} type="button" class="settings-result" onClick=${() => onPick(entry)}>
+						<span class="settings-result-text"><span class="set-label">${entry.label}</span>${entry.description ? html`<span class="set-desc truncate">${entry.description}</span>` : null}</span>
+						${entry.page ? null : html`<span class="settings-result-page"><${Icon} name=${page.icon} size=${13} />${t(page.label)}</span>`}
+					</button>`;
+				})}</section>`
+			: null}`;
+}
+
 export function SettingsModal() {
 	const section = useStore((s) => s.view.settingsSection);
 	const settings = useStore((s) => s.settings);
 	const models = useStore((s) => s.models);
+	const [query, setQuery] = useState("");
 	useEffect(() => {
 		loadSettings();
 		if (!state.models) loadModels();
 	}, []);
 	const items = useMemo(() => (settings?.items || []).filter((item) => sectionOf(item) === section), [settings, section]);
+	const results = useMemo(() => (query.trim() ? searchSettings(searchEntries(settings), query) : []), [query, settings]);
 	const close = () => setView({ settingsOpen: false });
 	const current = NAV.find((n) => n.id === section) || NAV[0];
+	const searching = !!query.trim();
+	const pick = (entry) => {
+		setQuery("");
+		setView({ settingsSection: entry.section });
+		if (!entry.page) revealSetting(entry.label);
+	};
+	const open = (id) => {
+		setQuery("");
+		setView({ settingsSection: id });
+	};
 	return html`<${Modal} title=${t("Settings")} onClose=${close} width=${900} class="settings-modal" focusInput=${false}>
 		<div class="settings">
-			<nav class="settings-nav" aria-label=${t("Settings sections")}>${NAV.map((n) => html`<button key=${n.id} class=${section === n.id ? "on" : ""} onClick=${() => setView({ settingsSection: n.id })}><${Icon} name=${n.icon} size=${15} />${t(n.label)}</button>`)}</nav>
-			<div class=${`settings-body ${section === "providers" ? "wide" : ""}`}>
-				<div class="settings-title"><h2>${t(current.label)}</h2>${PAGE_NOTE[current.id] ? html`<span class="set-desc">${t(PAGE_NOTE[current.id])}</span>` : null}</div>
-				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "sync" ? html`<${SyncPage} />` : section === "connect" ? html`<${ConnectPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "shortcuts" ? html`<${Shortcuts} />` : section === "personal" ? html`<${Personalization} />` : section === "git" ? html`<${GitPreferences} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}
+			<nav class="settings-nav" aria-label=${t("Settings sections")}>
+				<label class="settings-search">
+					<${Icon} name="search" size=${14} />
+					<input class="field sm" type="search" placeholder=${t("Search settings")} aria-label=${t("Search settings")} value=${query} data-esc-owner=${query ? "true" : undefined} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${(e) => {
+						if (e.key === "Escape" && query) { e.preventDefault(); setQuery(""); }
+						else if (e.key === "Enter" && results[0]) { e.preventDefault(); pick(results[0]); }
+					}} />
+				</label>
+				${NAV.map((n) => html`<button key=${n.id} class=${!searching && section === n.id ? "on" : ""} onClick=${() => open(n.id)}><${Icon} name=${n.icon} size=${15} />${t(n.label)}</button>`)}
+			</nav>
+			<div class=${`settings-body ${section === "providers" && !searching ? "wide" : ""}`}>
+				${searching ? html`<${SearchResults} results=${results} query=${query.trim()} onPick=${pick} />` : html`<div class="settings-title"><h2>${t(current.label)}</h2>${PAGE_NOTE[current.id] ? html`<span class="set-desc">${t(PAGE_NOTE[current.id])}</span>` : null}</div>
+				${section === "appearance" ? html`<${Appearance} />` : section === "conversation" ? html`<${Appearance} conversation=${true} /><${SettingsList} items=${items} models=${models} />` : section === "providers" ? html`<${ProvidersPage} />` : section === "sync" ? html`<${SyncPage} />` : section === "connect" ? html`<${ConnectPage} />` : section === "schedules" ? html`<${SchedulesPage} />` : section === "code" ? html`<${CodeIntelligence} items=${items} />` : section === "shortcuts" ? html`<${Shortcuts} />` : section === "personal" ? html`<${Personalization} />` : section === "git" ? html`<${GitPreferences} />` : section === "about" ? html`<${About} />` : !settings ? html`<${Spinner} />` : section === "safety" ? html`<${Safety} items=${items} models=${models} />` : html`<${SettingsList} items=${items} models=${models} />`}`}
 				${settings?.errors?.length ? html`<div class="notice danger">${settings.errors.map((e) => `${e.scope}: ${e.message}`).join("\n")}</div>` : null}
 			</div>
 		</div>

@@ -533,8 +533,9 @@ describe("WebSearchService search", () => {
 		expect(network.calls.slice(after).map((url) => url.hostname)).toContain("lite.duckduckgo.com");
 	});
 
-	it("uses the Tavily API keys in order and reports a missing key only for that engine", async () => {
+	it("uses the Tavily API keys in order, and Tavily's free keyless access without a key", async () => {
 		const bodies: unknown[] = [];
+		let keylessSpent = false;
 		const routes: Record<string, Route> = {
 			...engineRoutes,
 			"api.tavily.com": (url, init) => {
@@ -542,7 +543,15 @@ describe("WebSearchService search", () => {
 				expect(init?.method).toBe("POST");
 				expect(url.search).toBe("");
 				bodies.push(JSON.parse(String(init?.body)));
-				const auth = new Headers(init?.headers).get("Authorization");
+				const headers = new Headers(init?.headers);
+				const auth = headers.get("Authorization");
+				if (!auth && headers.get("X-Tavily-Access-Mode") === "keyless") {
+					return keylessSpent
+						? new Response("Keyless limit reached. Sign up for a free API key.", { status: 429 })
+						: Response.json({
+								results: [{ title: "Free", url: "https://keyless-result.example/", content: "k" }],
+							});
+				}
 				if (auth === "Bearer spent") return new Response("quota", { status: 432 });
 				return auth === "Bearer secret-key"
 					? Response.json({ results: [{ title: "API", url: "https://api-result.example/", content: "d" }] })
@@ -553,10 +562,26 @@ describe("WebSearchService search", () => {
 		delete process.env.TAVILY_API_KEY;
 		try {
 			const keys = new WebSearchApiKeys(new InMemoryAuthStorageBackend());
-			const missing = createService({ engines: ["duckduckgo", "tavily"], pagesPerSearch: 0 }, routes, { keys });
-			const withoutKey = await missing.service.search({ queries: ["x"] });
-			expect(withoutKey.failures).toEqual([expect.objectContaining({ engine: "tavily", code: "missing_api_key" })]);
-			expect(missing.calls.some((url) => url.hostname === "api.tavily.com")).toBe(false);
+			// No key: the search goes through the keyless access, with no Authorization header at all.
+			const keyless = createService({ engines: ["duckduckgo", "tavily"], pagesPerSearch: 0 }, routes, { keys });
+			const withoutKey = await keyless.service.search({ queries: ["x"] });
+			expect(withoutKey.failures).toEqual([]);
+			expect(withoutKey.results).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ url: "https://keyless-result.example/", source: "Tavily API" }),
+				]),
+			);
+			// Once Tavily says the free access is used up, the failure names it, so the page can offer a free key.
+			keylessSpent = true;
+			const spent = createService({ engines: ["duckduckgo", "tavily"], pagesPerSearch: 0 }, routes, { keys });
+			const limited = await spent.service.search({ queries: ["y"] });
+			expect(limited.failures).toEqual([
+				expect.objectContaining({
+					engine: "tavily",
+					code: "keyless_limit",
+					message: expect.stringContaining("免费的 Tavily API Key"),
+				}),
+			]);
 
 			// Several keys are tried in list order: the refused first key hands the search to the second.
 			const wrongId = keys.add("tavily", "wrong", "Old");

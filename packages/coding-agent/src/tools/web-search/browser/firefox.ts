@@ -354,6 +354,11 @@ export interface LocalBrowserOptions {
 	findExecutable?: () => string | undefined;
 	/** Where the user's daily cookies of this browser are. Injectable for tests; defaults to the real daily profile. */
 	findDailyCookies?: () => DailyCookies | undefined;
+	/**
+	 * Nobody is there to solve a human check (a test running a page): `solveChallenge` keeps the browser headless and
+	 * never pulls a window to the front, as in a browser E2E run (MYHARNESS_TARGETED_BROWSER_E2E=1).
+	 */
+	unattended?: boolean;
 }
 
 function freePort(): Promise<number> {
@@ -478,6 +483,7 @@ export class LocalBrowser implements BrowserTransport {
 	private readonly rootDir: string;
 	private readonly findExecutable: () => string | undefined;
 	private readonly findDailyCookies: () => DailyCookies | undefined;
+	private readonly unattended: boolean;
 	private executable: string | undefined;
 	private session: Promise<Session> | undefined;
 	private releaseLock: (() => Promise<void>) | undefined;
@@ -506,6 +512,7 @@ export class LocalBrowser implements BrowserTransport {
 		this.executable = options.executable;
 		this.findExecutable = options.findExecutable ?? (() => findBrowserExecutable(this.kind));
 		this.findDailyCookies = options.findDailyCookies ?? (() => findDailyCookies(this.kind));
+		this.unattended = options.unattended === true;
 	}
 
 	/** Folder of profile slot `index`: the first one is the root folder itself, as before slots existed. */
@@ -596,7 +603,7 @@ export class LocalBrowser implements BrowserTransport {
 
 	private async runChallenge(request: BrowserChallengeRequest, signal?: AbortSignal): Promise<TransportPage> {
 		// Browser E2E runs have nobody to solve anything: keep their window hidden and never pull it to the front.
-		const unattended = process.env.MYHARNESS_TARGETED_BROWSER_E2E === "1";
+		const unattended = this.unattended || process.env.MYHARNESS_TARGETED_BROWSER_E2E === "1";
 		const session = await this.ensureSession({ headless: unattended, signal, lease: false });
 		const releaseForeground = unattended ? () => {} : keepChallengeForeground(session.child.pid);
 		try {

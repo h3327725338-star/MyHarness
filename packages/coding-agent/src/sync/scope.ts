@@ -9,6 +9,7 @@ import {
 } from "../config/paths/index.ts";
 import { WEB_PREFS_FILE } from "../config/web-prefs.ts";
 import { WorkspaceStore } from "../data/workspace-store.ts";
+import { readScheduleList, SCHEDULES_FILE, scheduleListHasContent, scheduleListText } from "../schedules/store.ts";
 import { listMemoryFiles, type MemoryFile } from "../session/memory/store.ts";
 import type { ModeStateStore } from "../session/mode-state.ts";
 import { readSessionHeader } from "../session/storage/jsonl/index.ts";
@@ -430,6 +431,29 @@ function* scanSteps(options: ScanOptions, entities: Map<string, ScannedEntity>):
 			mtimeMs: stat.mtimeMs,
 			size: stat.size,
 			meta: { name: `Browser ${file.id}` },
+		});
+	}
+
+	// 7. The scheduled tasks (schedules/store.ts): one record, published as normalized text so equal lists are equal on
+	// every computer. Deleted tasks stay in it as tombstones, so the record itself is never deleted.
+	const schedules = readScheduleList(agentDir);
+	if (scheduleListHasContent(schedules)) {
+		let schedulesMtime = Date.now();
+		try {
+			schedulesMtime = statSync(join(agentDir, SCHEDULES_FILE)).mtimeMs;
+		} catch {
+			// The list was just read; a vanished file only loses the time stamp.
+		}
+		const content = scheduleListText(schedules);
+		entities.set("schedules:list", {
+			key: "schedules:list",
+			kind: "schedules",
+			id: "list",
+			inline: content,
+			updatedAt: new Date(schedulesMtime).toISOString(),
+			mtimeMs: schedulesMtime,
+			size: Buffer.byteLength(content),
+			meta: { name: "Scheduled tasks" },
 		});
 	}
 }

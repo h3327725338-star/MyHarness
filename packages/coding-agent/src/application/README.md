@@ -28,6 +28,7 @@
 | `git-push.ts` | `GitPushUseCase`：显式 Push（推送检查过的那个 commit SHA，而不是 Push 时的 HEAD）、remote 校验、fast-forward 判断、Push 前的提示词检查钩子；`waitForCi: false` 时远端收到即返回，CI 由 `watchCi()` 另行按远端分支名查询 | `git/repository`、`git/ci` |
 | `git-worktree.ts` | `GitWorktreeUseCase`：Worktree 的创建、切换、合并、删除 | `git/worktrees` |
 | `provider-settings.ts` | `ProviderSettingsUseCase`：Provider 启用/禁用后同步当前模型 | `agent/runtime`、`config/settings` |
+| `nebius-setup.ts` | `NebiusSetupUseCase`：用一个 Token Factory Key 配好 Nebius——读取账户模型列表核对 Key、写入 `models.json`、保存 Key、给还没有自己模型的工作配 Nemotron 模型（主模型只在没有可用主模型时设置） | `providers/models`、`providers/credentials`、`config/settings`、`agent/runtime` |
 | `workspace-session.ts` | `WorkspaceSessionUseCase`：Workspace 下的 Session 列表、删除 | `session/manager`、`session/storage` |
 
 每个用例通过自己的 `*Host` 接口或参数向前端要它需要的能力（显示状态、询问用户、切换会话目录），不直接导入任何前端代码。
