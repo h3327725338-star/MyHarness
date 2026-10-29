@@ -1818,6 +1818,17 @@ export class SessionManager {
 		return new SessionManager(cwd, dir, undefined, true);
 	}
 
+	/**
+	 * `continueRecent` among the chats without a Workspace: the most recent one that runs in `cwd`, or a new one. For
+	 * folders that must never be registered as a Workspace (MyHarness's own home and working directory).
+	 */
+	static continueRecentUnbound(cwd: string, storageOptions?: SessionManagerStorageOptions): SessionManager {
+		const dataRoot = resolvePath(storageOptions?.dataRoot ?? getDataDir());
+		const mostRecent = findMostRecentSession(getWorkspaceSessionsDir(dataRoot, UNBOUND_WORKSPACE_ID), cwd);
+		if (mostRecent) return SessionManager.open(mostRecent);
+		return SessionManager.createUnbound(cwd, undefined, { ...storageOptions, dataRoot });
+	}
+
 	/** Create an in-memory session (no file persistence) */
 	static inMemory(cwd: string = process.cwd(), options?: NewSessionOptions): SessionManager {
 		return new SessionManager(cwd, "", undefined, false, options);

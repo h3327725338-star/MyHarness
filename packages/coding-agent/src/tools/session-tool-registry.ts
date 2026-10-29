@@ -252,7 +252,7 @@ export class SessionToolRegistry {
 		const { settingsManager, sessionManager, baseToolsOverride } = this._options;
 		const autoResizeImages = settingsManager.getImageAutoResize();
 		const includeImages = !settingsManager.getBlockImages();
-		const omitDocumentPreviewImages = settingsManager.getVisionAssistantSettings().enabled;
+		const omitDocumentPreviewImages = settingsManager.isVisionAssistantActive();
 		const shellCommandPrefix = settingsManager.getShellCommandPrefix();
 		const shellPath = settingsManager.getShellPath();
 		if (!baseToolsOverride && !this._webSearchService) {

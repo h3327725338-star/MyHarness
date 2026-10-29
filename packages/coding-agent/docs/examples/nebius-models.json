@@ -7,6 +7,36 @@
       "apiKey": "$NEBIUS_TOKEN_FACTORY_API_KEY",
       "models": [
         {
+          "id": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+          "name": "DeepSeek V4.1 Flash 1017",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 65536,
+          "cost": {
+            "input": 0.3,
+            "output": 1.2,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "currency": "USD"
+          },
+          "compat": {
+            "supportsReasoningEffort": true
+          },
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": null,
+            "low": "low",
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": "max"
+          }
+        },
+        {
           "id": "nvidia/Nemotron-3-Ultra-550b-a55b",
           "name": "Nemotron 3 Ultra",
           "reasoning": true,

@@ -8,7 +8,7 @@ MyHarness is a personal AI for a Windows PC (Personal AI track). It works inside
 
 An Electron shell starts a local-only Web UI (`127.0.0.1`) and a shared backend. Sessions, settings and credentials stay on the PC.
 
-The models are NVIDIA Nemotron served by Nebius Token Factory. Token Factory is built in: one API key sets up every role. Web search calls the Tavily API, which works without a key by default.
+The models are DeepSeek V4.1 Flash and NVIDIA Nemotron, served by Nebius Token Factory. Token Factory is built in: one API key sets up every role. Web search calls the Tavily API, which works without a key by default.
 
 ## Environment
 
@@ -51,12 +51,12 @@ Nebius Token Factory is built in, so attaching a model takes one API key.
 2. Sign in to Token Factory in the built-in browser and create a key.
 3. Paste it into the strip above that page, or into the card in Settings.
 
-MyHarness checks the key against the account's model list, adds the NVIDIA Nemotron models, and gives each job its model:
+MyHarness checks the key against the account's model list, adds DeepSeek V4.1 Flash and the NVIDIA Nemotron models, and gives each job its model:
 
-- Ultra: the main chat.
-- Lightning: sub-agents, compaction and the other helper jobs.
-- Nano: naming and translation. Lightning takes these when the account does not list Nano.
-- Super VL: images.
+- DeepSeek V4.1 Flash 1017: the main chat and commit descriptions. Ultra takes these when the account does not list DeepSeek.
+- Nemotron 3 Ultra: sub-agents, conversation naming and translation.
+- Nemotron 3.5 Lightning: compaction and the other helper jobs.
+- Nemotron 3.5 Super VL: images.
 
 Jobs you already set are left alone.
 
@@ -69,17 +69,17 @@ Without a Token Factory key the UI still starts and every non-model feature stil
 ## Five-minute test script
 
 1. Start the app. A fresh install starts with a chat under **Default**, which belongs to no project. Add a project folder (any Git repository, or this one) with **Add workspace**, the **+** in the sidebar.
-2. The composer shows **Nemotron 3 Ultra**, which the setup made the main model, with a 1.0M context window.
+2. The composer shows **DeepSeek V4.1 Flash 1017**, which the setup made the main model, with a 1.0M context window.
 3. Ask: `Read package.json and list the packages/ directories, then summarize the repository structure. Do not modify any files.`
    - Expected: the agent calls file and shell tools itself, and the turn header reports elapsed time and operation count.
-   - The answer names version `0.0.4` and the five directories under `packages/`.
+   - The answer names version `0.0.5` and the five directories under `packages/`.
 4. Open the **Changes** panel. The turn's tool operations are listed there, and the same session is on disk under `%USERPROFILE%\.myharness\agent\sessions\`.
 5. Open Settings → **Providers**. **Nebius Token Factory**, first in the list, shows:
-   - its Base URL and the Nemotron models;
+   - its Base URL and the models;
    - the console links for balance and top-up;
    - this computer's spending estimate.
 
-   Settings → **Agent** shows which Nemotron model each job uses.
+   Settings → **Agent** shows which model each job uses.
 6. Ask something that needs the web, for example `What did NVIDIA announce about Nemotron 3.5 Lightning?`.
    - Web search is on by default. Tavily answers without a key through its free keyless access, and the search step lists the results it read.
    - **Get a free key** in Settings → **Web search** adds 1,000 searches a month.

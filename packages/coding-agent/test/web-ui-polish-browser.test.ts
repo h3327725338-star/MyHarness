@@ -182,13 +182,13 @@ try {
  }
  checkRows();
  render(null,app);app.style.width='340px';
- set({resources:{tools:[{name:'read',description:'Long English description',active:true},{name:'workflow',description:'Long English workflow description',active:true},{name:'ultracode',description:'Long English ultracode description',active:true},{name:'job_list',description:'Lists background jobs that are still running and their status.',active:true},{name:'apply_patch',description:'Apply a multi-file patch.',active:false},{name:'ask_user_question',description:'Ask the user a question and wait for the answer.',active:true},{name:'acme_widget',description:'Third-party widget bridge from the acme extension',active:true,extension:true,source:'acme/widget'}],skills:[],prompts:[],extensions:[],contextFiles:[]},stats:null});
+ set({resources:{tools:[{name:'read',description:'Long English description',active:true},{name:'workflow',description:'Long English workflow description',active:true},{name:'ultracode',description:'Long English ultracode description',active:true},{name:'job_list',description:'Lists background jobs that are still running and their status.',active:true},{name:'apply_patch',description:'Apply a multi-file patch.',active:false},{name:'ask_user_question',description:'Ask the user a question and wait for the answer.',active:true},{name:'acme_widget',description:'Third-party widget bridge from the acme extension. Call it with a widget id; it returns JSON.',active:true,extension:true,source:'acme/widget'}],skills:[],prompts:[],extensions:[],contextFiles:[]},stats:null});
  render(h(ContextPanel,{}),app);await wait(150);
  for(const head of document.querySelectorAll('.ctx-head')) if(head.textContent.includes('工具')) head.click();await wait(100);
  if([...document.querySelectorAll('.ctx-head')].some((head)=>head.textContent.includes('分支'))) throw Error('branch section still rendered');
  const descs=[...document.querySelectorAll('.res-desc')];
  if(!descs[0].textContent.includes('读取并解析')) throw Error('tool localization');
- if(!descs[1].textContent.includes('分阶段只读探索，用于多模块并行排查与验证')||!descs[2].textContent.includes('高风险深度排查，结合反例检查与失败路径校验')) throw Error('workflow/ultracode localization');
+ if(descs[1].textContent!=='多模块并行只读排查与验证'||descs[2].textContent!=='高风险问题的深度排查') throw Error('workflow/ultracode localization');
  for(const desc of descs) if(desc.textContent.includes('…')||desc.scrollWidth>desc.clientWidth+1) throw Error('tool description truncated');
  const descOf=(name)=>{const row=[...document.querySelectorAll('.res-row')].find((r)=>r.querySelector('.mono')?.textContent.includes(name)); if(!row) throw Error('missing tool row '+name); return row.querySelector('.res-desc');};
  for(const [name,sentence] of [['job_list','列出后台任务及其运行状态'],['apply_patch','用补丁一次性修改多个文件'],['ask_user_question','向用户提问并等待选择或回答']]) {
@@ -196,7 +196,8 @@ try {
   if(desc.textContent!==sentence) throw Error(name+' is not the Chinese one-liner: '+desc.textContent);
   if(desc.textContent.includes('…')||desc.scrollWidth>desc.clientWidth+1) throw Error(name+' truncated or overflowing: '+desc.textContent);
  }
- {const ext=descOf('acme_widget'); if(ext.textContent!=='Third-party widget bridge from the acme extension') throw Error('extension tool was localized: '+ext.textContent);}
+ // An extension tool keeps its own English text, cut to its first sentence; the whole text is in the tooltip.
+ {const ext=descOf('acme_widget'); if(ext.textContent!=='Third-party widget bridge from the acme extension.') throw Error('extension tool was localized or not cut: '+ext.textContent); if(ext.title!=='Third-party widget bridge from the acme extension. Call it with a widget id; it returns JSON.') throw Error('no full text in the tooltip: '+ext.title); if(descOf('job_list').title) throw Error('a built-in row has a tooltip');}
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) {document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+'</p>');}
 `,

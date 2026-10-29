@@ -2,7 +2,7 @@
 // (no provider groups, no side menus); the effort is a horizontal slider with one stop per level the model really
 // supports. Used by the Composer (main model) and by every helper-model setting (Auto Memory, Sub-agent, Vision,
 // compaction).
-import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Chevron, Icon, Popover, Spinner } from "./ui.js";
+import { html, useEffect, useLayoutEffect, useMemo, useRef, useState, Chevron, Icon, Popover, Spinner, Toggle } from "./ui.js";
 import { t } from "./i18n.js";
 import { effortName, modelEfforts, pointerMoved, searchModels } from "./util.js";
 
@@ -110,12 +110,13 @@ export function ModelMenu({ models, selected, mainOption, onPick, onPickMain, di
  * props: levels (only the levels the model supports: ←/→ move among exactly these), value (a level, or undefined when
  * none is chosen), onChange(level) (may return a promise that settles once the choice is stored), disabled, autoFocus
  * (the slider takes the keyboard as soon as it appears, so ←/→ work right after it opens), onDone (Enter: the choice is
- * made), titled (false: the name above is left to the surface that shows the slider)
+ * made), titled (false: the name above is left to the surface that shows the slider), withDefault (offer "Default": the
+ * job keeps no level of its own), defaultLevel (what Default stands for, see jobDefaultEffort)
  */
-export function EffortSlider({ levels: modelLevels, value, onChange, disabled, autoFocus, onDone, titled = true, withDefault = false }) {
-	// "Default" (no effort is sent) is the first stop of the rail when it is offered, so it is chosen like any level.
-	const levels = withDefault ? ["", ...modelLevels] : modelLevels;
-	const stopName = (level) => (level ? effortName(level) : t("Default"));
+export function EffortSlider({ levels, value, onChange, disabled, autoFocus, onDone, titled = true, withDefault = false, defaultLevel }) {
+	// "Default" is not a stop of the rail (on its left end it read as the lowest level): it is a switch under the rail,
+	// named with the level it stands for, and while it is on the thumb is drawn hollow on that level.
+	const stopName = (level) => (level ? effortName(level) : defaultEffortName(defaultLevel));
 	// The rail is what the stops are measured on: a pointer position maps to the stop nearest to it.
 	const rail = useRef(null);
 	const [drag, setDragState] = useState(null);
@@ -132,6 +133,7 @@ export function EffortSlider({ levels: modelLevels, value, onChange, disabled, a
 	const current = picked ?? (withDefault ? (value ?? "") : value);
 	const shown = drag ?? current;
 	const at = levels.indexOf(shown);
+	const ghost = withDefault && shown === "" ? levels.indexOf(defaultLevel) : -1;
 	const last = Math.max(1, levels.length - 1);
 	const indexAt = (clientX) => {
 		const box = rail.current.getBoundingClientRect();
@@ -166,7 +168,8 @@ export function EffortSlider({ levels: modelLevels, value, onChange, disabled, a
 	const onKeyDown = (e) => {
 		if (e.key === "Enter" && onDone) return e.preventDefault(), e.stopPropagation(), onDone();
 		const step = e.key === "ArrowRight" || e.key === "ArrowUp" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowDown" ? -1 : 0;
-		const next = e.key === "Home" ? 0 : e.key === "End" ? levels.length - 1 : step ? Math.max(0, Math.min(levels.length - 1, (at < 0 ? (step > 0 ? -1 : levels.length) : at) + step)) : -1;
+		const from = at >= 0 ? at : ghost >= 0 ? ghost : step > 0 ? -1 : levels.length;
+		const next = e.key === "Home" ? 0 : e.key === "End" ? levels.length - 1 : step ? Math.max(0, Math.min(levels.length - 1, from + step)) : -1;
 		if (next < 0) return;
 		e.preventDefault();
 		e.stopPropagation();
@@ -181,13 +184,32 @@ export function EffortSlider({ levels: modelLevels, value, onChange, disabled, a
 			onPointerDown=${onPointerDown} onPointerMove=${onPointerMove} onPointerUp=${onPointerUp} onPointerCancel=${() => setDrag(null)} onKeyDown=${onKeyDown}>
 			<div class="effort-rail" ref=${rail}>
 				${levels.map((level, index) => html`<span key=${level || "default"} class="effort-stop" style=${{ left: left(index) }} title=${stopName(level)} />`)}
-				${at >= 0 ? html`<span class="effort-thumb" style=${{ left: left(at) }} />` : null}
+				${at >= 0 ? html`<span class="effort-thumb" style=${{ left: left(at) }} />` : ghost >= 0 ? html`<span class="effort-thumb ghost" style=${{ left: left(ghost) }} />` : null}
 			</div>
 			<div class="effort-labels" aria-hidden="true">
-				${levels.map((level, index) => html`<span key=${level || "default"} class=${`effort-label ${index === 0 ? "first" : index === levels.length - 1 ? "last" : ""} ${index === at ? "on" : ""}`} style=${{ left: left(index) }}>${stopName(level)}</span>`)}
+				${levels.map((level, index) => html`<span key=${level} class=${`effort-label ${index === 0 ? "first" : index === levels.length - 1 ? "last" : ""} ${index === at ? "on" : index === ghost ? "implied" : ""}`} style=${{ left: left(index) }}>${stopName(level)}</span>`)}
 			</div>
 		</div>
+		${withDefault
+			? html`<label class="check-label sm effort-default"><${Toggle} checked=${shown === ""} disabled=${disabled} label=${defaultEffortName(defaultLevel)}
+					onChange=${(on) => commit(on ? "" : levels.includes(defaultLevel) ? defaultLevel : levels[0])} />${defaultEffortName(defaultLevel)}</label>`
+			: null}
 	</div>`;
+}
+
+/**
+ * What "Default" stands for in the effort of a job with a model of its own: that model's lowest level (the server
+ * resolves an empty level to "off" and clamps it, assistant-model.ts), except scheduled tasks, which keep the effort a
+ * new chat has ("chat").
+ */
+export function jobDefaultEffort(jobId, levels) {
+	return jobId === "scheduledTasks" ? "chat" : levels[0];
+}
+
+/** "Default", named with what it stands for: "Default (Off)", or "Default (same as the chat)". */
+export function defaultEffortName(defaultLevel) {
+	if (defaultLevel === "chat") return t("Default (same as the chat)");
+	return defaultLevel ? t("Default ({level})", { level: effortName(defaultLevel) }) : t("Default");
 }
 
 /**
@@ -196,30 +218,30 @@ export function EffortSlider({ levels: modelLevels, value, onChange, disabled, a
  * props: levels, value, onChange(level | undefined), disabled, placement, withDefault (offer "Default": no effort is
  * sent, the provider decides), class, label
  */
-export function EffortPicker({ levels, value, onChange, disabled, placement = "top", align = "end", withDefault, class: cls = "chip", label, title }) {
+export function EffortPicker({ levels, value, onChange, disabled, placement = "top", align = "end", withDefault, defaultLevel, class: cls = "chip", label, title }) {
 	const anchor = useRef(null);
 	const [open, setOpen] = useState(false);
 	if (levels.length < 2) return null;
-	const text = value ? effortName(value) : t("Default");
+	const text = value ? effortName(value) : withDefault ? defaultEffortName(defaultLevel) : t("Default");
 	// Every stop's name sits under it: with many stops the popover widens (52 px a stop, 44 px of padding) so that
-	// neighbouring names such as "Default" and "Off" never overlap.
-	const stops = levels.length + (withDefault ? 1 : 0);
-	const width = Math.max(264, (stops - 1) * 52 + 44);
+	// neighbouring names never overlap.
+	const width = Math.max(264, (levels.length - 1) * 52 + 44);
 	return html`<span ref=${anchor} class=${`picker-anchor ${cls.split(" ").includes("model-ref-effort") ? "model-ref-effort-anchor" : ""}`}>
 		<button class=${cls} onClick=${() => setOpen(!open)} title=${title || t("Thinking effort")} aria-label=${label || t("Thinking effort")} aria-haspopup="dialog" aria-expanded=${open}>
 			<span class="truncate chip-text">${text}</span><${Chevron} />
 		</button>
 		<${Popover} anchor=${anchor} open=${open} onClose=${() => setOpen(false)} placement=${placement} align=${align} width=${width} class="effort-pop">
-			<${EffortSlider} levels=${levels} value=${value} disabled=${disabled} onChange=${onChange} withDefault=${withDefault} autoFocus onDone=${() => setOpen(false)} />
+			<${EffortSlider} levels=${levels} value=${value} disabled=${disabled} onChange=${onChange} withDefault=${withDefault} defaultLevel=${defaultLevel} autoFocus onDone=${() => setOpen(false)} />
 		<//>
 	</span>`;
 }
 
 /**
  * The model of a helper-model setting, with its effort next to it. `value` is { provider, model, thinkingLevel };
- * choosing "Use the main model" clears all three, so the model and its effort are both inherited.
+ * choosing "Use the main model" clears all three, so the model and its effort are both inherited. `jobId` names the
+ * setting, for what its "Default" effort stands for (jobDefaultEffort).
  */
-export function ModelRefPicker({ models, value, onChange, disabled, label }) {
+export function ModelRefPicker({ models, value, onChange, disabled, label, jobId }) {
 	const anchor = useRef(null);
 	const [open, setOpen] = useState(false);
 	const v = value || {};
@@ -239,7 +261,7 @@ export function ModelRefPicker({ models, value, onChange, disabled, label }) {
 					onPick=${(ref) => (setOpen(false), onChange({ ...ref, thinkingLevel: undefined }))} />
 			<//>
 		</span>
-		<${EffortPicker} levels=${levels} value=${v.thinkingLevel} disabled=${disabled} withDefault placement="bottom" class="select model-ref-effort"
+		<${EffortPicker} levels=${levels} value=${v.thinkingLevel} disabled=${disabled} withDefault defaultLevel=${jobDefaultEffort(jobId, levels)} placement="bottom" class="select model-ref-effort"
 			onChange=${(level) => onChange({ provider: v.provider, model: v.model, thinkingLevel: level })} />
 	</span>`;
 }

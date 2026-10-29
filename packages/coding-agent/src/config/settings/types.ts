@@ -215,7 +215,7 @@ export interface SessionContinuitySettings {
 export interface ConversationNamingSettings extends AutoMemorySettings {}
 
 export interface VisionAssistantSettings {
-	enabled?: boolean; // default: false
+	enabled?: boolean; // default: true (takes the images only with a model of its own until turned on by the user)
 	provider?: string;
 	model?: string;
 	thinkingLevel?: ThinkingLevel;

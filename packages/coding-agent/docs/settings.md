@@ -197,7 +197,7 @@ Package 资源和 project-local settings 走同一套 Project Trust flow：启�
 | `sessionContinuity` | object | `{ "autoSearch": true, "autoHandoff": true }` | Global 跨会话衔接：查找之前的聊天、后台交接摘要及其模型；见 [sessionContinuity](#sessioncontinuity)。 |
 | `subAgent` | object | `{ "enabled": false, "mode": "read-only" }` | Global built-in exploration-agent 和 workflow configuration，含只读/读写模式。通过 `/settings` 设置。 |
 | `webSearch` | object | `{ "enabled": false }` | Global built-in web search configuration（搜索引擎和四个数量）；只在启用时注册 `web_search` 和 `web_fetch`，main Agent 与它派出的子智能体都按这个开关。详见 [Web Search](web-search.md)。 |
-| `visionAssistant` | object | `{ "enabled": false }` | Global dedicated image-analysis model configuration。通过 `/settings` 设置。 |
+| `visionAssistant` | object | `{ "enabled": true }` | Global dedicated image-analysis model configuration。通过 `/settings` 设置。默认开启，但只有选了自己的视觉模型（或用户自己打开过）才接管图片，见 [visionAssistant](#visionassistant)。 |
 | `commitDescription` | object | `{}` | Global AI 提交描述模型：为空表示使用主模型。设置 → 智能体 → 助手的“提交描述”行选择独立模型与思考档位。Commit/Push 提示词检查也用这个模型。 |
 | `gitCommit` | object | `{}` | Global `/commit` 的运行方式：`mode`（`"instructions"` 默认 / `"direct"`）、`skipHooks`（只在直接模式生效，默认 `false`）、`instructions`（没有这个字段时用内置默认提示词）。设置 → Git。 |
 | `gitPush` | object | `{}` | Global `/push` 的运行方式：`mode`（`"instructions"` 默认 / `"direct"`）、`instructions`（没有这个字段时用内置默认提示词）。设置 → Git。 |
@@ -214,7 +214,7 @@ Package 资源和 project-local settings 走同一套 Project Trust flow：启�
 Conversation Naming、Auto Memory、Sub Agent、Vision Assistant、Compact Model、Commit Description、Worktree Naming 和 Branch Summary 选模型的规则相同（`src/agent/runtime/assistant-model.ts`）：
 
 - 没有设置 `provider` / `model`（Web UI 里的“使用主模型”）：运行时使用当前 main model，并且连同它当前的 Thinking Effort 一起继承；main model 变了就跟着变。如果另外写了 `thinkingLevel`，只覆盖 Effort。
-- 设置了自己的 `provider` + `model`：使用这个 model 和它自己的 `thinkingLevel`；没写 `thinkingLevel`（Web UI 里的“默认”）时不发送 Effort，相当于 `off`（例如 Gemini 会明确关闭 thinking）。
+- 设置了自己的 `provider` + `model`：使用这个 model 和它自己的 `thinkingLevel`；没写 `thinkingLevel`（Web UI 里的“默认”）时不发送 Effort，相当于 `off`（例如 Gemini 会明确关闭 thinking）；模型没有 `off` 档时按它支持的最低档。Web UI 把这一点直接写在“默认”开关上，例如“默认（off）”。定时任务例外：没写 `thinkingLevel` 时沿用目标对话当前的档位，显示为“默认（与对话相同）”。
 - 只写了 `provider` 或 `model` 其中一个，视为没有配置。
 
 #### conversationNaming（对话自动命名）
@@ -389,7 +389,7 @@ Memory Markdown files 是 source of truth：
 
 #### visionAssistant
 
-`Vision Assistant` 是 global 设置，默认关闭。main-model picker 和 vision-model picker 使用不同的 title 和 capability labels：
+`Vision Assistant` 是 global 设置，默认开启（`enabled` 没写时为 `true`）。开启但还没有选自己的视觉模型、用户也没有自己打开过时，它不接管图片，支持 multimodal 的 main model 照常直接收到 images（`SettingsManager.isVisionAssistantActive()`）；选了视觉模型（例如 Nebius 一键配置给它配 Super VL）后才生效。用户关掉的保持关闭。main-model picker 和 vision-model picker 使用不同的 title 和 capability labels：
 
 - main-model picker 会列出所有可用 models，并标记为 text-only 或 text-and-image。Vision Assistant 关闭时，支持 multimodal 的 main model 会直接收到 images。
 - vision-model picker 会列出 enabled Providers 中 credentials 可用的 eligible models。已经确认支持视觉的 models 可以直接选择；unknown 或之前测试失败的 custom models 在选择时会打开 capability test。明确声明为 text-only 的 models 不会列出。

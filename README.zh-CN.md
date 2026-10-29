@@ -4,11 +4,11 @@
 
 [![License: Apache-2.0](https://img.shields.io/github/license/h3327725338-star/MyHarness)](LICENSE)
 
-MyHarness 是装在你自己 Windows 电脑上的个人 AI，在你已经登录的网站里直接干活。它记得你在意的事，聊天和定时任务在你的几台电脑之间同步，写代码也照样能做。装好就能用 Nebius Token Factory 上的 NVIDIA Nemotron 模型：粘贴一个 API Key，各项分工自动配好。
+MyHarness 是装在你自己 Windows 电脑上的个人 AI，在你已经登录的网站里直接干活。它记得你在意的事，聊天和定时任务在你的几台电脑之间同步，写代码也照样能做。装好就能用 Nebius Token Factory 上的 DeepSeek V4.1 Flash 和 NVIDIA Nemotron 模型：粘贴一个 API Key，各项分工自动配好。
 
 底层是一个 Electron 外壳，启动只监听本机（`127.0.0.1`）的 Web UI 和同一套后端，把模型 Provider 与你的文件、Shell 命令、内置浏览器、工具和可恢复 Session 连在一起。
 
-> 当前状态：在 Windows x64 上可用，桌面端和源码 checkout 两条路径都维护。Nebius Token Factory 已经内置（设置 → Providers → **Nebius Token Factory**：粘贴 Key，Nemotron 模型按分工自动配好）；其他兼容 OpenAI、Anthropic、Gemini 或 Mistral 的 Provider 可以手动添加。已经验证过的边界写在 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
+> 当前状态：在 Windows x64 上可用，桌面端和源码 checkout 两条路径都维护。Nebius Token Factory 已经内置（设置 → Providers → **Nebius Token Factory**：粘贴 Key，DeepSeek V4.1 Flash 和 Nemotron 模型按分工自动配好）；其他兼容 OpenAI、Anthropic、Gemini 或 Mistral 的 Provider 可以手动添加。已经验证过的边界写在 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
 
 ## 核心能力
 
@@ -29,16 +29,16 @@ MyHarness 是装在你自己 Windows 电脑上的个人 AI，在你已经登录�
 
 ## NVIDIA Nemotron on Nebius Token Factory
 
-本项目参考的模型后端是 **[Nebius Token Factory](https://api.tokenfactory.nebius.com/v1/) 提供的 NVIDIA Nemotron**，而且已经内置：设置 → Providers 一打开就是 **Nebius Token Factory**。点 **获取 API Key** 会在内置浏览器里打开 Token Factory 控制台；粘贴到网页上方细栏（或设置里）的 Key 会先读取账户的模型列表确认可用，再作为普通的 `openai-completions` Provider 写入 `models.json`，所有还没有自己模型的工作都会配上对应的 Nemotron 模型：
+本项目参考的模型后端是 **[Nebius Token Factory](https://api.tokenfactory.nebius.com/v1/) 提供的 NVIDIA Nemotron**，而且已经内置：设置 → Providers 一打开就是 **Nebius Token Factory**。点 **获取 API Key** 会在内置浏览器里打开 Token Factory 控制台；粘贴到网页上方细栏（或设置里）的 Key 会先读取账户的模型列表确认可用，再作为普通的 `openai-completions` Provider 写入 `models.json`，所有还没有自己模型的工作都会配上对应的模型：
 
 | 模型 | 负责 |
 |------|------|
-| Nemotron 3 Ultra | 主模型、提交说明 |
-| Nemotron 3.5 Lightning | 子智能体、压缩上下文、备用模型、自动记忆、交接摘要、书签用途、定时任务、工作副本命名、分支摘要 |
-| Nemotron 3 Nano | 对话命名、翻译（账户没有 Nano 时由 Lightning 接手） |
+| DeepSeek V4.1 Flash 1017 | 主模型、提交说明（账户没有 DeepSeek 时由 Ultra 接手） |
+| Nemotron 3 Ultra | 子智能体、对话命名、翻译 |
+| Nemotron 3.5 Lightning | 压缩上下文、备用模型、自动记忆、交接摘要、书签用途、定时任务、工作副本命名、分支摘要 |
 | Nemotron 3.5 Super VL | 视觉助手（识图） |
 
-主模型、子智能体和提交说明会设成所用模型最高的思考强度。每个模型只提供 NVIDIA 为它写明的思考档位：Ultra 有关闭、中、高三档，Lightning 只有关闭和高。
+主对话用 DeepSeek V4.1 Flash，因为测试中 Nemotron 模型当主智能体时调用工具有问题；子智能体、命名、翻译、后台工作和识图交给 Nemotron 模型。主模型、子智能体和提交说明会设成所用模型最高的思考强度（DeepSeek 是 max，Ultra 是高）。每个 Nemotron 模型只提供 NVIDIA 为它写明的思考档位：Ultra 有关闭、中、高三档，Lightning 只有关闭和高；DeepSeek 有关闭、低、高和 max。
 
 Token Factory 没有余额查询接口，所以 Nebius 卡片提供控制台链接（查看余额、充值），显示这台电脑按模型标价估算的花费；请求因余额问题被拒（HTTP 402 或错误信息提到余额）时会明确说明是余额问题。
 
@@ -46,13 +46,13 @@ Token Factory 没有余额查询接口，所以 Nebius 卡片提供控制台链�
 
 | Model ID | 上下文 | 最大输出 | 由谁添加 |
 |----------|--------|----------|----------|
+| `deepseek-ai/DeepSeek-V4.1-Flash-1017` | 1,048,576 | 未公布（设为 65,536） | 内置配置和示例文件 |
 | `nvidia/Nemotron-3-Ultra-550b-a55b` | 1,048,576 | 65,536 | 内置配置和示例文件 |
 | `nvidia/Nemotron-3_5-Lightning` | 1,048,576 | 65,536 | 内置配置和示例文件 |
 | `nvidia/Nemotron-3.5-Super-VL` | 1,048,576 | 未公布（设为 4,096） | 内置配置和示例文件 |
-| `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` | 262,144 | 16,384 | 内置配置，仅当账户的模型列表里有它 |
 | `nvidia/nemotron-3-super-120b-a12b` | 262,144 | 65,536 | 只在示例文件里 |
 
-内置配置按账户模型列表里的写法取用每个 ID；只有 Nano 这一条还没在 Token Factory 上确认过。只有 Super-VL 能接图像，其余都是纯文本。2026-10-25 实测：一张含随机字符串、红色圆形和蓝色矩形的生成图片，约 1.3 秒被正确读出。给它留几千个输出 token——它先推理再回答。
+内置配置按账户模型列表里的写法取用每个 ID。旧版本还会添加 Nemotron 3 Nano 负责命名和翻译，现在改由 Ultra 负责，已经添加过的 Nano 保持不动。DeepSeek V4.1 Flash 1017 和 Super-VL 能接图像；视觉助手开着时（默认开启），图片交给 Super-VL，主模型收到它的识图报告。Nemotron 的文本模型都是纯文本。2026-10-25 实测：一张含随机字符串、红色圆形和蓝色矩形的生成图片，约 1.3 秒被正确读出。给它留几千个输出 token——它先推理再回答。
 
 ![在模型选择器中挑选 Nebius 的 Nemotron 模型](packages/coding-agent/docs/images/nebius-model-picker.png)
 
@@ -107,7 +107,7 @@ npm.cmd run build
 
 `dev-desktop.cmd` 会构建并启动 Electron 桌面端，这是日常使用 MyHarness 的方式。需要在命令行直接跑源码时，在仓库根目录执行 `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts`；它不会打开浏览器，会在日志中打印实际地址 `MyHarness Web UI: <url>`。
 
-启动后，开始页面会链接到内置的 Nebius Token Factory 配置（设置 → Providers）。在那里粘贴 Token Factory 的 Key，Nemotron 模型就配好了。其他 Provider 的说明见 [Providers](packages/coding-agent/docs/providers.md) 和 [Settings](packages/coding-agent/docs/settings.md)。
+启动后，开始页面会链接到内置的 Nebius Token Factory 配置（设置 → Providers）。在那里粘贴 Token Factory 的 Key，DeepSeek V4.1 Flash 和 Nemotron 模型就配好了。其他 Provider 的说明见 [Providers](packages/coding-agent/docs/providers.md) 和 [Settings](packages/coding-agent/docs/settings.md)。
 
 没有 Provider 凭据时，可以先检查 Web 源码入口是否能够启动：
 

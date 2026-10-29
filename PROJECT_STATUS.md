@@ -69,8 +69,9 @@ below.
   supplied Provider/model and credential. No credential is stored in this
   repository.
 - The built-in Nebius Token Factory setup is tested against a local stub
-  endpoint. A real Token Factory key, the real low-balance error and whether
-  accounts list the Nano model have not been verified.
+  endpoint. A real Token Factory key, the real low-balance error, and tool calls
+  and `reasoning_effort` levels (`none`, `low`, `high`, `max`) of DeepSeek V4.1
+  Flash 1017 through Token Factory have not been verified.
 - The Windows installer (`npm run desktop:installer`, NSIS, not code-signed)
   was installed, started and uninstalled on the development machine with an
   isolated profile. A fresh install on another PC has not been run yet.

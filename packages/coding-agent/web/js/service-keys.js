@@ -8,7 +8,7 @@ import { actions } from "./actions.js";
 import { builtinBrowserAvailable, linkTargetOf, openSystemLink } from "./link-target.js";
 import { serverText, t } from "./i18n.js";
 
-const NEBIUS_SLOT_NAMES = { ultra: "Nemotron 3 Ultra", lightning: "Nemotron 3.5 Lightning", nano: "Nemotron 3 Nano", vision: "Nemotron 3.5 Super VL" };
+const NEBIUS_SLOT_NAMES = { flash: "DeepSeek V4.1 Flash", ultra: "Nemotron 3 Ultra", lightning: "Nemotron 3.5 Lightning", nano: "Nemotron 3 Nano", vision: "Nemotron 3.5 Super VL" };
 
 /** What each service needs: where its keys are made, how a pasted key is saved, and what to say once it is. */
 export const KEY_SERVICES = {

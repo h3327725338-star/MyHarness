@@ -7,7 +7,7 @@ import { detectInstalledBrowsers, LocalBrowser } from "../src/tools/web-search/b
 
 const installed = detectInstalledBrowsers();
 it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.length)(
-	"slides the segmented highlight, starts Git instructions empty and keeps effort names apart",
+	"slides the segmented highlight, starts Git instructions empty and shows effort Default as a named switch",
 	async () => {
 		const artifacts = process.env.MYHARNESS_ARTIFACTS_DIR;
 		if (!artifacts) throw new Error("MYHARNESS_ARTIFACTS_DIR is required for browser test output");
@@ -77,13 +77,33 @@ try {
  if(document.body.textContent.includes('Restore default')) throw Error('Restore default is still shown');
  render(null,document.getElementById('app'));
 
- // 3. Eight stops (Default + seven levels): the popover is wide enough that no two names overlap.
- render(h(EffortPicker,{levels:['off','minimal','low','medium','high','xhigh','max'],value:undefined,withDefault:true,onChange:()=>{}}),document.getElementById('effort'));
+ // 3. Seven levels and "Default": every name has room, and Default is a switch named with the level it stands for, not
+ //    a stop left of "off" that reads as the lowest level.
+ function Effort(){const [v,setV]=useState(undefined);return html\`<\${EffortPicker} levels=\${['off','minimal','low','medium','high','xhigh','max']} value=\${v} withDefault defaultLevel="off" onChange=\${setV} />\`;}
+ render(h(Effort,{}),document.getElementById('effort'));
  await wait(30);
- document.querySelector('#effort button').click();await wait(350);
- const labels=[...document.querySelectorAll('.effort-pop .effort-label')].map(el=>el.getBoundingClientRect());
- if(labels.length!==8) throw Error('expected 8 effort names, got '+labels.length);
- for(let i=1;i<labels.length;i++) if(labels[i].left<labels[i-1].right) throw Error('effort names overlap at '+i);
+ const chip=document.querySelector('#effort button');
+ if(chip.textContent.trim()!=='Default (off)') throw Error('the chip does not say what Default is: '+chip.textContent);
+ chip.click();await wait(350);
+ const labels=[...document.querySelectorAll('.effort-pop .effort-label')];
+ if(labels.length!==7) throw Error('expected 7 effort names, got '+labels.length);
+ const boxes=labels.map(el=>el.getBoundingClientRect());
+ for(let i=1;i<boxes.length;i++) if(boxes[i].left<boxes[i-1].right) throw Error('effort names overlap at '+i);
+ const sw=document.querySelector('.effort-pop .effort-default');
+ if(!sw||sw.textContent.trim()!=='Default (off)') throw Error('no Default switch: '+(sw&&sw.textContent));
+ const isOn=()=>sw.querySelector('[role=switch]').getAttribute('aria-checked');
+ if(isOn()!=='true') throw Error('the Default switch is not on');
+ const ghost=document.querySelector('.effort-pop .effort-thumb.ghost');
+ if(!ghost||ghost.style.left!=='0%') throw Error('no hollow thumb on off: '+(ghost&&ghost.style.left));
+ // Picking a level turns Default off and puts a solid thumb there.
+ document.querySelector('.effort-pop .effort-track').dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true}));
+ await wait(80);
+ if(isOn()!=='false') throw Error('Default stays on after a level was picked');
+ if(!document.querySelector('.effort-pop .effort-thumb:not(.ghost)')) throw Error('no thumb on the picked level');
+ if(chip.textContent.trim()!=='max') throw Error('the chip does not show the picked level: '+chip.textContent);
+ // And back: the switch gives the job no level of its own again.
+ sw.querySelector('[role=switch]').click();await wait(80);
+ if(isOn()!=='true'||chip.textContent.trim()!=='Default (off)') throw Error('Default did not come back: '+chip.textContent);
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) {document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+'</p>');}
 `,

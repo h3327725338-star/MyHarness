@@ -574,8 +574,9 @@ export function registerSessionRoutes(server: WebHttpServer, host: WebHost, hub:
 		const workspace = host.workspaceStore.getById(id, mode);
 		if (!workspace) throw new HttpError(404, "Unknown workspace");
 		if (input.deleteArtifacts === true) {
-			if (hub.statuses().some((slot) => slot.active))
-				throw new HttpError(409, "Stop running tasks before deleting workspace artifacts.");
+			// Only this Workspace's own running chats can be writing the artifacts about to go; chats elsewhere keep running.
+			if (hub.all().some((open) => open.status.active && open.workspace?.workspaceId === workspace.workspaceId))
+				throw new HttpError(409, "Stop the running tasks in this workspace before deleting its artifacts.");
 			deleteWorkspaceArtifacts(host.session.sessionManager.getDataRoot() ?? getDataDir(), workspace.workspaceId);
 		}
 		if (!host.workspaceStore.remove(id, mode)) throw new HttpError(500, "Could not save the workspace list.");

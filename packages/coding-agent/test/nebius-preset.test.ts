@@ -18,51 +18,98 @@ describe("Nebius Token Factory preset", () => {
 		const picks = pickNebiusModels([
 			"nvidia/nemotron-3-ultra-550b-a55b",
 			"nvidia/Nemotron-3_5-Lightning",
+			"nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
 			"meta-llama/Llama-3.3-70B-Instruct",
 		]);
+		// Nano is listed but no job uses it any more, so it is not added.
 		expect(picks.map((pick) => [pick.slot, pick.model.id])).toEqual([
 			["ultra", "nvidia/nemotron-3-ultra-550b-a55b"],
 			["lightning", "nvidia/Nemotron-3_5-Lightning"],
 		]);
-		// No Nano: its jobs go to Lightning; no Super VL: vision has no stand-in.
-		expect(nebiusModelFor("conversationNaming", picks)).toBe("nvidia/Nemotron-3_5-Lightning");
+		// No DeepSeek: the main model and commit descriptions go to Ultra; no Super VL: vision has no stand-in.
 		expect(nebiusModelFor("main", picks)).toBe("nvidia/nemotron-3-ultra-550b-a55b");
+		expect(nebiusModelFor("commitDescription", picks)).toBe("nvidia/nemotron-3-ultra-550b-a55b");
+		expect(nebiusModelFor("conversationNaming", picks)).toBe("nvidia/nemotron-3-ultra-550b-a55b");
 		expect(nebiusModelFor("visionAssistant", picks)).toBeUndefined();
+		// No Ultra either: Lightning takes them.
+		const lightningOnly = pickNebiusModels(["nvidia/Nemotron-3_5-Lightning"]);
+		expect(nebiusModelFor("main", lightningOnly)).toBe("nvidia/Nemotron-3_5-Lightning");
+		expect(nebiusModelFor("subAgent", lightningOnly)).toBe("nvidia/Nemotron-3_5-Lightning");
+	});
+
+	it("gives the main chat and commit descriptions to DeepSeek and the agents, naming and translation to Ultra", () => {
+		const picks = pickNebiusModels(undefined);
+		const ids = Object.fromEntries(
+			(Object.keys(NEBIUS_ROLE_PLAN) as Array<keyof typeof NEBIUS_ROLE_PLAN>).map((role) => [
+				role,
+				nebiusModelFor(role, picks),
+			]),
+		);
+		expect(ids).toEqual({
+			main: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+			commitDescription: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+			subAgent: "nvidia/Nemotron-3-Ultra-550b-a55b",
+			conversationNaming: "nvidia/Nemotron-3-Ultra-550b-a55b",
+			translation: "nvidia/Nemotron-3-Ultra-550b-a55b",
+			compactionModel: "nvidia/Nemotron-3_5-Lightning",
+			fallbackModel: "nvidia/Nemotron-3_5-Lightning",
+			autoMemory: "nvidia/Nemotron-3_5-Lightning",
+			"sessionContinuity.handoff": "nvidia/Nemotron-3_5-Lightning",
+			bookmarkNotes: "nvidia/Nemotron-3_5-Lightning",
+			scheduledTasks: "nvidia/Nemotron-3_5-Lightning",
+			worktreeNaming: "nvidia/Nemotron-3_5-Lightning",
+			branchSummaryModel: "nvidia/Nemotron-3_5-Lightning",
+			visionAssistant: "nvidia/Nemotron-3.5-Super-VL",
+		});
+		// DeepSeek reads images itself and takes Token Factory's reasoning_effort.
+		const flash = picks.find((pick) => pick.slot === "flash")!.model;
+		expect(flash).toMatchObject({ input: ["text", "image"], compat: { supportsReasoningEffort: true } });
+		expect(pickNebiusModels(["deepseek-ai/deepseek-v4.1-flash-1017"])[0]?.model.id).toBe(
+			"deepseek-ai/deepseek-v4.1-flash-1017",
+		);
+		// The older DeepSeek V4.1 Flash (without 1017) is another model and is not taken for it.
+		expect(pickNebiusModels(["deepseek-ai/DeepSeek-V4.1-Flash"])).toEqual([]);
 	});
 
 	it("uses only the IDs checked against Token Factory when the model list could not be read", () => {
 		const picks = pickNebiusModels(undefined);
-		expect(picks.map((pick) => pick.slot)).toEqual(["ultra", "lightning", "vision"]);
-		expect(nebiusModelFor("translation", picks)).toBe("nvidia/Nemotron-3_5-Lightning");
+		expect(picks.map((pick) => pick.slot)).toEqual(["flash", "ultra", "lightning", "vision"]);
+		expect(nebiusModelFor("translation", picks)).toBe("nvidia/Nemotron-3-Ultra-550b-a55b");
 		// Super VL never gets `reasoning_effort` (it answers badly with it).
 		const vision = picks.find((pick) => pick.slot === "vision")!.model;
 		expect(vision.compat).toBeUndefined();
 		expect(vision.input).toEqual(["text", "image"]);
 	});
 
-	it("offers only the thinking levels each Nemotron model really has", () => {
+	it("offers only the thinking levels each model really has", () => {
 		const picks = pickNebiusModels([
+			"deepseek-ai/DeepSeek-V4.1-Flash-1017",
 			"nvidia/Nemotron-3-Ultra-550b-a55b",
 			"nvidia/Nemotron-3_5-Lightning",
 			"nvidia/Nemotron-3.5-Super-VL",
-			"nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
 		]);
 		const levels = Object.fromEntries(
 			picks.map((pick) => [pick.slot, getSupportedThinkingLevels({ reasoning: true, ...pick.model } as any)]),
 		);
-		// Ultra: reasoning off, medium effort, full reasoning; Lightning: off or on; Super VL and Nano are sent no effort.
+		// DeepSeek: off and its three efforts; Ultra: reasoning off, medium effort, full reasoning; Lightning: off or on;
+		// Super VL is sent no effort.
 		expect(levels).toEqual({
+			flash: ["off", "low", "high", "max"],
 			ultra: ["off", "medium", "high"],
 			lightning: ["off", "high"],
 			vision: ["high"],
-			nano: ["high"],
 		});
 		expect(picks.find((pick) => pick.slot === "ultra")!.model.thinkingLevelMap).toMatchObject({
 			off: "none",
 			medium: "medium",
 			high: "high",
 		});
-		expect(NEBIUS_ROLE_PLAN.commitDescription).toBe("ultra");
+		expect(picks.find((pick) => pick.slot === "flash")!.model.thinkingLevelMap).toMatchObject({
+			off: "none",
+			low: "low",
+			high: "high",
+			max: "max",
+		});
 	});
 
 	it("brings a setup written by 0.0.3 to the real levels and leaves edited entries and other providers alone", () => {
@@ -87,6 +134,7 @@ describe("Nebius Token Factory preset", () => {
 				{ id: "nvidia/Nemotron-3_5-Lightning", thinkingLevelMap: { ...legacyMap, max: null } },
 				{ id: "nvidia/Nemotron-3.5-Super-VL" },
 				{ id: "zai-org/GLM-5.3-Flash", thinkingLevelMap: legacyMap },
+				{ id: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B" },
 			],
 		};
 		const upgraded = upgradeNebiusPresetModels("nebius", provider);
@@ -102,6 +150,8 @@ describe("Nebius Token Factory preset", () => {
 		expect(upgraded.models?.[1]).toBe(provider.models[1]);
 		expect(upgraded.models?.[2]?.thinkingLevelMap).toEqual({ off: null, minimal: null, low: null, medium: null });
 		expect(upgraded.models?.[3]).toBe(provider.models[3]);
+		// Nano is no longer set up, but an entry an earlier setup wrote still gets its one level.
+		expect(upgraded.models?.[4]?.thinkingLevelMap).toEqual({ off: null, minimal: null, low: null, medium: null });
 		expect(upgradeNebiusPresetModels("other", provider)).toBe(provider);
 		// Already current: the same object comes back.
 		expect(upgradeNebiusPresetModels("nebius", upgraded)).toBe(upgraded);
@@ -120,6 +170,7 @@ describe("Nebius Token Factory preset", () => {
 		expect(merged.baseUrl).toBe("https://proxy.example/v1/");
 		expect(merged.models?.map((model) => model.id)).toEqual([
 			"nvidia/Nemotron-3-Ultra-550b-a55b",
+			"deepseek-ai/DeepSeek-V4.1-Flash-1017",
 			"nvidia/Nemotron-3_5-Lightning",
 			"nvidia/Nemotron-3.5-Super-VL",
 		]);

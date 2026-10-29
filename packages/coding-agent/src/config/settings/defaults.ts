@@ -31,6 +31,11 @@ export const SETTINGS_DEFAULTS = {
 	featureEnabled: false,
 	/** Auto Memory is on until the user turns it off; with no model of its own it uses the main model. */
 	autoMemoryEnabled: true,
+	/**
+	 * The vision assistant is on until the user turns it off. Left on by default, it takes the images only once it has a
+	 * vision model of its own (SettingsManager.isVisionAssistantActive).
+	 */
+	visionAssistantEnabled: true,
 	retry: {
 		enabled: true,
 		maxRetries: 3,

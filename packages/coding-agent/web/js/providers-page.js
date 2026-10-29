@@ -215,17 +215,17 @@ function ProviderDetail({ provider, entry, apiTypes, defaults, onSaved, onDirty,
 
 const NEBIUS = "nebius";
 
-/** Which NVIDIA Nemotron model does which job once a Token Factory key is saved (NEBIUS_ROLE_PLAN on the server). */
+/** Which model does which job once a Token Factory key is saved (NEBIUS_ROLE_PLAN on the server). */
 const NEBIUS_PLAN = [
-	{ model: "Nemotron 3 Ultra", jobs: N_("Main model") },
-	{ model: "Nemotron 3.5 Lightning", jobs: N_("Sub-agents, compaction, fallback, Auto Memory, hand-off notes, commit descriptions, bookmark notes, scheduled tasks, worktree naming, branch summaries") },
-	{ model: "Nemotron 3 Nano", jobs: N_("Conversation naming, translation") },
+	{ model: "DeepSeek V4.1 Flash", jobs: N_("Main model, commit descriptions") },
+	{ model: "Nemotron 3 Ultra", jobs: N_("Sub-agents, conversation naming, translation") },
+	{ model: "Nemotron 3.5 Lightning", jobs: N_("Compaction, fallback, Auto Memory, hand-off notes, bookmark notes, scheduled tasks, worktree naming, branch summaries") },
 	{ model: "Nemotron 3.5 Super VL", jobs: N_("Vision assistant (reads images)") },
 ];
 
 function NebiusPlan() {
 	return html`<section class="set-card">
-		<div class="set-card-head"><div class="col grow"><strong>${t("Who does what")}</strong><span class="set-card-desc">${t("Only jobs you have not set get a model; a job with its own model keeps it. Without Nano on the account, Lightning takes its jobs.")}</span></div></div>
+		<div class="set-card-head"><div class="col grow"><strong>${t("Who does what")}</strong><span class="set-card-desc">${t("Only jobs you have not set get a model; a job with its own model keeps it. Without DeepSeek on the account, Ultra takes its jobs.")}</span></div></div>
 		<div class="set-card-body nebius-plan">
 			${NEBIUS_PLAN.map((row) => html`<div class="nebius-plan-row" key=${row.model}><span class="nebius-plan-model">${row.model}</span><span class="dim">${t(row.jobs)}</span></div>`)}
 		</div>
@@ -269,7 +269,7 @@ function NebiusSetup({ onDone }) {
 		}
 	};
 	return html`<div class="stack">
-		<div class="prov-head"><div class="col grow"><div class="prov-title truncate">Nebius Token Factory <span class="badge">${t("Built in")}</span></div><div class="dim">${t("NVIDIA Nemotron models, served by Nebius Token Factory. Paste one API key and every job gets its model.")}</div></div></div>
+		<div class="prov-head"><div class="col grow"><div class="prov-title truncate">Nebius Token Factory <span class="badge">${t("Built in")}</span></div><div class="dim">${t("DeepSeek V4.1 Flash and NVIDIA Nemotron models, served by Nebius Token Factory. Paste one API key and every job gets its model.")}</div></div></div>
 		<section class="set-card">
 			<div class="set-card-head"><strong>${t("API key")}</strong></div>
 			<div class="set-card-body col">

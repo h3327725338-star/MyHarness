@@ -20,7 +20,8 @@ import {
 
 /**
  * Nebius Token Factory in one step: check the key against the account's model list, write the provider into
- * models.json, save the key, and give each job its NVIDIA Nemotron model (NEBIUS_ROLE_PLAN).
+ * models.json, save the key, and give each job its model, DeepSeek V4.1 Flash or an NVIDIA Nemotron model
+ * (NEBIUS_ROLE_PLAN).
  *
  * Only jobs the user has not set get a model: a job with its own model keeps it, and the main model changes only when
  * there is no usable one. A job the user never touched is also turned on (naming, vision, sub-agents, fallback), since
@@ -142,7 +143,7 @@ export class NebiusSetupUseCase {
 		this.host.refreshSessionHandoff();
 		return {
 			models: usable.map((pick) => ({ slot: pick.slot, id: pick.model.id, name: pick.model.name ?? pick.model.id })),
-			missing: (["ultra", "lightning", "nano", "vision"] as const).filter(
+			missing: (["flash", "ultra", "lightning", "vision"] as const).filter(
 				(slot) => !usable.some((pick) => pick.slot === slot),
 			),
 			assigned,

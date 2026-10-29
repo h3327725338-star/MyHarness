@@ -931,11 +931,22 @@ export class SettingsManager {
 	getVisionAssistantSettings(): VisionAssistantSettings & { enabled: boolean } {
 		const settings = this.globalSettings.visionAssistant;
 		return {
-			enabled: settings?.enabled ?? SETTINGS_DEFAULTS.featureEnabled,
+			enabled: settings?.enabled ?? SETTINGS_DEFAULTS.visionAssistantEnabled,
 			provider: settings?.provider,
 			model: settings?.model,
 			thinkingLevel: settings?.thinkingLevel,
 		};
+	}
+
+	/**
+	 * Whether the vision assistant takes the images: it is on, and it has a vision model of its own or the user turned it
+	 * on themselves. Only on by default, it never hands the images to the main model, so a chat model that reads images
+	 * keeps getting them as they are until a vision model is chosen.
+	 */
+	isVisionAssistantActive(): boolean {
+		const settings = this.getVisionAssistantSettings();
+		if (!settings.enabled) return false;
+		return Boolean(settings.provider && settings.model) || this.globalSettings.visionAssistant?.enabled === true;
 	}
 
 	setVisionAssistantSettings(settings: VisionAssistantSettings): void {

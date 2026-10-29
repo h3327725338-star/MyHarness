@@ -1,6 +1,6 @@
 # NVIDIA Nemotron on Nebius Token Factory
 
-This page documents one concrete, verified-by-configuration Provider setup: NVIDIA Nemotron models served by [Nebius Token Factory](https://api.tokenfactory.nebius.com/v1/), used as the model backend for a MyHarness coding session.
+This page documents one concrete, verified-by-configuration Provider setup: NVIDIA Nemotron models and DeepSeek V4.1 Flash 1017 served by [Nebius Token Factory](https://api.tokenfactory.nebius.com/v1/), used as the model backend for a MyHarness coding session.
 
 The `@myharness/ai` catalog stays empty (`getBuiltinProviders()` returns `[]`, `MODELS` is `{}`). Nebius Token Factory is offered ready-made by the Coding Agent product layer instead: a preset (`src/providers/models/nebius-preset.ts`) that is written into `models.json` as an ordinary `openai-completions` Provider once the user pastes a key (`src/application/use-cases/nebius-setup.ts`). After that it is a custom Provider like any other: it can be edited or deleted, and requests use no Nebius-specific code.
 
@@ -25,12 +25,13 @@ Token Factory exposes an OpenAI-compatible Chat Completions surface, so the port
 
 | Model ID | Display name | Context | Max output | Input | Reasoning |
 |----------|--------------|---------|------------|-------|-----------|
+| `deepseek-ai/DeepSeek-V4.1-Flash-1017` | DeepSeek V4.1 Flash 1017 | 1,048,576 | not published (65,536 is set) | text + image | off / low / high / max, as `reasoning_effort` |
 | `nvidia/Nemotron-3-Ultra-550b-a55b` | Nemotron 3 Ultra | 1,048,576 | 65,536 | text | off / medium / high, as `reasoning_effort` |
 | `nvidia/nemotron-3-super-120b-a12b` | Nemotron 3 Super | 262,144 | 65,536 | text | off / low / high, as `reasoning_effort` |
 | `nvidia/Nemotron-3_5-Lightning` | Nemotron 3.5 Lightning | 1,048,576 | 65,536 | text | off / high, as `reasoning_effort` |
 | `nvidia/Nemotron-3.5-Super-VL` | Nemotron 3.5 Super VL | 1,048,576 | not published | text + image (the endpoint also accepts video) | always on; do **not** send `reasoning_effort: none` |
 
-Prices recorded in the example configuration are `$1 / $3` (Ultra), `$0.3 / $0.9` (Super and Super-VL) and `$0.06 / $0.24` (Lightning) per million input/output tokens (USD). They are configuration values, not a live price feed; confirm current pricing on the Token Factory pricing page before budgeting a long session.
+Prices recorded in the example configuration are `$0.3 / $1.2` (DeepSeek V4.1 Flash 1017, as listed on Token Factory on 2026-10-29), `$1 / $3` (Ultra), `$0.3 / $0.9` (Super and Super-VL) and `$0.06 / $0.24` (Lightning) per million input/output tokens (USD). They are configuration values, not a live price feed; confirm current pricing on the Token Factory pricing page before budgeting a long session.
 
 The same Provider entry can also carry non-NVIDIA models served by Token Factory (for example `zai-org/GLM-5.3-Flash` for cheap fast turns) as long as at least one NVIDIA open-source model is part of the workflow when the project is used to demonstrate Token Factory usage.
 
@@ -43,21 +44,23 @@ The same Provider entry can also carry non-NVIDIA models served by Token Factory
 What happens on save (`POST /api/providers/nebius/setup`):
 
 - The key is checked with the account's model list (`GET /v1/models`, free). A `401`/`403` stops here and nothing is written.
-- The Nemotron models the list names are added under the spelling the list uses: Ultra, Lightning and Super VL, plus Nano (`nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` in third-party listings; only added when the account's list names a Nano model). If the list cannot be read, only the three IDs checked on 2026-10-25 are added. An existing `nebius` entry keeps its own Base URL, models and edits; only missing models are appended.
+- The models the list names are added under the spelling the list uses: DeepSeek V4.1 Flash 1017 (only the 1017 build; a plain "DeepSeek V4.1 Flash" is not matched), Nemotron 3 Ultra, Nemotron 3.5 Lightning and Nemotron 3.5 Super VL. If the list cannot be read, only the four IDs checked by hand are added (DeepSeek on the Token Factory model page on 2026-10-29, the three Nemotron models by request on 2026-10-25). Nemotron 3 Nano is no longer added: its jobs went to Ultra on 2026-10-29. A Nano entry an earlier version added stays in `models.json`. An existing `nebius` entry keeps its own Base URL, models and edits; only missing models are appended.
 - The key goes to the credential store (`auth.json`), not `models.json`.
 - Every job that has no model of its own gets one; a job with its own model keeps it:
 
 | Model | Jobs |
 |-------|------|
-| Nemotron 3 Ultra | main model (only when there is no usable main model yet), commit descriptions |
-| Nemotron 3.5 Lightning | sub-agents, compaction, fallback model, Auto Memory, hand-off notes, bookmark notes, scheduled tasks, worktree naming, branch summaries |
-| Nemotron 3 Nano | conversation naming, translation (Lightning when the account has no Nano) |
+| DeepSeek V4.1 Flash 1017 | main model (only when there is no usable main model yet), commit descriptions |
+| Nemotron 3 Ultra | sub-agents, conversation naming, translation |
+| Nemotron 3.5 Lightning | compaction, fallback model, Auto Memory, hand-off notes, bookmark notes, scheduled tasks, worktree naming, branch summaries |
 | Nemotron 3.5 Super VL | vision assistant |
 
-- The main model (when it is set up now), sub-agents and commit descriptions get their model's highest thinking level (high for Ultra and Lightning); the other jobs keep the provider's default.
+- A model the account does not list hands its jobs on: DeepSeek's to Ultra (Lightning when Ultra is missing too), Ultra's to Lightning. Super VL has no stand-in.
+- The main chat is on DeepSeek V4.1 Flash because the Nemotron models had problems calling tools as the main agent in testing; Nemotron keeps the sub-agent, naming, translation, background and image work.
+- The main model (when it is set up now), sub-agents and commit descriptions get their model's highest thinking level (max for DeepSeek, high for Ultra); the other jobs keep the provider's default.
 - Conversation naming, the vision assistant, sub-agents and the fallback model are turned on when the user never touched them; one the user turned off stays off.
 
-Nano is declared without `compat.supportsReasoningEffort` (like Super VL), so MyHarness never sends `reasoning_effort` to it and it always reasons; its 16,384-token output cap is a conservative value, since Token Factory does not publish one.
+Nano (added by versions before 2026-10-29) is declared without `compat.supportsReasoningEffort` (like Super VL), so MyHarness never sends `reasoning_effort` to it and it always reasons; its 16,384-token output cap is a conservative value, since Token Factory does not publish one.
 
 **Balance and spending.** Token Factory has no balance API (the balance and **Top up** are in the console's navigation). Once set up, the Nebius card shows **Balance and top up** (opens `https://tokenfactory.nebius.com/`), **Get an API key**, and this computer's estimate: every finished model request adds `usage.cost.total` to `provider-spend.json` next to `models.json` (prices from the model entries; the Token Factory bill is what counts). A request refused with HTTP `402`, or with an error that names the balance, is explained as a balance problem. The exact error Token Factory returns for a negative balance has not been observed.
 
@@ -108,14 +111,15 @@ Because of the second and third points, the example configuration declares this 
 
 Token Factory's Chat Completions API accepts `reasoning_effort` values `none`, `minimal`, `low`, `medium`, `high`, `xhigh` and `max` for every model, but a model runs only its own reasoning modes. MyHarness offers each model only the modes NVIDIA's model card documents for it (`enable_thinking`, plus `medium_effort` or `low_effort` in the chat template) and hides the other levels with `null` in `thinkingLevelMap`:
 
-| Model | Modes in NVIDIA's model card | MyHarness levels → `reasoning_effort` |
+| Model | Modes in the model's documentation | MyHarness levels → `reasoning_effort` |
 |-------|------------------------------|---------------------------------------|
+| DeepSeek V4.1 Flash 1017 | DeepSeek's own API: `low`, `high` (default) and `max` | `off` → `none`, `low` → `low`, `high` → `high`, `max` → `max` |
 | Nemotron 3 Ultra | reasoning off, medium effort, full reasoning | `off` → `none`, `medium` → `medium`, `high` → `high` |
 | Nemotron 3 Super (example file only) | reasoning off, low effort, full reasoning | `off` → `none`, `low` → `low`, `high` → `high` |
 | Nemotron 3.5 Lightning | reasoning on or off | `off` → `none`, `high` → `high` |
 | Nemotron 3.5 Super VL, Nemotron 3 Nano | (no `reasoning_effort` is sent) | `high` only: the model's default, reasoning on |
 
-What Token Factory runs for each name is not documented by Nebius. A third-party measurement on Super found `none` answers without reasoning, `low` reasons less than `medium`, and `high` reasons as long as `medium`, which matches Super's three modes. That Ultra's `medium` runs its medium-effort mode has not been measured.
+What Token Factory runs for each name is not documented by Nebius. For DeepSeek V4.1 Flash 1017 the levels follow DeepSeek's own API; whether Token Factory passes `low` and `max` through, and whether `none` turns its thinking off, has not been tested with a real key, and neither have its tool calls. A third-party measurement on Super found `none` answers without reasoning, `low` reasons less than `medium`, and `high` reasons as long as `medium`, which matches Super's three modes. That Ultra's `medium` runs its medium-effort mode has not been measured.
 
 MyHarness 0.0.3 wrote every accepted name as a level of its own for Ultra and Lightning, and no map for Super VL and Nano. Such entries, exactly as that version wrote them, get the levels above when `models.json` is read (`upgradeNebiusPresetModels`); an entry the user changed is left alone.
 
@@ -125,8 +129,8 @@ Because `supportsReasoningEffort` is opt-in, a model entry without it keeps the 
 
 Check these four things rather than trusting a green UI:
 
-- the composer shows the model you selected (`Nemotron 3 Ultra`, Provider `nebius`);
-- the context meter reflects the model's real window (1.0M for Ultra and Lightning, 262K for Super) — MyHarness reads it from the model entry, so a wrong entry shows the wrong number;
+- the composer shows the model you selected (for example `DeepSeek V4.1 Flash 1017` or `Nemotron 3 Ultra`, Provider `nebius`);
+- the context meter reflects the model's real window (1.0M for DeepSeek, Ultra and Lightning, 262K for Super) — MyHarness reads it from the model entry, so a wrong entry shows the wrong number;
 - the turn header reports elapsed time and tool-operation count for the finished turn;
 - the session JSONL under `~/.myharness/agent/sessions/` records the assistant turns with the model id.
 
@@ -135,7 +139,7 @@ A screenshot of a completed turn in the desktop app, with the model selector vis
 ## Limitations
 
 - Token Factory availability depends on your Nebius account and country of residence. A `401` means the key is wrong or missing; a `404`/`400` naming the model usually means the model ID is not enabled for your account.
-- Nemotron entries here declare `text` input only. Do not attach images and expect them to be read — use `nvidia/Nemotron-3.5-Super-VL` for image input.
+- Nemotron text entries here declare `text` input only. Do not attach images and expect them to be read — use `nvidia/Nemotron-3.5-Super-VL` for image input. DeepSeek V4.1 Flash 1017 declares `text` + `image`, but with the vision assistant on (the default once it has a model) images go to Super VL and the main model gets its report.
 - Long-context turns are billed on input tokens; a 1M-window model is not a free upgrade for routine edits.
 - MyHarness does not rotate keys or fail over between Token Factory keys. One saved key is used until you change it.
 

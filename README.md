@@ -4,11 +4,11 @@
 
 [![License: Apache-2.0](https://img.shields.io/github/license/h3327725338-star/MyHarness)](LICENSE)
 
-MyHarness is a personal AI for your Windows PC that works inside the websites you're already signed into. It remembers what matters to you, keeps chats and schedules in sync across your computers, and still handles coding when you need it. Out of the box it runs NVIDIA Nemotron models on Nebius Token Factory: paste one API key and every role is set up.
+MyHarness is a personal AI for your Windows PC that works inside the websites you're already signed into. It remembers what matters to you, keeps chats and schedules in sync across your computers, and still handles coding when you need it. Out of the box it runs DeepSeek V4.1 Flash and NVIDIA Nemotron models on Nebius Token Factory: paste one API key and every role is set up.
 
 Under the hood, an Electron shell runs a local-only Web UI (`127.0.0.1`) and a shared backend that connects the model Provider to your files, shell commands, a built-in browser, tools and resumable sessions.
 
-> Status: usable today on Windows x64, from the desktop app or a source checkout. Nebius Token Factory is offered ready-made (Settings → Providers → **Nebius Token Factory**: paste a key, the Nemotron models are assigned to each job); any other OpenAI-, Anthropic-, Gemini- or Mistral-compatible Provider can be added by hand. The verified boundaries are listed in [PROJECT_STATUS.md](PROJECT_STATUS.md).
+> Status: usable today on Windows x64, from the desktop app or a source checkout. Nebius Token Factory is offered ready-made (Settings → Providers → **Nebius Token Factory**: paste a key, DeepSeek V4.1 Flash and the Nemotron models are assigned to each job); any other OpenAI-, Anthropic-, Gemini- or Mistral-compatible Provider can be added by hand. The verified boundaries are listed in [PROJECT_STATUS.md](PROJECT_STATUS.md).
 
 ## Core capabilities
 
@@ -29,16 +29,16 @@ The source and status documents deliberately separate implemented contracts, con
 
 ## NVIDIA Nemotron on Nebius Token Factory
 
-The reference model backend for this project is **NVIDIA Nemotron served by [Nebius Token Factory](https://api.tokenfactory.nebius.com/v1/)**, and it is built in: Settings → Providers opens on **Nebius Token Factory**. **Get an API key** opens the Token Factory console in the built-in browser; the key pasted into the strip above that page (or into Settings) is checked against the account's model list, written as an ordinary `openai-completions` Provider in `models.json`, and every job that has no model of its own gets its Nemotron model:
+The reference model backend for this project is **NVIDIA Nemotron served by [Nebius Token Factory](https://api.tokenfactory.nebius.com/v1/)**, and it is built in: Settings → Providers opens on **Nebius Token Factory**. **Get an API key** opens the Token Factory console in the built-in browser; the key pasted into the strip above that page (or into Settings) is checked against the account's model list, written as an ordinary `openai-completions` Provider in `models.json`, and every job that has no model of its own gets its model:
 
 | Model | Jobs |
 |-------|------|
-| Nemotron 3 Ultra | main model, commit descriptions |
-| Nemotron 3.5 Lightning | sub-agents, compaction, fallback, Auto Memory, hand-off notes, bookmark notes, scheduled tasks, worktree naming, branch summaries |
-| Nemotron 3 Nano | conversation naming, translation (Lightning when the account has no Nano) |
+| DeepSeek V4.1 Flash 1017 | main model, commit descriptions (Ultra when the account has no DeepSeek) |
+| Nemotron 3 Ultra | sub-agents, conversation naming, translation |
+| Nemotron 3.5 Lightning | compaction, fallback, Auto Memory, hand-off notes, bookmark notes, scheduled tasks, worktree naming, branch summaries |
 | Nemotron 3.5 Super VL | vision assistant |
 
-The main model, sub-agents and commit descriptions are set to their model's highest thinking level. Each model offers only the thinking levels NVIDIA documents for it: Ultra has off, medium and high; Lightning has off and high.
+The main chat runs on DeepSeek V4.1 Flash because the Nemotron models had problems calling tools as the main agent in testing; the Nemotron models do the sub-agent, naming, translation, background and image work. The main model, sub-agents and commit descriptions are set to their model's highest thinking level (max for DeepSeek, high for Ultra). Each Nemotron model offers only the thinking levels NVIDIA documents for it: Ultra has off, medium and high; Lightning has off and high. DeepSeek offers off, low, high and max.
 
 Token Factory has no balance API, so the Nebius card links to the console for the balance and top-up, shows what this computer estimates it has spent from the model prices, and a request refused with HTTP 402 or an error that names the balance is explained as a balance problem.
 
@@ -46,13 +46,13 @@ Token Factory has no balance API, so the Nebius card links to the console for th
 
 | Model ID | Context | Max output | Added by |
 |----------|---------|------------|----------|
+| `deepseek-ai/DeepSeek-V4.1-Flash-1017` | 1,048,576 | not published (65,536 is set) | the built-in setup and the example file |
 | `nvidia/Nemotron-3-Ultra-550b-a55b` | 1,048,576 | 65,536 | the built-in setup and the example file |
 | `nvidia/Nemotron-3_5-Lightning` | 1,048,576 | 65,536 | the built-in setup and the example file |
 | `nvidia/Nemotron-3.5-Super-VL` | 1,048,576 | not published (4,096 is set) | the built-in setup and the example file |
-| `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` | 262,144 | 16,384 | the built-in setup, only when the account's model list has it |
 | `nvidia/nemotron-3-super-120b-a12b` | 262,144 | 65,536 | the example file only |
 
-The built-in setup takes each ID as the account's model list spells it. The Nano entry is the only one not yet confirmed on Token Factory. Only Super-VL accepts images; the others are text-only. Verified on 2026-10-25: a generated test image carrying a random string plus a red circle and a blue rectangle was read correctly in about 1.3 s. Give it a few thousand output tokens — its reasoning runs before the answer.
+The built-in setup takes each ID as the account's model list spells it. Earlier versions also added Nemotron 3 Nano for naming and translation; Ultra does that now, and a Nano entry that is already there is left as it is. DeepSeek V4.1 Flash 1017 and Super-VL accept images; with the vision assistant on (the default), images go to Super-VL and the main model gets its report. The Nemotron text models are text-only. Verified on 2026-10-25: a generated test image carrying a random string plus a red circle and a blue rectangle was read correctly in about 1.3 s. Give it a few thousand output tokens — its reasoning runs before the answer.
 
 ![Choosing a Nebius Nemotron model in the model selector](packages/coding-agent/docs/images/nebius-model-picker.png)
 
@@ -107,7 +107,7 @@ npm.cmd run build
 
 `dev-desktop.cmd` builds and starts the Electron desktop app, which is the normal way to use MyHarness. To run the sources from a command line instead, use `node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts` from the repository root; it opens no browser and prints the actual address as `MyHarness Web UI: <url>`.
 
-After startup, the start screen links to the built-in Nebius Token Factory setup (Settings → Providers). Paste a Token Factory key there and the Nemotron models are set up. Other Providers are described in [Providers](packages/coding-agent/docs/providers.md) and [Settings](packages/coding-agent/docs/settings.md).
+After startup, the start screen links to the built-in Nebius Token Factory setup (Settings → Providers). Paste a Token Factory key there and DeepSeek V4.1 Flash and the Nemotron models are set up. Other Providers are described in [Providers](packages/coding-agent/docs/providers.md) and [Settings](packages/coding-agent/docs/settings.md).
 
 To check that the Web source entry can start without a Provider credential:
 

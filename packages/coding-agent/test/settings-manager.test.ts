@@ -444,6 +444,24 @@ describe("SettingsManager", () => {
 			});
 		});
 
+		it("is on by default, but takes the images only with a vision model of its own or once turned on", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			// Nothing set: shown on, yet a chat model that reads images still gets them as they are.
+			expect(manager.getVisionAssistantSettings().enabled).toBe(true);
+			expect(manager.isVisionAssistantActive()).toBe(false);
+			// A vision model of its own, never switched: it takes the images.
+			manager.setVisionAssistantSettings({ provider: "openai", model: "vision-test" });
+			expect(manager.isVisionAssistantActive()).toBe(true);
+			// Turned on by the user without a model of its own: it uses the main model, as before.
+			manager.setVisionAssistantSettings({ enabled: true });
+			expect(manager.isVisionAssistantActive()).toBe(true);
+			// Turned off: never, whatever the model.
+			manager.setVisionAssistantSettings({ enabled: false, provider: "openai", model: "vision-test" });
+			expect(manager.getVisionAssistantSettings().enabled).toBe(false);
+			expect(manager.isVisionAssistantActive()).toBe(false);
+			await manager.flush();
+		});
+
 		it("keeps the selected model when the vision assistant is turned off", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			manager.setVisionAssistantSettings({

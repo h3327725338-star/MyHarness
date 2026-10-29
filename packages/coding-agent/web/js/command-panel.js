@@ -9,7 +9,7 @@ import { openSystemLink } from "./link-target.js";
 import { commitChanges, keepTaskChanges, pushChanges, restorePreview, restoreToLatestCommit, undoImpact, undoTaskChanges } from "./git-flow.js";
 import { explainDeleteFailure } from "./git-delete.js";
 import { deleteCustomProvider } from "./overlays-settings.js";
-import { EffortSlider, findModel, modelRefLabel, modelRefName } from "./model-menu.js";
+import { EffortSlider, defaultEffortName, findModel, jobDefaultEffort, modelRefLabel, modelRefName } from "./model-menu.js";
 import { N_, serverText, t } from "./i18n.js";
 import { LANGUAGES } from "./lang.js";
 import { COLOR_THEMES } from "./appearance-themes.js";
@@ -61,9 +61,9 @@ function inputScreen({ title, label, value = "", type = "text", placeholder, sub
 }
 
 // ---- /effort ------------------------------------------------------------------------------------------------
-/** The effort slider as a panel level: one stop per level; `withDefault` adds "Default" (no effort sent). */
-function effortSliderScreen({ title, levels, value, withDefault, onChange }) {
-	return { title, subtitle: t("Higher effort thinks longer before it answers: slower, but better on hard problems."), slider: { levels, value, withDefault, onChange } };
+/** The effort slider as a panel level: one stop per level; `withDefault` adds "Default" (standing for `defaultLevel`). */
+function effortSliderScreen({ title, levels, value, withDefault, defaultLevel, onChange }) {
+	return { title, subtitle: t("Higher effort thinks longer before it answers: slower, but better on hard problems."), slider: { levels, value, withDefault, defaultLevel, onChange } };
 }
 
 function effortScreen() {
@@ -705,17 +705,18 @@ function modelRefScreen(ctx, id) {
 				};
 			}),
 	});
-	// The effort of the chosen model: its own row, opening the slider (with "Default": no effort is sent).
+	// The effort of the chosen model: its own row, opening the slider (with "Default": the job keeps no level of its own).
 	if (levels.length) {
 		rows.push({
 			key: "effort",
 			label: t("Thinking effort"),
-			value: v.thinkingLevel ? effortName(v.thinkingLevel) : t("Default"),
+			value: v.thinkingLevel ? effortName(v.thinkingLevel) : defaultEffortName(jobDefaultEffort(id, levels)),
 			chevron: true,
 			onEnter: (c) =>
 				c.push(() => {
 					const now = live()?.value || {};
-					return effortSliderScreen({ title: t("Thinking effort"), levels: modelEfforts(findModel(state.models, now.provider, now.model)), value: now.thinkingLevel, withDefault: true, onChange: (level) => commit({ thinkingLevel: level }) });
+					const nowLevels = modelEfforts(findModel(state.models, now.provider, now.model));
+					return effortSliderScreen({ title: t("Thinking effort"), levels: nowLevels, value: now.thinkingLevel, withDefault: true, defaultLevel: jobDefaultEffort(id, nowLevels), onChange: (level) => commit({ thinkingLevel: level }) });
 				}),
 		});
 	}
@@ -1337,10 +1338,10 @@ function Row({ row, selected, busy, onClick, onHover }) {
 
 /** A panel level that is the effort slider: ←/→ move it, Enter / Esc / Backspace go back. */
 function SliderView({ spec, ctx }) {
-	const { levels, value, withDefault, onChange } = spec.slider;
+	const { levels, value, withDefault, defaultLevel, onChange } = spec.slider;
 	// The slider keeps the chosen level on screen while it is stored, so it is never dimmed or locked in between.
 	return html`<div class="cp-effort" onKeyDown=${(e) => e.key === "Backspace" && (e.preventDefault(), e.stopPropagation(), ctx.pop())}>
-		<${EffortSlider} levels=${levels} value=${value} onChange=${onChange} onDone=${ctx.pop} titled=${false} withDefault=${!!withDefault} />
+		<${EffortSlider} levels=${levels} value=${value} onChange=${onChange} onDone=${ctx.pop} titled=${false} withDefault=${!!withDefault} defaultLevel=${defaultLevel} />
 		${spec.subtitle ? html`<div class="cp-note dim">${spec.subtitle}</div>` : null}
 	</div>`;
 }

@@ -1016,6 +1016,27 @@ export function findWorkspaceDataContext(
 	return workspace ? { dataRoot, workspace } : undefined;
 }
 
+/**
+ * Un-register every Workspace whose folder is one of `folders`, in each chat mode, as the user would remove it: the
+ * folder and its chats stay, and the chats then belong to no Workspace. Returns how many registrations went.
+ */
+export function forgetWorkspacesAt(
+	folders: readonly string[],
+	agentDir: string = getAgentDir(),
+	dataRoot: string = getDataDir(),
+): number {
+	const store = WorkspaceStore.create(agentDir, resolvePath(dataRoot));
+	let removed = 0;
+	for (const mode of ["coding", "general"] as const satisfies readonly ChatMode[])
+		for (const workspace of store.list(mode))
+			if (
+				folders.some((folder) => pathsEqual(workspace.rootPath, folder)) &&
+				store.remove(workspace.workspaceId, mode)
+			)
+				removed++;
+	return removed;
+}
+
 /** Create (if needed) and return the internal working directory used by Sessions that have no Workspace. */
 export function ensureDefaultWorkingDir(agentDir: string = getAgentDir()): string {
 	const directory = getDefaultWorkingDir(agentDir);

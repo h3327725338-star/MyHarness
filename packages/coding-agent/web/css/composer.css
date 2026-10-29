@@ -500,6 +500,10 @@ button.env-chip:hover { color: var(--text); background: var(--surface-hover); }
 .effort-stop { position: absolute; top: 50%; width: 4px; height: 4px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--text-4); }
 .effort-thumb { position: absolute; top: 50%; width: 16px; height: 16px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--text); border: 3px solid var(--bg-raised); box-shadow: 0 0 0 1px var(--border-strong); transition: left var(--t-base) var(--ease); }
 .effort-track:focus .effort-thumb { box-shadow: 0 0 0 1px var(--border-focus), 0 0 0 4px var(--accent-soft); }
+/* "Default" is on: the thumb is drawn hollow on the level Default stands for, and that level's name is not bold. */
+.effort-thumb.ghost { background: var(--bg-raised); border: 2px solid var(--text-3); box-shadow: none; }
+.effort-label.implied { color: var(--text-2); }
+.effort-default { margin-top: 12px; align-self: flex-start; }
 /* The name of every level is written under its stop, so the slider needs no legend. The first and last names lean inward
    so they stay inside the popover. */
 .effort-labels { position: relative; height: 16px; margin-top: 10px; }

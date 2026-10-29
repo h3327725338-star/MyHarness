@@ -50,6 +50,7 @@ function createHarness(
 			model: "vision",
 			thinkingLevel: "medium",
 		}),
+		isVisionAssistantActive: () => options.enabled ?? true,
 		getVisionCapabilityTest: () =>
 			options.visionTestStatus ? { status: options.visionTestStatus, testedAt: 1 } : undefined,
 		setVisionAssistantSettings: vi.fn(),

@@ -7,7 +7,7 @@
 // This file lives in locales/ on purpose: test/web-i18n.test.ts keeps Chinese characters out of
 // web/js/*.js (it does not descend into locales/), and the translations must not leak into English
 // mode, so the lookup happens behind `isZh()` in panel-context.js. Extension / MCP / third-party
-// tools are never looked up here; they keep their own English description.
+// tools are never looked up here; they keep the first sentence of their own English description.
 //
 // Every name in packages/coding-agent/src/tools/registry.ts `allToolNames` must have an entry here — test/web-tool-descriptions-zh.test.ts
 // reads that set and fails the build when a new built-in tool is added without a Chinese sentence.
@@ -29,8 +29,8 @@ export const zhToolDescriptions = {
 	apply_rename: "按重命名方案一次性修改全部相关文件",
 	workspace: "控制内置浏览器与工作区标签",
 	agent: "委派任务给子 Agent",
-	workflow: "分阶段只读探索，用于多模块并行排查与验证",
-	ultracode: "高风险深度排查，结合反例检查与失败路径校验",
+	workflow: "多模块并行只读排查与验证",
+	ultracode: "高风险问题的深度排查",
 	agent_tasks: "查看或停止本对话的子智能体",
 	github: "访问已连接的 GitHub 资源",
 	mail: "读取和发送已连接的 Gmail、Outlook 邮件",

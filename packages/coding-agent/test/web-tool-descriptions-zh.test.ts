@@ -104,13 +104,14 @@ describe("Web UI: Chinese tool descriptions (right sidebar, display layer only)"
 		}
 	});
 
-	it("reuses the Chinese already in locales/zh-CN.js for the 15 tools that had one", () => {
+	it("has one short English sentence for every built-in tool, translated the same way in locales/zh-CN.js", () => {
 		const english = englishShortSentences(panelSource);
+		expect(Object.keys(english).sort()).toEqual(names);
 		for (const [name, literal] of Object.entries(english)) {
+			expect(literal.length, `${name} is longer than 60 characters: ${literal}`).toBeLessThanOrEqual(60);
 			expect(literal in dictionary, `zh-CN.js lost its entry for ${name}`).toBe(true);
 			expect(sentences[name], `${name} drifted away from zh-CN.js`).toBe(dictionary[literal]);
 		}
-		expect(Object.keys(english).length).toBe(15);
 	});
 
 	it("returns undefined for extension tools and unknown names, the table's sentence for built-in ones", () => {
@@ -127,22 +128,64 @@ describe("Web UI: Chinese tool descriptions (right sidebar, display layer only)"
 		}
 	});
 
-	it("shows the same text as before the change when the interface language is English", () => {
-		// Exact table and function from bd974d7; keep the regression runnable in source archives without Git.
-		const beforeSource = readFileSync(new URL("fixtures/tool-description-before.txt", import.meta.url), "utf8");
-		const previous = loadToolDescription(beforeSource, { zh: false });
+	it("shows the short sentence of every built-in tool in English, never the model's long description", () => {
 		const current = loadToolDescription(panelSource, { zh: false });
-		const english = englishShortSentences(beforeSource);
+		const english = englishShortSentences(panelSource);
 		for (const name of names) {
-			const modelText = `Model description for ${name}`;
-			const expected = english[name] ?? modelText;
-			const currentText = current(toolObject(name, modelText));
-			expect(currentText, `${name} changed its English sidebar text`).toBe(previous(toolObject(name, modelText)));
-			expect(currentText, `${name} English sidebar text`).toBe(expected);
+			const modelText = `Model description for ${name}. It goes on for several paragraphs.\n\nRules: ...`;
+			expect(current(toolObject(name, modelText)), `${name} English sidebar text`).toBe(english[name]);
 		}
-		// Extension tools and unknown names keep falling back to their own description in English mode as well.
-		expect(current(toolObject("acme_widget", "Third-party widget bridge", true))).toBe("Third-party widget bridge");
-		expect(current(toolObject("no_such_tool", "Some description"))).toBe("Some description");
+		// An extension that replaces a built-in tool shows its own text, not the built-in sentence.
+		expect(current(toolObject("read", "Reads Acme archives. Use for .acme files.", true))).toBe(
+			"Reads Acme archives.",
+		);
+	});
+
+	it("shows only the first sentence of an extension, MCP or unknown tool's own description", () => {
+		for (const zh of [false, true]) {
+			const current = loadToolDescription(panelSource, { zh, withDictionary: dictionary });
+			const show = (description: string) => current(toolObject("acme_widget", description, true));
+			expect(show("Third-party widget bridge")).toBe("Third-party widget bridge");
+			expect(show("Bridge to Acme widgets. Call it with a widget id; it returns JSON.")).toBe(
+				"Bridge to Acme widgets.",
+			);
+			expect(show("Reads logs, e.g. app.log. Then more.")).toBe("Reads logs, e.g. app.log.");
+			expect(show("Version 1.2 reader! More text.")).toBe("Version 1.2 reader!");
+			expect(show("First line without a stop\nSecond line.")).toBe("First line without a stop");
+			expect(show("\n  Starts after a blank line. More.")).toBe("Starts after a blank line.");
+			expect(show("读取 Acme 文件。然后返回结果。")).toBe("读取 Acme 文件。");
+			const long = show(`${"word ".repeat(60)}end.`);
+			expect(long.length).toBe(140);
+			expect(long.endsWith("…")).toBe(true);
+			expect(show("")).toBe("");
+			expect(current(toolObject("no_such_tool", "Some description. More."))).toBe("Some description.");
+			// Names that are Object.prototype members are not built-in tools either.
+			expect(current(toolObject("toString", "Prints things. More."))).toBe("Prints things.");
+		}
+	});
+
+	it("puts the whole description in the row's tooltip only when the row shows a cut version", () => {
+		expect(panelSource).toMatch(/class="dim res-desc" title=\$\{descriptionTip\(tool, shown\)\}/);
+		const context = vm.createContext({
+			N_: (text: string) => text,
+			t: (text: string) => text,
+			isZh: () => false,
+			zhToolDescription: () => undefined,
+			console,
+		});
+		vm.runInContext(
+			`${panelSource.replace(/^import .*;\r?\n/gm, "").replace(/^export (?:default )?/gm, "")}
+;globalThis.__tip = descriptionTip;`,
+			context,
+		);
+		const tip = (context as any).__tip as (tool: unknown, shown: string) => string | undefined;
+		const full = "Bridge to Acme widgets. Call it with a widget id.";
+		expect(tip(toolObject("acme_widget", full, true), "Bridge to Acme widgets.")).toBe(full);
+		expect(tip(toolObject("acme_widget", "Short one.", true), "Short one.")).toBeUndefined();
+		// A built-in row shows its own sentence; the model's long text is not pushed into a tooltip.
+		expect(
+			tip(toolObject("bash", "Execute a bash command. Long rules follow."), "Run Bash commands."),
+		).toBeUndefined();
 	});
 
 	it("shows Chinese for every built-in tool when the interface language is Chinese", () => {

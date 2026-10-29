@@ -2019,8 +2019,8 @@ describe("Web host (real runtime with a faux provider)", () => {
 		);
 	});
 
-	it("sets up Nebius Token Factory from one pasted key and gives each unset job its Nemotron model", async () => {
-		// Token Factory's model list, as the account sees it: Nano under the listed spelling, and one model of another maker.
+	it("sets up Nebius Token Factory from one pasted key and gives each unset job its model", async () => {
+		// Token Factory's model list, as the account sees it: Nano (which no job uses any more) and one model nobody asked for.
 		const nebius = await startEndpoint((req, res) => {
 			if (req.headers.authorization !== "Bearer nb-good") {
 				res.statusCode = 401;
@@ -2031,6 +2031,7 @@ describe("Web host (real runtime with a faux provider)", () => {
 			res.end(
 				JSON.stringify({
 					data: [
+						{ id: "deepseek-ai/DeepSeek-V4.1-Flash-1017" },
 						{ id: "nvidia/Nemotron-3-Ultra-550b-a55b" },
 						{ id: "nvidia/Nemotron-3_5-Lightning" },
 						{ id: "nvidia/Nemotron-3.5-Super-VL" },
@@ -2061,18 +2062,19 @@ describe("Web host (real runtime with a faux provider)", () => {
 		const result = await fx.post("/api/providers/nebius/setup", { apiKey: " nb-good " });
 		expect(result).toMatchObject({ ok: true, missing: [], listError: null });
 		expect(result.models.map((m: any) => [m.slot, m.id])).toEqual([
+			["flash", "deepseek-ai/DeepSeek-V4.1-Flash-1017"],
 			["ultra", "nvidia/Nemotron-3-Ultra-550b-a55b"],
 			["lightning", "nvidia/Nemotron-3_5-Lightning"],
 			["vision", "nvidia/Nemotron-3.5-Super-VL"],
-			["nano", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"],
 		]);
 		// The faux model already works, so the main model stays; every helper job had no model and gets one.
 		expect(result.kept).toEqual(["main"]);
 		expect(result.assigned).toEqual(
 			expect.arrayContaining(["compactionModel", "subAgent", "conversationNaming", "visionAssistant"]),
 		);
-		// Vision and sub-agents were never touched, so they are turned on; naming was turned off by the user and stays off.
-		expect(result.turnedOn).toEqual(expect.arrayContaining(["visionAssistant", "subAgent", "fallbackModel"]));
+		// Sub-agents and the fallback were never touched, so they are turned on (the vision assistant is on by default);
+		// naming was turned off by the user and stays off.
+		expect(result.turnedOn).toEqual(expect.arrayContaining(["subAgent", "fallbackModel"]));
 		expect(result.turnedOn).not.toContain("conversationNaming");
 
 		const custom = await fx.get("/api/providers/custom");
@@ -2094,23 +2096,23 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect(value("compactionModel").thinkingLevel).toBeUndefined();
 		expect(value("subAgent")).toMatchObject({
 			provider: "nebius",
-			model: "nvidia/Nemotron-3_5-Lightning",
+			model: "nvidia/Nemotron-3-Ultra-550b-a55b",
 			thinkingLevel: "high",
 			enabled: true,
 		});
 		expect(value("commitDescription")).toMatchObject({
 			provider: "nebius",
-			model: "nvidia/Nemotron-3-Ultra-550b-a55b",
-			thinkingLevel: "high",
+			model: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+			thinkingLevel: "max",
 		});
 		expect(value("conversationNaming")).toMatchObject({
 			provider: "nebius",
-			model: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+			model: "nvidia/Nemotron-3-Ultra-550b-a55b",
 			enabled: false,
 		});
 		expect(value("translation")).toMatchObject({
 			provider: "nebius",
-			model: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+			model: "nvidia/Nemotron-3-Ultra-550b-a55b",
 		});
 		expect(value("visionAssistant")).toMatchObject({
 			provider: "nebius",
@@ -2118,6 +2120,11 @@ describe("Web host (real runtime with a faux provider)", () => {
 			enabled: true,
 		});
 		expect(fx.hub.host.session.model?.id).toBe(mainBefore.id);
+		// A new chat starts a new runtime, which checks the vision model's provider: the assistant stays on.
+		const fresh = await fx.post("/api/sessions/new", { mode: "general" });
+		expect(fresh.created).toBe(true);
+		const afterRestart = (await fx.get("/api/settings")).items as Array<{ id: string; value: any }>;
+		expect(afterRestart.find((s) => s.id === "visionAssistant")?.value).toMatchObject({ enabled: true });
 
 		// Again, with the saved key: nothing is added twice and every job keeps what it has.
 		const again = await fx.post("/api/providers/nebius/setup", {});
@@ -2575,6 +2582,39 @@ describe("Web host (real runtime with a faux provider)", () => {
 		expect((await fx.get("/api/sessions/unbound")).sessions.map((s: any) => s.path)).not.toContain(
 			before.session.file,
 		);
+	});
+
+	it("deletes a workspace's artifacts while a chat of another workspace runs, but not while one of its own does", async () => {
+		const fx = await start();
+		const running = await fx.get("/api/state");
+		const other = tempDir("myharness-web-other-project");
+		const { workspace: otherWorkspace } = await fx.post("/api/workspaces/add", { path: other });
+		const ownWorkspace = (await fx.get("/api/workspaces")).workspaces.find((w: any) => w.current);
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		fx.faux.setResponses([
+			async () => {
+				await gate;
+				return fauxAssistantMessage([fauxText("slow answer")]);
+			},
+		]);
+		void fx.post("/api/prompt", { text: "slow task" }, running.slot);
+		await fx.waitFor("agent_start", (data) => data.slot === running.slot);
+		expect((await fx.get("/api/state", running.slot)).active).toBe(true);
+
+		// The running chat is in the first workspace: the other one goes with its artifacts.
+		expect(await fx.post("/api/workspaces/remove", { id: otherWorkspace.id, deleteArtifacts: true })).toEqual({
+			ok: true,
+		});
+		expect((await fx.get("/api/workspaces")).workspaces.some((w: any) => w.id === otherWorkspace.id)).toBe(false);
+		// Its own artifacts wait until it stops.
+		await expect(fx.post("/api/workspaces/remove", { id: ownWorkspace.id, deleteArtifacts: true })).rejects.toThrow(
+			"409: Stop the running tasks in this workspace before deleting its artifacts.",
+		);
+		release();
+		await fx.waitFor("run_finished", (data) => data.slot === running.slot);
 	});
 
 	it("creates and runs chats that belong to no workspace in MyHarness's default working directory", async () => {

@@ -21,7 +21,7 @@ import { getDefaultWorkingDir } from "./config/paths/index.ts";
 import { SettingsManager } from "./config/settings/index.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./config/trust/index.ts";
 import { ENV_SESSION_DIR, expandTildePath, getAgentDir, getDataDir, VERSION } from "./config.ts";
-import { ensureDefaultWorkingDir } from "./data/workspace-store.ts";
+import { ensureDefaultWorkingDir, forgetWorkspacesAt } from "./data/workspace-store.ts";
 import type { InlineExtension } from "./extensions/compat/types.ts";
 import { builtInExtensions } from "./extensions/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
@@ -249,9 +249,20 @@ async function createSessionManager(
 		}
 	}
 
+	// MyHarness's own folders are not projects. Started in its home (~/.myharness, where the installed app runs) or in its
+	// working directory for chats without a Workspace, the chat belongs to no Workspace: it runs in that working directory
+	// and opens under Default, instead of registering the folder as a Workspace. A registration left by an earlier version
+	// is dropped the way the user would remove it (the chats stay and show under Default).
+	const agentDir = getAgentDir();
+	const ownFolders = [dirname(resolvePath(agentDir)), getDefaultWorkingDir(agentDir)];
+	const inOwnFolder = !sessionDir && ownFolders.some((folder) => pathIdentityKey(folder) === pathIdentityKey(cwd));
+	if (inOwnFolder) forgetWorkspacesAt(ownFolders, agentDir);
+
 	// Session selection is performed in the browser. --resume starts the Web session list.
 
 	if (parsed.continue) {
+		// The desktop app always starts this way.
+		if (inOwnFolder) return SessionManager.continueRecentUnbound(ensureDefaultWorkingDir(agentDir));
 		return SessionManager.continueRecent(cwd, sessionDir);
 	}
 
@@ -267,13 +278,7 @@ async function createSessionManager(
 		);
 	}
 
-	// MyHarness's own folders are not projects. Started in its home (~/.myharness, where the installed app runs) or in its
-	// working directory for chats without a Workspace, the first chat belongs to no Workspace: it runs in that working
-	// directory and opens under Default, instead of registering the folder as a Workspace.
-	const agentDir = getAgentDir();
-	const ownFolders = [dirname(resolvePath(agentDir)), getDefaultWorkingDir(agentDir)];
-	if (!sessionDir && ownFolders.some((folder) => pathIdentityKey(folder) === pathIdentityKey(cwd)))
-		return SessionManager.createUnbound(ensureDefaultWorkingDir(agentDir), { id: parsed.sessionId });
+	if (inOwnFolder) return SessionManager.createUnbound(ensureDefaultWorkingDir(agentDir), { id: parsed.sessionId });
 	return SessionManager.create(cwd, sessionDir, { id: parsed.sessionId });
 }
 
@@ -720,7 +725,7 @@ export async function main(args: string[], options?: MainOptions) {
 		parsed,
 		settingsManager.getImageAutoResize(),
 		!settingsManager.getBlockImages(),
-		settingsManager.getVisionAssistantSettings().enabled,
+		settingsManager.isVisionAssistantActive(),
 	);
 	time("prepareInitialMessage");
 	if (deprecationWarnings.length > 0) await showDeprecationWarnings(deprecationWarnings);

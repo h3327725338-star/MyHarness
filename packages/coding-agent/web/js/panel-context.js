@@ -25,8 +25,50 @@ const TOOL_DESCRIPTIONS = {
 	github: N_("Access connected GitHub resources."),
 	web_search: N_("Search the web and read results."),
 	web_fetch: N_("Read web pages and documents."),
-	workflow: N_("Staged read-only exploration for parallel multi-module investigation and verification."),
-	ultracode: N_("Deep high-risk investigation with counterexample and failure-path checks."),
+	workflow: N_("Read-only parallel checks across modules."),
+	ultracode: N_("Deep check of high-risk problems."),
+	job_list: N_("List background jobs and their status."),
+	job_output: N_("Read the output of a background job."),
+	job_kill: N_("Stop a background job."),
+	apply_patch: N_("Change several files with one patch."),
+	apply_rename: N_("Apply a rename plan to every affected file."),
+	workspace: N_("Control the built-in browser and workspace tabs."),
+	agent_tasks: N_("See or stop this chat's sub-agents."),
+	mail: N_("Read and send connected Gmail and Outlook mail."),
+	memory_search: N_("Search saved long-term memories."),
+	memory_get: N_("Read a whole memory by its ID."),
+	memory_delete: N_("Delete a long-term memory for good."),
+	memory_claim: N_("Move a pending memory into this workspace."),
+	memory_write: N_("Create or update a long-term memory."),
+	session_search: N_("Find earlier chats."),
+	session_get: N_("Read an earlier chat's hand-off summary and text."),
+	ask_user_question: N_("Ask the user and wait for an answer."),
+	todo_write: N_("Create and update a task list."),
+	schedule: N_("Create and manage reminders and scheduled tasks."),
+};
+/** Full stops that do not end a sentence. */
+const ABBREVIATION = /\b(?:e\.g|i\.e|etc|vs|incl|approx)\.$/i;
+const SENTENCE_CAP = 140;
+/**
+ * The first sentence of a tool's own description: what an extension or MCP tool (no short sentence above) shows in
+ * the sidebar, with the whole text in the row's tooltip.
+ */
+export function firstSentence(text) {
+	const line = String(text ?? "").trim().split(/\r?\n/, 1)[0].trim();
+	let sentence = line;
+	for (const end of line.matchAll(/[.!?](?=\s|$)|[\u3002\uff01\uff1f]/g)) {
+		const head = line.slice(0, end.index + 1);
+		if (!ABBREVIATION.test(head)) {
+			sentence = head;
+			break;
+		}
+	}
+	return sentence.length > SENTENCE_CAP ? `${sentence.slice(0, SENTENCE_CAP - 1).trimEnd()}\u2026` : sentence;
+}
+/** The tooltip of a tool row: the whole description when the row shows only its first sentence. */
+const descriptionTip = (tool, shown) => {
+	const full = String(tool.description ?? "").trim();
+	return full && shown !== full && shown === firstSentence(full) ? full : undefined;
 };
 export const toolDescription = (tool) => {
 	// Chinese mode prefers the display-only table keyed by tool name (locales/zh-CN-tools.js); a miss keeps the
@@ -35,7 +77,7 @@ export const toolDescription = (tool) => {
 		const chinese = zhToolDescription(tool);
 		if (chinese) return chinese;
 	}
-	return TOOL_DESCRIPTIONS[tool.name] && !tool.extension ? t(TOOL_DESCRIPTIONS[tool.name]) : tool.description;
+	return Object.hasOwn(TOOL_DESCRIPTIONS, tool.name) && !tool.extension ? t(TOOL_DESCRIPTIONS[tool.name]) : firstSentence(tool.description);
 };
 
 function Section({ title, count, children, defaultOpen = true }) {
@@ -212,7 +254,8 @@ export function ContextPanel() {
 			${!resources ? html`<${Spinner} />` : resources.tools.map((tool) => {
 				const needsAgent = isDelegatedChild(tool.name) && !agentActive;
 				const disabled = snap.active || needsAgent;
-				return html`<div class="res-row" key=${tool.name} title=${needsAgent ? t("Enable the agent tool first") : undefined}><div class="col grow"><span class="mono">${tool.name}${tool.extension ? html` <span class="badge">${t("extension")}</span>` : null}</span><span class="dim res-desc">${toolDescription(tool)}</span></div><span title=${needsAgent ? t("Enable the agent tool first") : undefined}><${Toggle} checked=${tool.active} label=${tool.name} disabled=${disabled} onChange=${(v) => toggleTool(tool.name, v)} /></span></div>`;
+				const shown = toolDescription(tool);
+				return html`<div class="res-row" key=${tool.name} title=${needsAgent ? t("Enable the agent tool first") : undefined}><div class="col grow"><span class="mono">${tool.name}${tool.extension ? html` <span class="badge">${t("extension")}</span>` : null}</span><span class="dim res-desc" title=${descriptionTip(tool, shown)}>${shown}</span></div><span title=${needsAgent ? t("Enable the agent tool first") : undefined}><${Toggle} checked=${tool.active} label=${tool.name} disabled=${disabled} onChange=${(v) => toggleTool(tool.name, v)} /></span></div>`;
 			})}
 		<//>
 		<${Section} title=${t("Project context files")} count=${resources?.contextFiles.length} defaultOpen=${false}>

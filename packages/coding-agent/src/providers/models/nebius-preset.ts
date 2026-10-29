@@ -3,7 +3,7 @@ import type { ModelsJsonModel, ModelsJsonProvider } from "./config.ts";
 /**
  * Nebius Token Factory, offered ready-made: the user only pastes an API key. The `@myharness/ai` catalog stays empty;
  * this preset is written into models.json as an ordinary `openai-completions` provider, so it can be edited or deleted
- * like any other. Which NVIDIA Nemotron model does which job is `NEBIUS_ROLE_PLAN`.
+ * like any other. Which model (DeepSeek V4.1 Flash or an NVIDIA Nemotron model) does which job is `NEBIUS_ROLE_PLAN`.
  */
 export const NEBIUS_PROVIDER_ID = "nebius";
 export const NEBIUS_PROVIDER_NAME = "Nebius Token Factory";
@@ -13,7 +13,7 @@ export const NEBIUS_API_KEYS_URL = "https://tokenfactory.nebius.com/project/api-
 /** The console: its navigation shows the balance and the Top up button. Token Factory has no balance API. */
 export const NEBIUS_CONSOLE_URL = "https://tokenfactory.nebius.com/";
 
-export type NebiusSlot = "ultra" | "lightning" | "nano" | "vision";
+export type NebiusSlot = "flash" | "ultra" | "lightning" | "nano" | "vision";
 
 interface PresetModel {
 	slot: NebiusSlot;
@@ -23,6 +23,8 @@ interface PresetModel {
 	match: RegExp;
 	/** Used without a readable model list only when the ID was checked against Token Factory. */
 	verified: boolean;
+	/** No job uses it any more: a new setup does not add it, but an entry an earlier setup wrote is still upgraded. */
+	retired?: boolean;
 	entry: Omit<ModelsJsonModel, "id">;
 }
 
@@ -35,6 +37,19 @@ interface PresetModel {
  */
 const ULTRA_LEVELS = { off: "none", minimal: null, low: null, medium: "medium", high: "high" } as const;
 const LIGHTNING_LEVELS = { off: "none", minimal: null, low: null, medium: null, high: "high" } as const;
+/**
+ * DeepSeek's own API documents three efforts, low, high and max, with high as its default (api-docs.deepseek.com,
+ * Thinking Mode); off is Token Factory's `none`. How Token Factory runs each of them for this model is not documented.
+ */
+const DEEPSEEK_LEVELS = {
+	off: "none",
+	minimal: null,
+	low: "low",
+	medium: null,
+	high: "high",
+	xhigh: null,
+	max: "max",
+} as const;
 /** Super VL and Nano are sent no `reasoning_effort` (see PRESET_MODELS), so they always reason: that is their one level. */
 const ALWAYS_REASONING = { off: null, minimal: null, low: null, medium: null } as const;
 /** What MyHarness 0.0.3 wrote for Ultra and Lightning: every name the API accepts, as if each were a level of its own. */
@@ -58,11 +73,28 @@ const usd = (input: number, output: number) => ({
 
 /**
  * The models, as docs/nebius-token-factory.md records them. Ultra, Lightning and Super VL were checked against Token
- * Factory on 2026-10-25. Nano's ID comes from third-party listings, so it is only added when the account's model list
- * names it; like Super VL it declares no reasoning effort, so MyHarness never sends `reasoning_effort` to it (turning
- * reasoning off through Token Factory was only tried on Super VL, where it broke the answer).
+ * Factory on 2026-10-25; DeepSeek V4.1 Flash 1017's ID is the routing key its public endpoint page showed on 2026-10-29.
+ * Nano's ID comes from third-party listings and no job uses it now (retired); like Super VL it declares no reasoning
+ * effort, so MyHarness never sends `reasoning_effort` to it (turning reasoning off through Token Factory was only tried
+ * on Super VL, where it broke the answer).
  */
 const PRESET_MODELS: readonly PresetModel[] = [
+	{
+		slot: "flash",
+		id: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+		match: /deepseek[-_.]?v4[-_.]1[-_.]flash[-_.]?1017/i,
+		verified: true,
+		entry: {
+			name: "DeepSeek V4.1 Flash 1017",
+			reasoning: true,
+			input: ["text", "image"],
+			contextWindow: 1_048_576,
+			maxTokens: 65_536,
+			cost: usd(0.3, 1.2),
+			compat: { supportsReasoningEffort: true },
+			thinkingLevelMap: { ...DEEPSEEK_LEVELS },
+		},
+	},
 	{
 		slot: "ultra",
 		id: "nvidia/Nemotron-3-Ultra-550b-a55b",
@@ -115,6 +147,7 @@ const PRESET_MODELS: readonly PresetModel[] = [
 		id: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
 		match: /nemotron[-_.]?3[-_.]nano/i,
 		verified: false,
+		retired: true,
 		entry: {
 			name: "Nemotron 3 Nano",
 			reasoning: true,
@@ -141,7 +174,9 @@ export function upgradeNebiusPresetModels(providerId: string, provider: ModelsJs
 		const legacy =
 			preset.slot === "ultra" || preset.slot === "lightning"
 				? JSON.stringify(model.thinkingLevelMap) === JSON.stringify(LEGACY_EFFORT_MAP)
-				: model.thinkingLevelMap === undefined && !(model.compat && "supportsReasoningEffort" in model.compat);
+				: (preset.slot === "vision" || preset.slot === "nano") &&
+					model.thinkingLevelMap === undefined &&
+					!(model.compat && "supportsReasoningEffort" in model.compat);
 		if (!legacy) return model;
 		changed = true;
 		return { ...model, thinkingLevelMap: { ...preset.entry.thinkingLevelMap } };
@@ -149,21 +184,24 @@ export function upgradeNebiusPresetModels(providerId: string, provider: ModelsJs
 	return changed ? { ...provider, models } : provider;
 }
 
-/** Settings rows that pick a model, and the preset model each one gets. */
+/**
+ * Settings rows that pick a model, and the preset model each one gets (the user's plan of 2026-10-29: Nemotron's tool
+ * calls failed too often for the main chat, so it and commit descriptions run on DeepSeek V4.1 Flash).
+ */
 export const NEBIUS_ROLE_PLAN = {
-	main: "ultra",
+	main: "flash",
 	compactionModel: "lightning",
 	fallbackModel: "lightning",
-	subAgent: "lightning",
+	subAgent: "ultra",
 	autoMemory: "lightning",
 	"sessionContinuity.handoff": "lightning",
-	commitDescription: "ultra",
+	commitDescription: "flash",
 	bookmarkNotes: "lightning",
 	scheduledTasks: "lightning",
 	worktreeNaming: "lightning",
 	branchSummaryModel: "lightning",
-	conversationNaming: "nano",
-	translation: "nano",
+	conversationNaming: "ultra",
+	translation: "ultra",
 	visionAssistant: "vision",
 } as const satisfies Record<string, NebiusSlot>;
 
@@ -179,6 +217,7 @@ export type NebiusModelPick = { slot: NebiusSlot; model: ModelsJsonModel };
 export function pickNebiusModels(listed: readonly string[] | undefined): NebiusModelPick[] {
 	const picks: NebiusModelPick[] = [];
 	for (const preset of PRESET_MODELS) {
+		if (preset.retired) continue;
 		let id: string | undefined;
 		if (!listed) id = preset.verified ? preset.id : undefined;
 		else
@@ -190,15 +229,26 @@ export function pickNebiusModels(listed: readonly string[] | undefined): NebiusM
 	return picks;
 }
 
+/** Who stands in for a model the account does not have, nearest first. Vision has no stand-in. */
+const STAND_INS: Record<NebiusSlot, readonly NebiusSlot[]> = {
+	flash: ["ultra", "lightning"],
+	ultra: ["lightning"],
+	lightning: [],
+	nano: ["lightning"],
+	vision: [],
+};
+
 /**
- * The model a job gets from the picks: Nano's jobs go to Lightning when the account has no Nano, and the main model to
- * Lightning when it has no Ultra. Undefined when neither is there (vision has no stand-in).
+ * The model a job gets from the picks: its own, or the nearest stand-in the account has (DeepSeek's jobs go to Ultra,
+ * then Lightning; Ultra's to Lightning). Undefined when none is there.
  */
 export function nebiusModelFor(role: NebiusRole, picks: readonly NebiusModelPick[]): string | undefined {
 	const slot: NebiusSlot = NEBIUS_ROLE_PLAN[role];
-	const of = (wanted: NebiusSlot) => picks.find((pick) => pick.slot === wanted)?.model.id;
-	if (slot === "nano" || slot === "ultra") return of(slot) ?? of("lightning");
-	return of(slot);
+	for (const wanted of [slot, ...STAND_INS[slot]]) {
+		const id = picks.find((pick) => pick.slot === wanted)?.model.id;
+		if (id) return id;
+	}
+	return undefined;
 }
 
 /**

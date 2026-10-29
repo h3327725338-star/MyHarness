@@ -402,7 +402,7 @@ export class VisionAssistantManager {
 		if (this.options.settingsManager.getBlockImages()) return messages;
 
 		const configured = this.options.settingsManager.getVisionAssistantSettings();
-		if (!configured.enabled) return messages;
+		if (!this.options.settingsManager.isVisionAssistantActive()) return messages;
 		const resolved = resolveAssistantModel(configured, this.options.getMainModel?.());
 		const configurationReady =
 			Boolean(resolved) &&

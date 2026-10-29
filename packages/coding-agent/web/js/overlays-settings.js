@@ -311,7 +311,7 @@ function SettingControl({ item, models, onApply }) {
 				? html`<span title=${t("Sub-agent mode")}><${Select} class="mref-mode" ariaLabel=${t("Sub-agent mode")} value=${v.mode === "read-write" ? "read-write" : "read-only"} onChange=${(next) => onApply(item.id, { ...rest, mode: next })} options=${item.modeSelect.options.map((o) => ({ value: o.value, label: serverText(o.label) }))} /></span>`
 				: null;
 			return html`<div class="mref">
-				<div class="mref-main"><${ModelRefPicker} models=${models} value=${v} label=${t("Model for {name}", { name: serverText(item.label) })} onChange=${(ref) => onApply(item.id, { ...rest, ...ref })} />
+				<div class="mref-main"><${ModelRefPicker} models=${models} value=${v} jobId=${item.id} label=${t("Model for {name}", { name: serverText(item.label) })} onChange=${(ref) => onApply(item.id, { ...rest, ...ref })} />
 				${modeSelect}${item.inlineNumber ? html`<${InlineNumberField} item=${item} onApply=${onApply} />` : null}${hasEnable ? html`<${Toggle} checked=${!!v.enabled} label=${serverText(item.label)} onChange=${(on) => onApply(item.id, { ...rest, enabled: on })} />` : null}</div>
 			</div>`;
 		}
