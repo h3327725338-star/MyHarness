@@ -1,16 +1,35 @@
-# MyHarness
+<p align="right"><a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a></p>
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+<p align="center">
+  <a href="https://youtu.be/0QUhR5p5z0c"><img src="packages/coding-agent/docs/images/readme-demo-video.png" alt="MyHarness。Less to worry about。观看 2 分 29 秒的 YouTube 演示视频。" width="820"></a>
+</p>
 
-[![License: Apache-2.0](https://img.shields.io/github/license/h3327725338-star/MyHarness)](LICENSE)
+<p align="center">
+  MyHarness 是装在你自己 Windows 电脑上的个人 AI，在你已经登录的网站里直接干活，记得你在意的事，聊天和定时任务在你的几台电脑之间同步，写代码也照样能做。装好就能用 Nebius Token Factory 上的 NVIDIA Nemotron 和 DeepSeek V4.1 Flash：粘贴一个 API Key，每项工作都配好模型。
+</p>
 
-MyHarness 是装在你自己 Windows 电脑上的个人 AI，在你已经登录的网站里直接干活。它记得你在意的事，聊天和定时任务在你的几台电脑之间同步，写代码也照样能做。装好就能用 Nebius Token Factory 上的 NVIDIA Nemotron 和 DeepSeek V4.1 Flash：粘贴一个 API Key，每项工作都配好模型。
+<p align="center">
+  <a href="https://github.com/h3327725338-star/MyHarness/releases/latest"><img alt="下载 Windows 版" src="packages/coding-agent/docs/images/readme-button-download-zh.svg" height="38"></a>
+  <a href="https://youtu.be/0QUhR5p5z0c"><img alt="演示视频" src="packages/coding-agent/docs/images/readme-button-demo-zh.svg" height="38"></a>
+  <a href="docs/evaluation/README.md"><img alt="评测：真实运行结果（英文）" src="packages/coding-agent/docs/images/readme-button-evaluation-zh.svg" height="38"></a>
+  <a href="docs/JUDGE_TESTING.md"><img alt="评委测试指南（英文）" src="packages/coding-agent/docs/images/readme-button-guide-zh.svg" height="38"></a>
+</p>
 
-**[下载 Windows 版](https://github.com/h3327725338-star/MyHarness/releases/latest)** · [演示视频](https://youtu.be/0QUhR5p5z0c) · [评测：真实运行结果（英文）](docs/evaluation/README.md) · [评委测试指南（英文）](docs/JUDGE_TESTING.md) · [已知限制](docs/JUDGE_TESTING.md#known-limitations)
+<p align="center">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/github/license/h3327725338-star/MyHarness"></a>
+  &nbsp;·&nbsp; <a href="docs/JUDGE_TESTING.md#known-limitations">已知限制</a>
+</p>
 
-![MyHarness 的内置浏览器开在聊天旁边：Agent 在自己的浏览器里读取一个虚构的演示课程门户，并列出各项截止时间](packages/coding-agent/docs/images/myharness-browser-chat.png)
+<p align="center"><strong>真实运行的测量结果（主对话用 NVIDIA Nemotron 3.5 Lightning）。</strong><a href="docs/evaluation/README.md">方法、每一次失败和复现方式（英文）</a>。</p>
 
-**真实运行的测量结果（主对话用 NVIDIA Nemotron 3.5 Lightning）：** 联网搜索（Google + Tavily）答对 200 道随机 SimpleQA 题中的 196 道；记忆测试在全新对话里答对 120 题中的 111 题；已登录网站上的任务完成 9 个中的 8 个；通过 Nemotron 3.5 Super VL 看图答题，15 题全对。[方法、每一次失败和复现方式（英文）](docs/evaluation/README.md)。
+<table>
+  <tr>
+    <td align="center" valign="top" width="25%"><h3>196 / 200</h3>联网搜索（Google + Tavily）答对的随机 SimpleQA 题</td>
+    <td align="center" valign="top" width="25%"><h3>111 / 120</h3>记忆测试在全新对话里答对的题</td>
+    <td align="center" valign="top" width="25%"><h3>8 / 9</h3>在已登录网站上完成的任务</td>
+    <td align="center" valign="top" width="25%"><h3>15 / 15</h3>通过 Nemotron 3.5 Super VL 看图答对的题</td>
+  </tr>
+</table>
 
 ## 为什么做 MyHarness
 
@@ -29,14 +48,33 @@ MyHarness 起初是一名计算机专业学生为解决这些问题给自己做�
 
 ## 它能做什么
 
-**在真实网页中工作**
+### 在真实网页中工作
+
+![MyHarness 的内置浏览器开在聊天旁边：Agent 在自己的浏览器里读取一个虚构的演示课程门户，并列出各项截止时间](packages/coding-agent/docs/images/myharness-browser-chat.png)
+
+<table>
+  <tr>
+    <td><img src="packages/coding-agent/docs/images/readme-web-search.png" alt="用 Tavily 联网搜索：MyHarness 搜索一轮、打开三个网页后，回答 APA 引用格式的问题" width="400"></td>
+    <td><img src="packages/coding-agent/docs/images/readme-human-check.png" alt="交给我来：Agent 在演示网站的人机验证前停下，请用户自己完成" width="400"></td>
+  </tr>
+</table>
+
+<details>
+<summary>在你已登录的网站里办事 · 看得懂的书签 · 读真实网页，不只看摘要 · 该你出手时它会停下</summary>
 
 - **在你已登录的网站里办事。** 内置一个真正的 Chromium 浏览器，只用一个持久的配置，重启后登录还在。Agent 会开自己的后台标签页，读整页内容、点击、输入、下载文件，你在自己的标签里照常浏览。
 - **看得懂的书签。** 每个书签都带一句“你用这个网站做什么”，可以自己写，也可以让辅助模型写。说一句“看看这周有什么要交”，它就会去对的门户，不用你报网址。
 - **读真实网页，不只看摘要。** 网页搜索用 Tavily（不用 Key）和 Google，搜完会读排名靠前的几个网页的正文。网站或搜索引擎拦住普通请求时，MyHarness 会改用真正的浏览器打开，而不是直接放弃。
 - **该你出手时它会停下。** 已保存的密码由应用自己填，不会交给模型。网页需要你登录或做人机验证时，那个标签上会出现一条请求，Agent 等着，你弄完它再接着做。在验证码和机器人检测页面上，它的点击和输入会被直接拒绝。
 
-**记忆与用户画像**
+</details>
+
+### 记忆与用户画像
+
+![它记得：替用户起草的邮件里已经写好老师、作业和截止时间](packages/coding-agent/docs/images/readme-memory.png)
+
+<details>
+<summary>三层记忆 · 不用吩咐也会记 · 构建你的用户画像 · 自动整理 · 按预算召回</summary>
 
 - **三层记忆。** 全局记忆到哪儿都带着，每个工作区有自己的记忆，每个对话也有自己的笔记，所以一门课的细节不会混进另一门课的对话里。
 - **不用吩咐也会记。** 每个任务结束后，自动记忆会挑出值得留下的内容，存进对应的那一层。你也随时可以说“记住这个”或“忘掉那个”。
@@ -44,7 +82,12 @@ MyHarness 起初是一名计算机专业学生为解决这些问题给自己做�
 - **自动整理。** MyHarness 在后台合并相关的记忆，遇到矛盾以较新的事实为准，被替换的旧版本都保存在归档里，不需要你逐条确认。
 - **按预算召回。** 每一轮都在固定预算内召回记忆，画像再大也不会挤掉对话本身。
 
-**互相关联的对话**
+</details>
+
+### 互相关联的对话
+
+<details>
+<summary>多个对话同时运行 · 对话之间互相知道 · 长任务不会中断 · 回退或分叉 · 运行中也能插话 · 查找与保存</summary>
 
 - **多个对话同时运行。** 几个对话可以同时进行、互不阻塞，各自有自己的任务和工具。
 - **对话之间互相知道。** 问题涉及以前的对话时，助手会自己去查，并在回答里链接回它用到的那条消息。
@@ -53,23 +96,42 @@ MyHarness 起初是一名计算机专业学生为解决这些问题给自己做�
 - **运行中也能插话。** 任务运行时发消息，可以当场引导它，也可以排队作为下一步。
 - **查找与保存。** 搜索和筛选对话，归档旧对话，还能把一个对话导出成独立的 HTML 页面。
 
-**工作区与个性化**
+</details>
+
+### 工作区与个性化
+
+![台式机、工作电脑和笔记本画成三座白色小城市，通过你自己的 Google Drive 相连](packages/coding-agent/docs/images/readme-sync.png)
+
+<details>
+<summary>生活的每一块都有自己的工作区 · 你自己的提示词 · 跟着你到其他电脑</summary>
 
 - **生活的每一块都有自己的工作区。** General 模式的工作区（比如每门课、每个项目各一个）有各自的指令、记忆和资料库。
 - **你自己的提示词。** 每种模式一份个人提示词，一份可在任何对话里复用的常用提示词，另外还有 skills 和提示词模板可以扩展。
 - **跟着你到其他电脑。** 各层记忆、用户画像、日常（General 模式）聊天及其分支、定时任务、书签、提示词和草稿，都通过你自己的 Google Drive 同步；两台电脑上的修改会合并，而不是互相覆盖。
 
-**按计划自动运行**
+</details>
+
+### 按计划自动运行
+
+![每天早上：定时任务打开演示课程门户，列出这周的截止时间](packages/coding-agent/docs/images/readme-schedules.png)
+
+<details>
+<summary>按时运行 · 及时通知 · 处理邮件和 GitHub</summary>
 
 - **按时运行。** 提醒、Agent 任务（“每个工作日 8:00 看看我的门户和邮箱，记下新的截止日期”）和准点发出的邮件。MyHarness 开着就会运行，最小化到托盘也照样运行，还可以开机自启动。
 - **及时通知。** 任务开始、完成或失败都会弹卡片；你在别的窗口时，还有系统通知和可选的提示音。
 - **处理邮件和 GitHub。** Gmail 和 Outlook，走它们的 API，或者走你已经登录的网页邮箱；GitHub 直接用你电脑上已有的登录。
 
-**多智能体并行**
+</details>
+
+### 多智能体并行
 
 - **子智能体分工。** 做调研或其他大任务时，助手会把任务拆给并行运行的子智能体（默认用 Nemotron 3 Ultra），你可以单独停止其中任何一个。更长的任务用分阶段的工作流一步步完成。
 
-**日常使用体验**
+### 日常使用体验
+
+<details>
+<summary>划选引用 · 划词翻译 · 识图与文件预览 · 浏览器优先 · 按你的习惯来</summary>
 
 - **划选引用。** 在回答里选中任意一段就能引用到下一条消息；已发消息里的引用点一下就跳回原文。
 - **划词翻译。** 在对话、文件或面板里选中文字，翻译卡片就地出现；单个单词还会给出词条，带英式和美式发音。
@@ -77,18 +139,24 @@ MyHarness 起初是一名计算机专业学生为解决这些问题给自己做�
 - **浏览器优先。** 浏览器全屏时，对话就在屏幕边缘一碰就出；网站跟着应用的深色模式走，每个网站记住自己的缩放。
 - **按你的习惯来。** 三套配色主题，中英文界面，常用操作都有快捷键。
 
-**模型与数据**
+</details>
+
+### 模型与数据
 
 - **每项工作配自己的模型。** 子智能体、记忆、对话命名、翻译、识图、定时任务等辅助工作，都可以各自设置模型和思考强度，一个 Nebius Token Factory Key 就能全部配好。
 - **数据留在你的电脑上。** 界面只监听 `127.0.0.1`。聊天、记忆、设置和 Key 都在 `%USERPROFILE%\.myharness`（从源码 checkout 运行时，聊天和记忆放在该 checkout 的 `data` 文件夹里），没有 MyHarness 服务器。模型请求只发给你选的 Provider（默认 Nebius Token Factory），同步走你自己的 Google Drive。同步没有端到端加密，只有浏览器的登录数据会在上传前用你的口令加密。
 
-**同样支持编程**
+### 同样支持编程
 
 - **Coding 模式**在代码仓库里工作，有 Git、worktree、按轮次查看改动和子智能体。
 
 > 当前状态：在 Windows x64 上可用，桌面端和源码 checkout 两条路径都维护。Nebius Token Factory 已经内置（设置 → Providers → **Nebius Token Factory**：粘贴 Key，DeepSeek V4.1 Flash 和 Nemotron 模型按分工自动配好）；其他兼容 OpenAI、Anthropic、Gemini 或 Mistral 的 Provider 可以手动添加。已经验证过的边界写在 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
 
 ## NVIDIA Nemotron on Nebius Token Factory
+
+![每项工作配自己的模型：设置 → 智能体里为对话命名、自动记忆、子智能体、视觉助手等工作各选一个模型](packages/coding-agent/docs/images/readme-models.png)
+
+*设置 → 智能体。每项工作都可以换模型，默认分工见下表。*
 
 内置的模型后端是 **[Nebius Token Factory](https://api.tokenfactory.nebius.com/v1/)**，提供 **NVIDIA Nemotron** 和 DeepSeek V4.1 Flash。设置 → Providers 一打开就是 **Nebius Token Factory**。点 **获取 API Key** 会在内置浏览器里打开 Token Factory 控制台；粘贴到网页上方细栏（或设置里）的 Key 会先读取账户的模型列表确认可用，再作为普通的 `openai-completions` Provider 写入 `models.json`，所有还没有自己模型的工作都会配上对应的模型：
 
@@ -111,6 +179,9 @@ MyHarness 起初是一名计算机专业学生为解决这些问题给自己做�
 Token Factory 没有余额查询接口，所以 Nebius 卡片提供控制台链接（查看余额、充值），显示这台电脑按模型标价估算的花费；请求因余额问题被拒（HTTP 402 或错误信息提到余额）时会明确说明是余额问题。
 
 ![设置 → Providers 里的 Nebius Token Factory，可见余额链接和这台电脑估算的花费](packages/coding-agent/docs/images/nebius-provider-settings.png)
+
+<details>
+<summary>Model ID、上下文窗口和不用界面的配置方法</summary>
 
 | Model ID | 上下文 | 最大输出 | 由谁添加 |
 |----------|--------|----------|----------|
@@ -138,6 +209,8 @@ $env:NEBIUS_TOKEN_FACTORY_API_KEY = "<your-token-factory-key>"
 ```
 
 也可以在设置 → **Providers** → **添加 Provider** 中手动创建：Base URL 填 `https://api.tokenfactory.nebius.com/v1/`，API type 选 OpenAI Chat Completions。示例里的纯文本模型声明 `text` 输入，只提供各自写明的 thinking 档位，通过 `reasoning_effort` 发送（Ultra：off / medium / high；Super：off / low / high；Lightning：off / high；`off` 发送为 `none`）；Super-VL 声明 `text` 和 `image` 输入，不发送 `reasoning_effort`，始终会推理。
+
+</details>
 
 - 完整配置、验证步骤和限制：[NVIDIA Nemotron on Nebius Token Factory](packages/coding-agent/docs/nebius-token-factory.md)。
 - 可直接复制的配置：[`examples/nebius-models.json`](packages/coding-agent/docs/examples/nebius-models.json)。
@@ -189,11 +262,22 @@ node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts -
 
 [评测：NVIDIA Nemotron 上的真实运行（英文）](docs/evaluation/README.md) 记录了 MyHarness 在联网搜索、已登录网站任务、人工验证交接、记忆、看图、子智能体和定时任务上的实际表现：测试方法、每一次失败及原因、按标价算的费用，以及复现脚本。
 
+<p align="center">
+  <img src="packages/coding-agent/docs/images/readme-eval-search.png" alt="短事实题答对数（SimpleQA），用 OpenAI 自己的评分提示词打分。本次评测用 Nemotron 3.5 Lightning：Google 加 Tavily Key 分别答对 100 题中的 97 题和 99 题，Bing 加免 Key 的 Tavily 答对 90 题，同一模型不搜索答对 10 题。各厂商公布的数字来自其他日期和样本，不是直接对比：97%、93.3%、93.25%、90% 和 38%。" width="640">
+</p>
+
+<p align="center">
+  <img src="packages/coding-agent/docs/images/readme-eval-workflows.png" alt="核心工作流给出正确结果的次数：看图 15 次中 15 次；已登录网站任务 3 次中 3 次、3 次中 3 次、3 次中 2 次；把人机验证交给真人 3 次中 3 次；定时任务 3 次中 3 次、3 次中 2 次、3 次中 2 次、6 次中 6 次；子智能体报告 5 次中 4 次；新对话里的记忆 60 题中 55 题、60 题中 56 题、24 题中 24 题。" width="640">
+</p>
+
 [Judge testing guide](docs/JUDGE_TESTING.md) 写了“安装或从源码构建”、如何挂上 Nebius Token Factory 凭据、五分钟测试脚本、源码该看哪里，以及已知限制。
 
 ## 给开发者
 
 底层是一个 Electron 外壳，启动只监听本机（`127.0.0.1`）的 Web UI 和同一套后端，把模型 Provider 与你的文件、Shell 命令、内置浏览器、工具和可恢复 Session 连在一起。
+
+<details>
+<summary>架构和功能细节</summary>
 
 - **代码协作**：Coding Agent 产品层提供文件、Shell、PowerShell、编辑、写入、Symbols、Git 和 GitHub 工作流。
 - **入口**：本机浏览器 **Web UI**（`myharness`，只监听 loopback），并打包为 Windows 桌面应用；同时提供 Node.js SDK 供进程内集成。终端 TUI、Print 和 JSON 用户模式已移除，Web Terminal 面板保留。
@@ -207,6 +291,8 @@ node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts -
 - **逐角色绑模型**：主模型在输入框的模型菜单里选；设置 → 智能体里给每个辅助角色单独选 Provider、模型和思考档位——子智能体、Auto Memory、对话命名、压缩、分支摘要、交接摘要、提交描述、副本命名、翻译、视觉分析，以及备用模型。选“使用主模型”的角色跟随主对话的模型和思考档位；备用模型选它表示不启用备用。
 - **网页搜索默认打开**：Tavily + Google。没填 Key 时 Tavily 走它的免费免 Key 通道（由 Tavily 限速）；设置 → 网页搜索里有 **获取免费 Key** 的链接，免费 Key 每月 1000 次。Bing、DuckDuckGo、Brave 可以另外加上，轻量请求被拦截的引擎会改用浏览器。
 - **可选能力**：TypeScript extensions、skills 和 prompt templates。
+
+</details>
 
 源码和状态文档会把“已经实现的 contract”“已经加载的运行时配置”和“依赖机器或凭据的验证结果”分开记录。
 

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="168" height="38" viewBox="0 0 168 38" role="img" aria-label="下载 Windows 版">
+  <defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#3464e8"/><stop offset="1" stop-color="#5486f0"/></linearGradient></defs>
+  <rect x="0.5" y="0.5" width="167" height="37" rx="18.5" fill="url(#g)" stroke="#3464e8"/>
+  <text x="84.0" y="24" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, 'Microsoft YaHei', 'PingFang SC', sans-serif" font-size="14" font-weight="600" fill="#ffffff">下载 Windows 版</text>
+</svg>

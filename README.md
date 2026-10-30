@@ -1,16 +1,35 @@
-# MyHarness
+<p align="right"><a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a></p>
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+<p align="center">
+  <a href="https://youtu.be/0QUhR5p5z0c"><img src="packages/coding-agent/docs/images/readme-demo-video.png" alt="MyHarness. Less to worry about. Watch the 2:29 demo video on YouTube." width="820"></a>
+</p>
 
-[![License: Apache-2.0](https://img.shields.io/github/license/h3327725338-star/MyHarness)](LICENSE)
+<p align="center">
+  MyHarness is a personal AI for your Windows PC that works inside the websites you're already signed into, remembers what matters to you, keeps chats and schedules in sync across your computers, and still handles coding when you need it. Out of the box it runs NVIDIA Nemotron and DeepSeek V4.1 Flash on Nebius Token Factory: paste one API key and every job gets its model.
+</p>
 
-MyHarness is a personal AI for your Windows PC that works inside the websites you're already signed into. It remembers what matters to you, keeps chats and schedules in sync across your computers, and still handles coding when you need it. Out of the box it runs NVIDIA Nemotron and DeepSeek V4.1 Flash on Nebius Token Factory: paste one API key and every job gets its model.
+<p align="center">
+  <a href="https://github.com/h3327725338-star/MyHarness/releases/latest"><img alt="Download for Windows" src="packages/coding-agent/docs/images/readme-button-download.svg" height="38"></a>
+  <a href="https://youtu.be/0QUhR5p5z0c"><img alt="Demo video" src="packages/coding-agent/docs/images/readme-button-demo.svg" height="38"></a>
+  <a href="docs/evaluation/README.md"><img alt="Evaluation: real runs and results" src="packages/coding-agent/docs/images/readme-button-evaluation.svg" height="38"></a>
+  <a href="docs/JUDGE_TESTING.md"><img alt="Judge testing guide" src="packages/coding-agent/docs/images/readme-button-guide.svg" height="38"></a>
+</p>
 
-**[Download for Windows](https://github.com/h3327725338-star/MyHarness/releases/latest)** · [Demo video](https://youtu.be/0QUhR5p5z0c) · [Evaluation: real runs and results](docs/evaluation/README.md) · [Judge testing guide](docs/JUDGE_TESTING.md) · [Known limitations](docs/JUDGE_TESTING.md#known-limitations)
+<p align="center">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/github/license/h3327725338-star/MyHarness"></a>
+  &nbsp;·&nbsp; <a href="docs/JUDGE_TESTING.md#known-limitations">Known limitations</a>
+</p>
 
-![MyHarness with its built-in browser beside the chat: the agent read a made-up demo course portal in its own browser and listed the deadlines](packages/coding-agent/docs/images/myharness-browser-chat.png)
+<p align="center"><strong>Measured on real runs, with the main chat on NVIDIA Nemotron 3.5 Lightning.</strong> <a href="docs/evaluation/README.md">Methods, every failure and how to repeat the runs</a>.</p>
 
-**Measured on real runs, with the main chat on NVIDIA Nemotron 3.5 Lightning:** 196 of 200 random SimpleQA questions answered correctly with web search (Google + Tavily), 111 of 120 memory questions answered correctly in brand-new chats, 8 of 9 tasks done on a signed-in website, and 15 of 15 image questions answered correctly through Nemotron 3.5 Super VL. [Methods, every failure and how to repeat the runs](docs/evaluation/README.md).
+<table>
+  <tr>
+    <td align="center" valign="top" width="25%"><h3>196 / 200</h3>random SimpleQA questions answered correctly with web search (Google + Tavily)</td>
+    <td align="center" valign="top" width="25%"><h3>111 / 120</h3>memory questions answered correctly in brand-new chats</td>
+    <td align="center" valign="top" width="25%"><h3>8 / 9</h3>tasks done on a signed-in website</td>
+    <td align="center" valign="top" width="25%"><h3>15 / 15</h3>image questions answered correctly through Nemotron 3.5 Super VL</td>
+  </tr>
+</table>
 
 ## Why MyHarness
 
@@ -29,14 +48,33 @@ MyHarness started as one computer-science student's fix for these problems, buil
 
 ## What it does
 
-**In the real web**
+### In the real web
+
+![MyHarness with its built-in browser beside the chat: the agent read a made-up demo course portal in its own browser and listed the deadlines](packages/coding-agent/docs/images/myharness-browser-chat.png)
+
+<table>
+  <tr>
+    <td><img src="packages/coding-agent/docs/images/readme-web-search.png" alt="Searches the web, with Tavily: MyHarness answers a question about APA citations after one search round and three opened pages" width="400"></td>
+    <td><img src="packages/coding-agent/docs/images/readme-human-check.png" alt="Hands it to me: the agent stops at a human check on a demo site and asks the user to complete it" width="400"></td>
+  </tr>
+</table>
+
+<details>
+<summary>Works in the sites you're signed into · Bookmarks it understands · Reads real pages, not just snippets · Stops where only you should act</summary>
 
 - **Works in the sites you're signed into.** A real Chromium browser is built in, with one persistent profile, so your sign-ins survive restarts. The agent opens its own background tabs, reads whole pages, clicks, types and downloads files, while you keep browsing in yours.
 - **Bookmarks it understands.** Every bookmark carries a one-line note of what you use the site for, written by you or by a helper model, so "check what's due this week" reaches the right portal without you naming it.
 - **Reads real pages, not just snippets.** Web search runs on Tavily (no key needed) and Google, then reads the full text of the top results. When a site or search engine blocks a plain request, MyHarness opens it in a real browser instead of giving up.
 - **Stops where only you should act.** Saved passwords are filled in by the app itself and never reach the model. When a page needs your sign-in or a human check, a request bar appears on that tab; the agent waits and carries on once you're done. On CAPTCHA and bot-check pages its clicks and typing are refused.
 
-**Memory and your profile**
+</details>
+
+### Memory and your profile
+
+![It remembers: an email drafted for the user already names the lecturer, the assignment and the due date](packages/coding-agent/docs/images/readme-memory.png)
+
+<details>
+<summary>Memory at three levels · Saves without being asked · Builds your profile · Keeps itself tidy · Recalls within a budget</summary>
 
 - **Memory at three levels.** Global memories go everywhere with you, each workspace keeps its own, and each chat keeps its own notes, so one course's details don't spill into another's chats.
 - **Saves without being asked.** After each task, Auto Memory picks out what is worth keeping and files it at the right level. You can still say "remember this" or "forget that" at any time.
@@ -44,7 +82,12 @@ MyHarness started as one computer-science student's fix for these problems, buil
 - **Keeps itself tidy.** In the background, MyHarness merges related memories, settles contradictions in favour of the newer fact and keeps every replaced version in an archive, without asking you to approve each change.
 - **Recalls within a budget.** Memories are recalled on every turn within a fixed budget, so a large profile never crowds out the conversation.
 
-**Conversations that connect**
+</details>
+
+### Conversations that connect
+
+<details>
+<summary>Many chats at once · Chats that know each other · Long work keeps going · Rewind or fork · Steer while it works · Find and keep</summary>
 
 - **Many chats at once.** Several chats can run at the same time without blocking each other, each with its own task and tools.
 - **Chats that know each other.** When a question touches an earlier conversation, the assistant looks it up by itself and links its answer back to the exact message it used.
@@ -53,23 +96,42 @@ MyHarness started as one computer-science student's fix for these problems, buil
 - **Steer while it works.** Send a message while a task is running, to steer it on the spot or queue the next step.
 - **Find and keep.** Search and filter your chats, archive old ones, and export a chat as a self-contained HTML page.
 
-**Workspaces and personalization**
+</details>
+
+### Workspaces and personalization
+
+![A desktop, a work PC and a laptop drawn as small white cities, connected through your own Google Drive](packages/coding-agent/docs/images/readme-sync.png)
+
+<details>
+<summary>A workspace for each part of your life · Your own prompts · Follows you to your other PCs</summary>
 
 - **A workspace for each part of your life.** General-mode workspaces, for example one per course or project, each have their own instructions, memory and document library.
 - **Your own prompts.** A personal prompt for each mode, a list of saved prompts to reuse in any chat, and skills and prompt templates for more.
 - **Follows you to your other PCs.** Memories at every level, your profile, everyday (General-mode) chats with their branches, schedules, bookmarks, prompts and drafts sync through your own Google Drive, and changes made on two PCs are merged instead of overwritten.
 
-**Works on its own**
+</details>
+
+### Works on its own
+
+![Every morning: a scheduled task opened a demo course portal and listed this week's deadlines](packages/coding-agent/docs/images/readme-schedules.png)
+
+<details>
+<summary>Runs on a schedule · Keeps you posted · Handles email and GitHub</summary>
 
 - **Runs on a schedule.** Reminders, agent tasks ("every weekday at 8:00, check my portal and inbox and note new deadlines") and emails sent exactly on time. They run while MyHarness is open, including from the tray, and it can start with Windows.
 - **Keeps you posted.** A card tells you when a task starts, finishes or fails, with a system notification and an optional sound when you're in another window.
 - **Handles email and GitHub.** Gmail and Outlook, through their API or the webmail page you're already signed into; GitHub through the sign-in already on your PC.
 
-**Big jobs, in parallel**
+</details>
+
+### Big jobs, in parallel
 
 - **Sub-agents that split the work.** For research or other big jobs, the assistant hands parts to sub-agents that run in parallel (on Nemotron 3 Ultra by default), and you can stop any one of them. Staged workflows handle longer jobs step by step.
 
-**Polished for daily use**
+### Polished for daily use
+
+<details>
+<summary>Quote and ask · Translate anything you select · Sees images and opens your files · A browser that comes first · Made to feel like yours</summary>
 
 - **Quote and ask.** Select any part of an answer to quote it in your next message; a quote in a sent message jumps back to the original text.
 - **Translate anything you select.** In the chat, files or panels, a translation card opens in place, and a single word gets a dictionary entry with UK and US pronunciation.
@@ -77,18 +139,24 @@ MyHarness started as one computer-science student's fix for these problems, buil
 - **A browser that comes first.** Full-screen browsing keeps the chat one edge away, websites follow the app's dark mode, and each site keeps its own zoom.
 - **Made to feel like yours.** Three color themes, an English or Chinese interface, and keyboard shortcuts for the common actions.
 
-**Your models, your data**
+</details>
+
+### Your models, your data
 
 - **A model for every job.** Sub-agents, memory, chat naming, translation, vision, schedules and the other helper jobs can each have their own model and thinking level, and one Nebius Token Factory key sets them all up.
 - **Your data stays on your PC.** The interface listens only on `127.0.0.1`. Chats, memories, settings and keys live in `%USERPROFILE%\.myharness` (a source build run from a checkout keeps chats and memories in that checkout's `data` folder), and there is no MyHarness server. Model calls go to the Provider you choose (Nebius Token Factory by default), and sync goes through your own Google Drive. Sync is not end-to-end encrypted, except the browser's sign-ins, which are sealed with your passphrase before upload.
 
-**Still writes code**
+### Still writes code
 
 - **Coding mode** works inside a repository with Git, worktrees, per-turn change review and sub-agents.
 
 > Status: usable today on Windows x64, from the desktop app or a source checkout. Nebius Token Factory is offered ready-made (Settings → Providers → **Nebius Token Factory**: paste a key, DeepSeek V4.1 Flash and the Nemotron models are assigned to each job); any other OpenAI-, Anthropic-, Gemini- or Mistral-compatible Provider can be added by hand. The verified boundaries are listed in [PROJECT_STATUS.md](PROJECT_STATUS.md).
 
 ## NVIDIA Nemotron on Nebius Token Factory
+
+![Every job, its own model: Settings → Agent lists a model for each job, such as conversation naming, Auto Memory, sub-agents and the vision assistant](packages/coding-agent/docs/images/readme-models.png)
+
+*Settings → Agent. Any job can use a different model; the defaults are in the table below.*
 
 The built-in model backend is **[Nebius Token Factory](https://api.tokenfactory.nebius.com/v1/)**, serving **NVIDIA Nemotron** and DeepSeek V4.1 Flash. Settings → Providers opens on **Nebius Token Factory**. **Get an API key** opens the Token Factory console in the built-in browser; the key pasted into the strip above that page (or into Settings) is checked against the account's model list, written as an ordinary `openai-completions` Provider in `models.json`, and every job that has no model of its own gets its model:
 
@@ -111,6 +179,9 @@ The main chat runs on DeepSeek V4.1 Flash because the Nemotron models had proble
 Token Factory has no balance API, so the Nebius card links to the console for the balance and top-up, shows what this computer estimates it has spent from the model prices, and a request refused with HTTP 402 or an error that names the balance is explained as a balance problem.
 
 ![Nebius Token Factory in Settings → Providers, with the balance links and this computer's spending estimate](packages/coding-agent/docs/images/nebius-provider-settings.png)
+
+<details>
+<summary>Model IDs, context windows and setup without the UI</summary>
 
 | Model ID | Context | Max output | Added by |
 |----------|---------|------------|----------|
@@ -138,6 +209,8 @@ $env:NEBIUS_TOKEN_FACTORY_API_KEY = "<your-token-factory-key>"
 ```
 
 It can also be created by hand in Settings → **Providers** → **Add provider** with Base URL `https://api.tokenfactory.nebius.com/v1/` and API type OpenAI Chat Completions. The text models of the example declare `text` input and offer only their documented thinking levels, sent as `reasoning_effort` (Ultra: off / medium / high; Super: off / low / high; Lightning: off / high; `off` is sent as `none`); Super-VL declares `text` and `image` input, is sent no `reasoning_effort` and always reasons.
+
+</details>
 
 - Full setup, verification steps and limits: [NVIDIA Nemotron on Nebius Token Factory](packages/coding-agent/docs/nebius-token-factory.md).
 - Ready-to-copy configuration: [`examples/nebius-models.json`](packages/coding-agent/docs/examples/nebius-models.json).
@@ -189,11 +262,22 @@ This smoke check does not prove that an external Provider, OAuth flow, Web Searc
 
 [Evaluation: real runs on NVIDIA Nemotron](docs/evaluation/README.md) reports what MyHarness did on web search, signed-in website tasks, human-check handoff, memory, images, sub-agents and schedules: the setup, every failure with its cause, the cost at list prices, and the scripts to repeat the runs.
 
+<p align="center">
+  <img src="packages/coding-agent/docs/images/readme-eval-search.png" alt="Short fact questions answered correctly (SimpleQA), graded with OpenAI's own grader prompt. This evaluation on Nemotron 3.5 Lightning: 97 of 100 and 99 of 100 with Google and a Tavily key, 90 of 100 with Bing and keyless Tavily, 10 of 100 with the same model and no search. Vendors' published numbers, on other dates and samples and not head-to-head: 97%, 93.3%, 93.25%, 90% and 38%." width="640">
+</p>
+
+<p align="center">
+  <img src="packages/coding-agent/docs/images/readme-eval-workflows.png" alt="Core workflows, runs that gave the right result: reading images 15 of 15; signed-in website tasks 3 of 3, 3 of 3 and 2 of 3; handing a human check to a real person 3 of 3; scheduled tasks 3 of 3, 2 of 3, 2 of 3 and 6 of 6; sub-agent reports 4 of 5; memory in new chats 55 of 60, 56 of 60 and 24 of 24." width="640">
+</p>
+
 [Judge testing guide](docs/JUDGE_TESTING.md) covers installing (or building from source), attaching Nebius Token Factory credentials, a five-minute test script, what to inspect in the source, and the known limitations.
 
 ## For developers
 
 Under the hood, an Electron shell runs a local-only Web UI (`127.0.0.1`) and a shared backend that connects the model Provider to your files, shell commands, a built-in browser, tools and resumable sessions.
+
+<details>
+<summary>Architecture and feature details</summary>
 
 - **Code collaboration**: file, shell, PowerShell, editing, writing, Symbols, Git, and GitHub workflows exposed through the Coding Agent product layer.
 - **Entry points**: a local browser **Web UI** (`myharness`, loopback only), packaged as a Windows desktop app, plus a Node.js SDK for in-process integrations. Terminal Interactive, Print and JSON modes have been removed; the Web Terminal panel is retained.
@@ -207,6 +291,8 @@ Under the hood, an Electron shell runs a local-only Web UI (`127.0.0.1`) and a s
 - **Per-role model binding**: the main model is picked in the composer's model menu, and Settings → Agent binds a Provider, model and thinking level for each helper role — sub-agents, Auto Memory, chat naming, compaction, branch and handoff summaries, commit descriptions, worktree naming, translation, vision, and a fallback model. A role set to “Use the main model” follows the main chat's model and effort; for the fallback model that means no fallback.
 - **Web search on by default**: Tavily and Google. Without a key Tavily answers through its free keyless access (rate limited by Tavily); Settings → Web search has a **Get a free key** link for 1,000 searches a month. Bing, DuckDuckGo and Brave can be added, and an engine that blocks the lightweight request falls back to a browser.
 - **Optional extras**: TypeScript extensions, skills and prompt templates.
+
+</details>
 
 The source and status documents deliberately separate implemented contracts, configured runtime behavior, and machine- or credential-dependent validation.
 

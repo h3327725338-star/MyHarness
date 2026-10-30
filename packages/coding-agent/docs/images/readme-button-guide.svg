@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="126" height="38" viewBox="0 0 126 38" role="img" aria-label="Judge guide">
+  <defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#3464e8"/><stop offset="1" stop-color="#5486f0"/></linearGradient></defs>
+  <rect x="0.5" y="0.5" width="125" height="37" rx="18.5" fill="#24292f" stroke="#3d444d"/>
+  <text x="63.0" y="24" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, 'Microsoft YaHei', 'PingFang SC', sans-serif" font-size="14" font-weight="600" fill="#ffffff">Judge guide</text>
+</svg>
