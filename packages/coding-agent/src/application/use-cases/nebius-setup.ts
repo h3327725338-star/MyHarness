@@ -26,7 +26,8 @@ import {
  * Only jobs the user has not set get a model: a job with its own model keeps it, and the main model changes only when
  * there is no usable one. A job the user never touched is also turned on (naming, vision, sub-agents, fallback), since
  * its model is now there; one the user turned off stays off. The main model, sub-agents and commit descriptions get
- * their model's highest thinking level (TOP_LEVEL_ROLES); the other jobs keep the provider's default.
+ * their model's highest thinking level (TOP_LEVEL_ROLES); the other jobs are left at Default, which runs them at their
+ * model's highest level as well (OWN_MODEL_DEFAULT_THINKING).
  */
 export class NebiusSetupUseCase {
 	private readonly host: NebiusSetupHost;

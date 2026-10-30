@@ -11,15 +11,18 @@ const SHELL_COLORS = Object.freeze({
   forest: { scheme: 'dark', bg: '#292e2b', text: '#e3e4df', text2: '#bfc3bd', text3: '#a5aaa3', line: '#464c47', hover: '#3c423e', accent: '#a7c080', danger: '#e9a09c', onDanger: '#2a1110' },
   amber: { scheme: 'dark', bg: '#302b28', text: '#e6e3df', text2: '#c6c0b9', text3: '#b0a89f', line: '#4e4640', hover: '#453d37', accent: '#d4ae82', danger: '#e9a09c', onDanger: '#2a1110' },
   light: { scheme: 'light', bg: '#fbfbfa', text: '#1d2020', text2: '#565c5c', text3: '#666b6b', line: '#dfe2e1', hover: '#edefee', accent: '#2c66d6', danger: '#b93a33', onDanger: '#ffffff' },
+  lightForest: { scheme: 'light', bg: '#f0f4eb', text: '#1b201a', text2: '#4e574b', text3: '#5a6356', line: '#d2dacb', hover: '#e4ebde', accent: '#47773a', danger: '#b93a33', onDanger: '#ffffff' },
+  lightAmber: { scheme: 'light', bg: '#f8f2e8', text: '#221e18', text2: '#59524a', text3: '#655d53', line: '#e0d6c6', hover: '#efe7da', accent: '#96632b', danger: '#b93a33', onDanger: '#ffffff' },
 });
 
 /** The colors for the saved Web UI preferences (null before any), decided as the page does it (boot-theme.js). */
 function shellColors(prefs, systemDark) {
   const mode = prefs?.theme || 'system';
-  if (!(mode === 'dark' || (mode === 'system' && systemDark))) return SHELL_COLORS.light;
   const chatMode = prefs?.chatMode === 'general' ? 'general' : 'coding';
-  const theme = prefs?.colorThemes?.[chatMode] ?? prefs?.colorTheme;
-  return SHELL_COLORS[['classic', 'forest', 'amber'].includes(theme) ? theme : 'classic'];
+  const saved = prefs?.colorThemes?.[chatMode] ?? prefs?.colorTheme;
+  const theme = ['classic', 'forest', 'amber'].includes(saved) ? saved : 'classic';
+  if (mode === 'dark' || (mode === 'system' && systemDark)) return SHELL_COLORS[theme];
+  return SHELL_COLORS[{ classic: 'light', forest: 'lightForest', amber: 'lightAmber' }[theme]];
 }
 
 /** Settings → Appearance → Animations: 'on', 'off', or 'system' (the page asks Windows through prefers-reduced-motion). */

@@ -19,7 +19,7 @@
           "cost": {
             "input": 0.3,
             "output": 1.2,
-            "cacheRead": 0,
+            "cacheRead": 0.006,
             "cacheWrite": 0,
             "currency": "USD"
           },
@@ -48,7 +48,7 @@
           "cost": {
             "input": 1,
             "output": 3,
-            "cacheRead": 0,
+            "cacheRead": 0.12,
             "cacheWrite": 0,
             "currency": "USD"
           },
@@ -75,7 +75,7 @@
           "cost": {
             "input": 0.3,
             "output": 0.9,
-            "cacheRead": 0,
+            "cacheRead": 0.06,
             "cacheWrite": 0,
             "currency": "USD"
           },
@@ -102,7 +102,7 @@
           "cost": {
             "input": 0.06,
             "output": 0.24,
-            "cacheRead": 0,
+            "cacheRead": 0.03,
             "cacheWrite": 0,
             "currency": "USD"
           },
@@ -130,7 +130,7 @@
           "cost": {
             "input": 0.3,
             "output": 0.9,
-            "cacheRead": 0,
+            "cacheRead": 0.06,
             "cacheWrite": 0,
             "currency": "USD"
           },

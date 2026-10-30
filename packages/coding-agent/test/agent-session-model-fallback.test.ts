@@ -7,6 +7,7 @@ import {
 	type AssistantMessageEvent,
 	EventStream,
 	getModel,
+	getSupportedThinkingLevels,
 	type Model,
 } from "@myharness/ai/compat";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -70,13 +71,17 @@ describe("AgentSession fallback model", () => {
 	async function createSession(options: { errors: Record<string, string>; fallback?: boolean; maxRetries?: number }) {
 		const main = getModel("anthropic", "claude-sonnet-4-5")!;
 		const backup: Model<any> = { ...main, provider: "backup", id: "backup-model", name: "Backup Model" };
-		const calls: Array<{ provider: string; messages: AgentMessage[] }> = [];
+		const calls: Array<{ provider: string; messages: AgentMessage[]; reasoning?: string }> = [];
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model: main, systemPrompt: "Test", tools: [] },
-			streamFunction: (model, context) => {
-				calls.push({ provider: model.provider, messages: [...context.messages] });
+			streamFunction: (model, context, streamOptions) => {
+				calls.push({
+					provider: model.provider,
+					messages: [...context.messages],
+					reasoning: streamOptions?.reasoning,
+				});
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
 					const error = options.errors[model.provider];
@@ -138,6 +143,10 @@ describe("AgentSession fallback model", () => {
 		const handedOver = created.calls[2]!.messages;
 		expect(handedOver.some((m) => m.role === "user")).toBe(true);
 		expect(handedOver.some((m) => m.role === "assistant" && m.stopReason === "error")).toBe(false);
+		// No effort is set for the fallback model: it runs at the highest level that model supports.
+		const top = getSupportedThinkingLevels(getModel("anthropic", "claude-sonnet-4-5")!).at(-1);
+		expect(top).not.toBe("off");
+		expect(created.calls[2]!.reasoning).toBe(top);
 
 		const start = created.events.find((event) => event.type === "model_fallback_start");
 		expect(start).toMatchObject({ from: "anthropic/claude-sonnet-4-5", to: "backup/backup-model", retries: 1 });

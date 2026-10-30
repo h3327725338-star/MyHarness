@@ -74,8 +74,13 @@ try {
    setView({chatMode:'coding'});await wait(30);if(palette()!==color||state.view.colorTheme!==scheme) throw Error('Coding theme not restored');
   }
   setView({chatMode:'general',colorTheme:'forest'});await wait(30);checkSwitch('#d4ae82','#a7c080');
-  setView({theme:'light'});await wait(30);checkSwitch('#2c66d6','#2c66d6');if(palette()!=='#fbfbfa') throw Error('light palette changed');
-  checkNewTokens('light');
+  // Light display has the same schemes: General is on Quiet Forest and Coding on Warm Amber from the steps above.
+  setView({theme:'light'});await wait(30);checkSwitch('#96632b','#47773a');if(palette()!=='#f0f4eb') throw Error('light Quiet Forest not applied');
+  checkNewTokens('light forest');
+  setView({chatMode:'coding'});await wait(30);checkSwitch('#96632b','#47773a');if(palette()!=='#f8f2e8') throw Error('light Warm Amber not applied');
+  checkNewTokens('light amber');
+  setView({colorTheme:'classic'});await wait(30);checkSwitch('#2c66d6','#47773a');if(palette()!=='#fbfbfa') throw Error('light Classic changed');
+  checkNewTokens('light classic');
   setView({theme:'dark',chatMode:'general',colorTheme:'amber'});
   setView({chatMode:'coding',colorTheme:'forest'});location.reload();await new Promise(()=>{});
  }

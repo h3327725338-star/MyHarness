@@ -144,7 +144,7 @@ import {
 	type VisionAssistantMessageDetails,
 	type VisionAssistantProgress,
 } from "../vision/assistant.ts";
-import { type MainModelRef, resolveAssistantModel } from "./assistant-model.ts";
+import { type MainModelRef, resolveAssistantModel, withSupportedEffort } from "./assistant-model.ts";
 import {
 	AUTO_MEMORY_SYSTEM_PROMPT,
 	AutoMemoryManager,
@@ -1897,7 +1897,9 @@ export class AgentSession {
 	/** Sub-agent settings with the model it really runs on ("use the main model" resolved to the current one). */
 	private _subAgentSettings() {
 		const settings = this.settingsManager.getSubAgentSettings();
-		const resolved = resolveAssistantModel(settings, this._mainModelRef());
+		const ref = resolveAssistantModel(settings, this._mainModelRef());
+		// The effort the workers really get ("Default" is the model's highest level).
+		const resolved = ref && withSupportedEffort(ref, this._modelRuntime.getModel(ref.provider, ref.model));
 		return {
 			...settings,
 			chatMode: this.sessionManager.getMode(),

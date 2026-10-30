@@ -44,7 +44,7 @@ it.skipIf(process.env.MYHARNESS_TARGETED_BROWSER_E2E !== "1" || !installed.lengt
 				`
 import {h,html,render,useState,Segmented} from '/js/ui.js';
 import {SettingsModal} from '/js/overlays-settings.js';
-import {EffortPicker} from '/js/model-menu.js';
+import {EffortPicker,jobDefaultEffort} from '/js/model-menu.js';
 import {set,setView} from '/js/store.js';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 try {
@@ -77,33 +77,36 @@ try {
  if(document.body.textContent.includes('Restore default')) throw Error('Restore default is still shown');
  render(null,document.getElementById('app'));
 
- // 3. Seven levels and "Default": every name has room, and Default is a switch named with the level it stands for, not
- //    a stop left of "off" that reads as the lowest level.
- function Effort(){const [v,setV]=useState(undefined);return html\`<\${EffortPicker} levels=\${['off','minimal','low','medium','high','xhigh','max']} value=\${v} withDefault defaultLevel="off" onChange=\${setV} />\`;}
+ // 3. Seven levels and "Default": every name has room, and Default is a switch named with the level it stands for (a job
+ //    with a model of its own runs at that model's highest level, jobDefaultEffort), not a stop left of "off".
+ const efforts=['off','minimal','low','medium','high','xhigh','max'];
+ const top=jobDefaultEffort('compaction',efforts);
+ if(top!=='max'||jobDefaultEffort('compaction',['off','medium','high'])!=='high'||jobDefaultEffort('scheduledTasks',efforts)!=='chat') throw Error('Default does not stand for the highest level: '+top);
+ function Effort(){const [v,setV]=useState(undefined);return html\`<\${EffortPicker} levels=\${efforts} value=\${v} withDefault defaultLevel=\${top} onChange=\${setV} />\`;}
  render(h(Effort,{}),document.getElementById('effort'));
  await wait(30);
  const chip=document.querySelector('#effort button');
- if(chip.textContent.trim()!=='Default (off)') throw Error('the chip does not say what Default is: '+chip.textContent);
+ if(chip.textContent.trim()!=='Default (max)') throw Error('the chip does not say what Default is: '+chip.textContent);
  chip.click();await wait(350);
  const labels=[...document.querySelectorAll('.effort-pop .effort-label')];
  if(labels.length!==7) throw Error('expected 7 effort names, got '+labels.length);
  const boxes=labels.map(el=>el.getBoundingClientRect());
  for(let i=1;i<boxes.length;i++) if(boxes[i].left<boxes[i-1].right) throw Error('effort names overlap at '+i);
  const sw=document.querySelector('.effort-pop .effort-default');
- if(!sw||sw.textContent.trim()!=='Default (off)') throw Error('no Default switch: '+(sw&&sw.textContent));
+ if(!sw||sw.textContent.trim()!=='Default (max)') throw Error('no Default switch: '+(sw&&sw.textContent));
  const isOn=()=>sw.querySelector('[role=switch]').getAttribute('aria-checked');
  if(isOn()!=='true') throw Error('the Default switch is not on');
  const ghost=document.querySelector('.effort-pop .effort-thumb.ghost');
- if(!ghost||ghost.style.left!=='0%') throw Error('no hollow thumb on off: '+(ghost&&ghost.style.left));
+ if(!ghost||ghost.style.left!=='100%') throw Error('no hollow thumb on max: '+(ghost&&ghost.style.left));
  // Picking a level turns Default off and puts a solid thumb there.
- document.querySelector('.effort-pop .effort-track').dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true}));
+ document.querySelector('.effort-pop .effort-track').dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true}));
  await wait(80);
  if(isOn()!=='false') throw Error('Default stays on after a level was picked');
  if(!document.querySelector('.effort-pop .effort-thumb:not(.ghost)')) throw Error('no thumb on the picked level');
- if(chip.textContent.trim()!=='max') throw Error('the chip does not show the picked level: '+chip.textContent);
+ if(chip.textContent.trim()!=='off') throw Error('the chip does not show the picked level: '+chip.textContent);
  // And back: the switch gives the job no level of its own again.
  sw.querySelector('[role=switch]').click();await wait(80);
- if(isOn()!=='true'||chip.textContent.trim()!=='Default (off)') throw Error('Default did not come back: '+chip.textContent);
+ if(isOn()!=='true'||chip.textContent.trim()!=='Default (max)') throw Error('Default did not come back: '+chip.textContent);
  document.body.insertAdjacentHTML('beforeend','<p id="ready">passed</p>');
 } catch(error) {document.body.insertAdjacentHTML('beforeend','<p id="ready">'+error.message+'</p>');}
 `,

@@ -1,5 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { SHELL_COLORS, cannotStartPage, shellColors, shellMotion, startWait, startingPage } = require('../start-page.cjs');
 
 const english = (en) => en;
@@ -16,6 +18,11 @@ test('the host pages take the colors of the saved appearance, decided as the app
   assert.equal(shellColors({ theme: 'dark', colorThemes: { coding: 'amber' } }, false), SHELL_COLORS.amber);
   assert.equal(shellColors({ theme: 'system', colorTheme: 'forest' }, true), SHELL_COLORS.forest);
   assert.equal(shellColors({ theme: 'dark', colorTheme: 'neon' }, false), SHELL_COLORS.classic);
+  // Light display has the same three schemes, for the mode on screen.
+  assert.equal(shellColors({ theme: 'light', colorThemes: { coding: 'forest', general: 'amber' } }, true), SHELL_COLORS.lightForest);
+  assert.equal(shellColors({ theme: 'light', chatMode: 'general', colorThemes: { coding: 'forest', general: 'amber' } }, true), SHELL_COLORS.lightAmber);
+  assert.equal(shellColors({ theme: 'system', colorTheme: 'forest' }, false), SHELL_COLORS.lightForest);
+  assert.equal(shellColors({ theme: 'light', colorTheme: 'neon' }, false), SHELL_COLORS.light);
   assert.equal(shellMotion({ motion: 'off' }), 'off');
   assert.equal(shellMotion({ motion: 'on' }), 'on');
   assert.equal(shellMotion({}), 'system');
@@ -39,6 +46,35 @@ test('the starting page says about how long the wait is, and nothing when starti
   assert.match(quick.later, /longer than usual/);
   assert.equal(startWait(30000, english).laterMs, 48000);
   assert.equal(startWait(NaN, english).expectMs, 20000);
+});
+
+test('the page colors are the conversation column of the app in the same theme', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../coding-agent/web/css/tokens.css'), 'utf8');
+  const block = (selector) => {
+    const start = css.indexOf(`${selector} {`);
+    assert.notEqual(start, -1, selector);
+    const body = css.slice(start + selector.length + 2, css.indexOf('}', start));
+    return Object.fromEntries([...body.matchAll(/--([\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+  };
+  const display = (theme) => `:root[data-theme="${theme}"]`;
+  const scheme = (theme, name) => `${display(theme)}[data-color-theme="${name}"]`;
+  const selectors = {
+    classic: [display('dark')],
+    forest: [display('dark'), scheme('dark', 'forest')],
+    amber: [display('dark'), scheme('dark', 'amber')],
+    light: [display('light')],
+    lightForest: [display('light'), scheme('light', 'forest')],
+    lightAmber: [display('light'), scheme('light', 'amber')],
+  };
+  const names = { bg: 'bg-panel', text: 'text', text2: 'text-2', text3: 'text-3', line: 'border', hover: 'surface-hover', accent: 'accent', danger: 'danger', onDanger: 'on-danger' };
+  for (const [theme, list] of Object.entries(selectors)) {
+    const tokens = Object.assign(block(':root'), ...list.map(block));
+    const value = (token) => {
+      const reference = /^var\(--([\w-]+)\)$/.exec(tokens[token]);
+      return reference ? value(reference[1]) : tokens[token];
+    };
+    for (const [color, token] of Object.entries(names)) assert.equal(SHELL_COLORS[theme][color], value(token), `${theme} ${color}`);
+  }
 });
 
 test('the starting page is a complete page in the interface language with the window buttons', () => {

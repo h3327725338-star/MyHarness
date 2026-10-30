@@ -198,15 +198,15 @@ export function EffortSlider({ levels, value, onChange, disabled, autoFocus, onD
 }
 
 /**
- * What "Default" stands for in the effort of a job with a model of its own: that model's lowest level (the server
- * resolves an empty level to "off" and clamps it, assistant-model.ts), except scheduled tasks, which keep the effort a
- * new chat has ("chat").
+ * What "Default" stands for in the effort of a job with a model of its own: the highest level that model supports (the
+ * server asks for "max" and brings it within the model's levels, OWN_MODEL_DEFAULT_THINKING), except scheduled tasks,
+ * which keep the effort a new chat has ("chat").
  */
 export function jobDefaultEffort(jobId, levels) {
-	return jobId === "scheduledTasks" ? "chat" : levels[0];
+	return jobId === "scheduledTasks" ? "chat" : levels.at(-1);
 }
 
-/** "Default", named with what it stands for: "Default (Off)", or "Default (same as the chat)". */
+/** "Default", named with what it stands for: "Default (max)", or "Default (same as the chat)". */
 export function defaultEffortName(defaultLevel) {
 	if (defaultLevel === "chat") return t("Default (same as the chat)");
 	return defaultLevel ? t("Default ({level})", { level: effortName(defaultLevel) }) : t("Default");
@@ -215,8 +215,8 @@ export function defaultEffortName(defaultLevel) {
 /**
  * A text button that opens the effort slider above (or below) it.
  *
- * props: levels, value, onChange(level | undefined), disabled, placement, withDefault (offer "Default": no effort is
- * sent, the provider decides), class, label
+ * props: levels, value, onChange(level | undefined), disabled, placement, withDefault (offer "Default": the job keeps
+ * no level of its own), defaultLevel (the level "Default" stands for, jobDefaultEffort), class, label
  */
 export function EffortPicker({ levels, value, onChange, disabled, placement = "top", align = "end", withDefault, defaultLevel, class: cls = "chip", label, title }) {
 	const anchor = useRef(null);

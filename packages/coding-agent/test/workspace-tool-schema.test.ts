@@ -37,6 +37,22 @@ describe("Workspace tool parameter schema", () => {
 		}
 	});
 
+	it("accepts the True and False words models send for an operation's own boolean fields", () => {
+		expect(validate({ operation: "open", url: "https://example.com", background: "False" })).toMatchObject({
+			background: false,
+		});
+		expect(validate({ operation: "open", url: "https://example.com", background: "True" })).toMatchObject({
+			background: true,
+		});
+		expect(validate({ operation: "read", tabId: "browser:1", links: "True", scroll: "True" })).toMatchObject({
+			links: true,
+			scroll: true,
+		});
+		expect(() => validate({ operation: "open", url: "https://example.com", background: "maybe" })).toThrow(
+			/background/,
+		);
+	});
+
 	it("keeps the operation branch matrix reachable", () => {
 		const schema = createWorkspaceToolDefinition().parameters as unknown as SchemaRecord;
 		const operations = new Set<string>();

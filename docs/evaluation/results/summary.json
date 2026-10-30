@@ -1,0 +1,1212 @@
+{
+  "search": {
+    "sampleSize": 100,
+    "seed": 20261030,
+    "myharnessLightning": {
+      "n": 100,
+      "correct": 90,
+      "incorrect": 6,
+      "notAttempted": 4,
+      "accuracy": 0.9,
+      "correctGivenAttempted": 0.9375,
+      "fScore": 0.9183673469387755,
+      "medianSeconds": 19.55,
+      "p90Seconds": 142.3,
+      "meanWebSearchCalls": 1.87,
+      "webSearchCalls": 187,
+      "webSearchFailed": 9,
+      "questionsWithTavilyResults": 15,
+      "questionsWithBingResults": 97,
+      "questionsWithGoogleResults": 0,
+      "resultsShown": 1384,
+      "resultsFromTavily": 93,
+      "resultsFromBing": 1314,
+      "resultsFromGoogle": 0,
+      "resultsFromBoth": 23,
+      "pagesRead": 371,
+      "failuresReported": {
+        "tavily:keyless_limit": 211,
+        "page:timeout": 43,
+        "page:http": 10,
+        "page:forbidden": 26,
+        "page:challenge_required": 8,
+        "page:empty_content": 8,
+        "page:unavailable": 4,
+        "bing:invalid_response": 9,
+        "bing:challenge_required": 1
+      },
+      "runsWithBenchmarkCopyInResults": [
+        "sqa-070:CORRECT"
+      ],
+      "runsThatOpenedABenchmarkCopy": [],
+      "correctWithoutThoseRuns": 89,
+      "runsWithoutThem": 99,
+      "answersWithSourceLink": 17,
+      "toolCalls": 406,
+      "toolErrors": 18,
+      "providerErrors": 1,
+      "meanCostUsd": 0.0026065999999999993,
+      "totalCostUsd": 0.26065999999999995
+    },
+    "myharnessUltra": {
+      "n": 57,
+      "correct": 50,
+      "incorrect": 5,
+      "notAttempted": 2,
+      "accuracy": 0.8771929824561403,
+      "correctGivenAttempted": 0.9090909090909091,
+      "fScore": 0.8928571428571429,
+      "medianSeconds": 21,
+      "p90Seconds": 82.6,
+      "meanWebSearchCalls": 1.631578947368421,
+      "webSearchCalls": 93,
+      "webSearchFailed": 2,
+      "questionsWithTavilyResults": 9,
+      "questionsWithBingResults": 56,
+      "questionsWithGoogleResults": 0,
+      "resultsShown": 862,
+      "resultsFromTavily": 68,
+      "resultsFromBing": 822,
+      "resultsFromGoogle": 0,
+      "resultsFromBoth": 28,
+      "pagesRead": 232,
+      "failuresReported": {
+        "tavily:keyless_limit": 119,
+        "page:unavailable": 3,
+        "bing:invalid_response": 6,
+        "page:http": 12,
+        "page:forbidden": 13,
+        "page:timeout": 25,
+        "page:challenge_required": 2,
+        "page:empty_content": 4
+      },
+      "runsWithBenchmarkCopyInResults": [
+        "sqa-029:CORRECT"
+      ],
+      "runsThatOpenedABenchmarkCopy": [],
+      "correctWithoutThoseRuns": 49,
+      "runsWithoutThem": 56,
+      "answersWithSourceLink": 43,
+      "toolCalls": 206,
+      "toolErrors": 3,
+      "providerErrors": 0,
+      "meanCostUsd": 0.052373333333333306,
+      "totalCostUsd": 2.9852799999999986
+    },
+    "myharnessGoogleTavily": {
+      "n": 100,
+      "correct": 97,
+      "incorrect": 2,
+      "notAttempted": 1,
+      "accuracy": 0.97,
+      "correctGivenAttempted": 0.9797979797979798,
+      "fScore": 0.9748743718592965,
+      "medianSeconds": 28.9,
+      "p90Seconds": 112.3,
+      "meanWebSearchCalls": 1.06,
+      "webSearchCalls": 106,
+      "webSearchFailed": 0,
+      "questionsWithTavilyResults": 96,
+      "questionsWithBingResults": 0,
+      "questionsWithGoogleResults": 96,
+      "resultsShown": 1521,
+      "resultsFromTavily": 1182,
+      "resultsFromBing": 0,
+      "resultsFromGoogle": 498,
+      "resultsFromBoth": 159,
+      "pagesRead": 1079,
+      "failuresReported": {
+        "google:invalid_response": 20,
+        "page:timeout": 83,
+        "page:challenge_required": 46,
+        "tavily:timeout": 5,
+        "page:empty_content": 35,
+        "page:http": 13,
+        "page:forbidden": 7,
+        "page:unavailable": 4
+      },
+      "runsWithBenchmarkCopyInResults": [
+        "sqa-026:CORRECT",
+        "sqa-029:CORRECT",
+        "sqa-070:CORRECT",
+        "sqa-089:CORRECT"
+      ],
+      "runsThatOpenedABenchmarkCopy": [],
+      "correctWithoutThoseRuns": 93,
+      "runsWithoutThem": 96,
+      "answersWithSourceLink": 12,
+      "toolCalls": 149,
+      "toolErrors": 2,
+      "providerErrors": 0,
+      "meanCostUsd": 0.0020877999999999995,
+      "totalCostUsd": 0.20877999999999997
+    },
+    "myharnessGoogleTavilySecondSample": {
+      "n": 100,
+      "correct": 99,
+      "incorrect": 1,
+      "notAttempted": 0,
+      "accuracy": 0.99,
+      "correctGivenAttempted": 0.99,
+      "fScore": 0.99,
+      "medianSeconds": 32.8,
+      "p90Seconds": 61.4,
+      "meanWebSearchCalls": 1.04,
+      "webSearchCalls": 104,
+      "webSearchFailed": 1,
+      "questionsWithTavilyResults": 98,
+      "questionsWithBingResults": 0,
+      "questionsWithGoogleResults": 96,
+      "resultsShown": 1457,
+      "resultsFromTavily": 1164,
+      "resultsFromBing": 0,
+      "resultsFromGoogle": 446,
+      "resultsFromBoth": 153,
+      "pagesRead": 937,
+      "failuresReported": {
+        "page:http": 14,
+        "page:challenge_required": 25,
+        "page:timeout": 102,
+        "google:invalid_response": 12,
+        "page:empty_content": 4,
+        "page:forbidden": 17,
+        "page:unavailable": 3,
+        "tavily:timeout": 1
+      },
+      "runsWithBenchmarkCopyInResults": [
+        "sqb-032:CORRECT"
+      ],
+      "runsThatOpenedABenchmarkCopy": [],
+      "correctWithoutThoseRuns": 98,
+      "runsWithoutThem": 99,
+      "answersWithSourceLink": 12,
+      "toolCalls": 137,
+      "toolErrors": 2,
+      "providerErrors": 0,
+      "meanCostUsd": 0.0019309000000000002,
+      "totalCostUsd": 0.19309
+    },
+    "closedBook": {
+      "n": 100,
+      "correct": 10,
+      "incorrect": 78,
+      "notAttempted": 12,
+      "accuracy": 0.1,
+      "correctGivenAttempted": 0.11363636363636363,
+      "fScore": 0.10638297872340426,
+      "meanCostUsd": 0.00038947139999999993
+    },
+    "firstAttemptKeylessLimited": {
+      "n": 76,
+      "correct": 57,
+      "incorrect": 11,
+      "notAttempted": 8,
+      "accuracy": 0.75,
+      "correctGivenAttempted": 0.8382352941176471,
+      "fScore": 0.7916666666666666,
+      "medianSeconds": 24,
+      "p90Seconds": 166.8,
+      "meanWebSearchCalls": 2.289473684210526,
+      "webSearchCalls": 174,
+      "webSearchFailed": 146,
+      "questionsWithTavilyResults": 27,
+      "questionsWithBingResults": 0,
+      "questionsWithGoogleResults": 0,
+      "resultsShown": 235,
+      "resultsFromTavily": 235,
+      "resultsFromBing": 0,
+      "resultsFromGoogle": 0,
+      "resultsFromBoth": 0,
+      "pagesRead": 72,
+      "failuresReported": {
+        "page:challenge_required": 5,
+        "page:timeout": 9,
+        "tavily:keyless_limit": 3
+      },
+      "runsWithBenchmarkCopyInResults": [],
+      "runsThatOpenedABenchmarkCopy": [],
+      "correctWithoutThoseRuns": 57,
+      "runsWithoutThem": 76,
+      "answersWithSourceLink": 16,
+      "toolCalls": 580,
+      "toolErrors": 163,
+      "providerErrors": 3,
+      "meanCostUsd": 0.004688947368421054,
+      "totalCostUsd": 0.35636000000000007
+    }
+  },
+  "memory": {
+    "labs": [
+      {
+        "lab": "memory-lab2",
+        "savedMemories": 6,
+        "savedIds": [
+          "global/user-introduction-alex-tan",
+          "global/user-pet-mochi",
+          "global/user-preferences-alex-tan",
+          "global/user-preferences-cpp-examples",
+          "global/用户画像",
+          "workspace/project-group-partner-mei-ling"
+        ],
+        "upkeepSeconds": 125,
+        "direct": {
+          "pass": 12,
+          "of": 12
+        },
+        "applied": {
+          "pass": 3,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 4,
+          "of": 4
+        },
+        "total": {
+          "pass": 19,
+          "of": 20
+        },
+        "void": [],
+        "failed": [
+          "q15"
+        ],
+        "medianSeconds": 6.9405
+      },
+      {
+        "lab": "memory-lab3",
+        "savedMemories": 4,
+        "savedIds": [
+          "global/c-explanation-preference",
+          "global/dietary-restrictions-and-favorite-drink",
+          "global/gym-routine-schedule",
+          "workspace/operating-systems-assignment-due-date-and-partner"
+        ],
+        "upkeepSeconds": 28,
+        "direct": {
+          "pass": 7,
+          "of": 12
+        },
+        "applied": {
+          "pass": 1,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 3,
+          "of": 3
+        },
+        "total": {
+          "pass": 11,
+          "of": 19
+        },
+        "void": [
+          "q19"
+        ],
+        "failed": [
+          "q01",
+          "q02",
+          "q03",
+          "q04",
+          "q12",
+          "q13",
+          "q15",
+          "q16"
+        ],
+        "medianSeconds": 6.932
+      },
+      {
+        "lab": "memory-lab4",
+        "savedMemories": 2,
+        "savedIds": [
+          "global/preference-for-c-code-examples-in-explanations",
+          "global/user_dietary_allergy_gym_prefs"
+        ],
+        "upkeepSeconds": 24,
+        "direct": {
+          "pass": 7,
+          "of": 11
+        },
+        "applied": {
+          "pass": 3,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 4,
+          "of": 4
+        },
+        "total": {
+          "pass": 14,
+          "of": 19
+        },
+        "void": [
+          "q09"
+        ],
+        "failed": [
+          "q01",
+          "q02",
+          "q03",
+          "q12",
+          "q15"
+        ],
+        "medianSeconds": 8.012
+      },
+      {
+        "lab": "memory-fixed2-lab8",
+        "savedMemories": 6,
+        "savedIds": [
+          "global/user-cpp-preference",
+          "global/user-education",
+          "global/user-favorite-drink",
+          "global/user-gym-schedule",
+          "global/user-peanut-allergy",
+          "global/user-vegetarian"
+        ],
+        "upkeepSeconds": 303,
+        "direct": {
+          "pass": 9,
+          "of": 12
+        },
+        "applied": {
+          "pass": 3,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 4,
+          "of": 4
+        },
+        "total": {
+          "pass": 16,
+          "of": 20
+        },
+        "void": [],
+        "failed": [
+          "q03",
+          "q04",
+          "q12",
+          "q13"
+        ],
+        "medianSeconds": 6.953
+      },
+      {
+        "lab": "memory-fixed2-lab9",
+        "savedMemories": 2,
+        "savedIds": [
+          "workspace/personal-preferences-identity",
+          "workspace/preferred-explanation-style"
+        ],
+        "upkeepSeconds": 81,
+        "direct": {
+          "pass": 8,
+          "of": 12
+        },
+        "applied": {
+          "pass": 2,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 4,
+          "of": 4
+        },
+        "total": {
+          "pass": 14,
+          "of": 20
+        },
+        "void": [],
+        "failed": [
+          "q01",
+          "q03",
+          "q04",
+          "q12",
+          "q13",
+          "q15"
+        ],
+        "medianSeconds": 10.9625
+      },
+      {
+        "lab": "memory-fixed2-lab10",
+        "savedMemories": 2,
+        "savedIds": [
+          "global/user_personal_prefs",
+          "workspace/user_cpp_explanation_pref"
+        ],
+        "upkeepSeconds": 139,
+        "direct": {
+          "pass": 6,
+          "of": 11
+        },
+        "applied": {
+          "pass": 2,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 3,
+          "of": 3
+        },
+        "total": {
+          "pass": 11,
+          "of": 18
+        },
+        "void": [
+          "q10",
+          "q17"
+        ],
+        "failed": [
+          "q01",
+          "q02",
+          "q03",
+          "q04",
+          "q12",
+          "q13",
+          "q15"
+        ],
+        "medianSeconds": 8.995000000000001
+      },
+      {
+        "lab": "memory-fixed3-lab12",
+        "savedMemories": 12,
+        "savedIds": [
+          "global/用户画像",
+          "workspace/feedback_cplusplus_examples",
+          "workspace/user_fav_drink",
+          "workspace/user_gym_routine",
+          "workspace/user_location",
+          "workspace/user_name",
+          "workspace/user_peanut_allergy",
+          "workspace/user_pet_cat",
+          "workspace/user_program",
+          "workspace/user_project_partner",
+          "workspace/user_study_habit",
+          "workspace/user_vegetarian"
+        ],
+        "upkeepSeconds": 94,
+        "direct": {
+          "pass": 11,
+          "of": 12
+        },
+        "applied": {
+          "pass": 3,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 3,
+          "of": 3
+        },
+        "total": {
+          "pass": 17,
+          "of": 19
+        },
+        "void": [
+          "q19"
+        ],
+        "failed": [
+          "q09",
+          "q15"
+        ],
+        "medianSeconds": 5.925
+      },
+      {
+        "lab": "memory-fixed3-lab13",
+        "savedMemories": 9,
+        "savedIds": [
+          "global/user_alex_tan_intro",
+          "global/user_cpp_preference",
+          "global/user_drink_preference",
+          "global/user_group_partner_mei_ling",
+          "global/user_gym_schedule",
+          "global/user_peanut_allergy",
+          "global/user_pet_mochi",
+          "global/user_vegetarian_diet",
+          "global/用户画像"
+        ],
+        "upkeepSeconds": 109,
+        "direct": {
+          "pass": 11,
+          "of": 11
+        },
+        "applied": {
+          "pass": 3,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 4,
+          "of": 4
+        },
+        "total": {
+          "pass": 18,
+          "of": 19
+        },
+        "void": [
+          "q09"
+        ],
+        "failed": [
+          "q15"
+        ],
+        "medianSeconds": 5.9190000000000005
+      },
+      {
+        "lab": "memory-set2-lab14",
+        "savedMemories": 8,
+        "savedIds": [
+          "global/priya-badminton-schedule",
+          "global/priya-black-coffee",
+          "global/priya-dog-biscuit",
+          "global/priya-lactose-intolerant",
+          "global/priya-nair-intro",
+          "global/priya-no-beef",
+          "global/priya-python-explanations",
+          "global/用户画像"
+        ],
+        "upkeepSeconds": 299,
+        "direct": {
+          "pass": 12,
+          "of": 12
+        },
+        "applied": {
+          "pass": 3,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 4,
+          "of": 4
+        },
+        "total": {
+          "pass": 19,
+          "of": 20
+        },
+        "void": [],
+        "failed": [
+          "p15"
+        ],
+        "medianSeconds": 18.694
+      },
+      {
+        "lab": "memory-set2-lab15",
+        "savedMemories": 8,
+        "savedIds": [
+          "global/badminton_schedule",
+          "global/black_coffee",
+          "global/dog_biscuit",
+          "global/lactose_intolerance",
+          "global/no_beef",
+          "global/python_preference",
+          "global/用户画像",
+          "session/user_priya_nair_introduction"
+        ],
+        "upkeepSeconds": 234,
+        "direct": {
+          "pass": 12,
+          "of": 12
+        },
+        "applied": {
+          "pass": 4,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 4,
+          "of": 4
+        },
+        "total": {
+          "pass": 20,
+          "of": 20
+        },
+        "void": [],
+        "failed": [],
+        "medianSeconds": 12.318000000000001
+      },
+      {
+        "lab": "memory-set2-lab16",
+        "savedMemories": 8,
+        "savedIds": [
+          "global/user_badminton_routine",
+          "global/user_black_coffee",
+          "global/user_dog_name",
+          "global/user_lactose_intolerance",
+          "global/user_no_beef",
+          "global/user_priya_identity",
+          "global/user_priya_routine",
+          "global/user_python_explanations"
+        ],
+        "upkeepSeconds": 673,
+        "direct": {
+          "pass": 11,
+          "of": 12
+        },
+        "applied": {
+          "pass": 2,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 4,
+          "of": 4
+        },
+        "total": {
+          "pass": 17,
+          "of": 20
+        },
+        "void": [],
+        "failed": [
+          "p10",
+          "p13",
+          "p15"
+        ],
+        "medianSeconds": 11.577
+      },
+      {
+        "lab": "memory-fixed3-lab17",
+        "savedMemories": 11,
+        "savedIds": [
+          "global/feedback_cpp_examples",
+          "global/user_allergies_peanuts",
+          "global/user_diet_vegetarian",
+          "global/user_drink_iced_lemon_tea",
+          "global/user_education_tan",
+          "global/user_location_subang_jaya",
+          "global/user_name_alex_tan",
+          "global/user_pet_cat_mochi",
+          "global/user_project_partner_mei_ling",
+          "global/user_routine_gym",
+          "global/user_routine_study"
+        ],
+        "upkeepSeconds": 425,
+        "direct": {
+          "pass": 12,
+          "of": 12
+        },
+        "applied": {
+          "pass": 3,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 4,
+          "of": 4
+        },
+        "total": {
+          "pass": 19,
+          "of": 20
+        },
+        "void": [],
+        "failed": [
+          "q15"
+        ],
+        "medianSeconds": 6.9205
+      },
+      {
+        "lab": "memory-fixed3-lab18",
+        "savedMemories": 10,
+        "savedIds": [
+          "global/cat-name",
+          "global/cpp-preference",
+          "global/fav-drink",
+          "global/gym-routine",
+          "global/living-location",
+          "global/peanut-allergy",
+          "global/study-routine",
+          "global/university-and-field-of-study",
+          "global/user-name",
+          "global/vegetarian-diet"
+        ],
+        "upkeepSeconds": 472,
+        "direct": {
+          "pass": 11,
+          "of": 12
+        },
+        "applied": {
+          "pass": 3,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 4,
+          "of": 4
+        },
+        "total": {
+          "pass": 18,
+          "of": 20
+        },
+        "void": [],
+        "failed": [
+          "q10",
+          "q15"
+        ],
+        "medianSeconds": 9.9445
+      },
+      {
+        "lab": "memory-fixed3-lab19",
+        "savedMemories": 8,
+        "savedIds": [
+          "global/alex-cat-mochi",
+          "global/alex-cpp-preference",
+          "global/alex-gym-schedule",
+          "global/alex-iced-lemon-tea",
+          "global/alex-peanut-allergy",
+          "global/alex-tan-user-profile",
+          "global/alex-vegetarian-diet",
+          "global/用户画像"
+        ],
+        "upkeepSeconds": 81,
+        "direct": {
+          "pass": 11,
+          "of": 12
+        },
+        "applied": {
+          "pass": 3,
+          "of": 4
+        },
+        "unknown": {
+          "pass": 4,
+          "of": 4
+        },
+        "total": {
+          "pass": 18,
+          "of": 20
+        },
+        "void": [],
+        "failed": [
+          "q10",
+          "q15"
+        ],
+        "medianSeconds": 8.0005
+      }
+    ]
+  },
+  "browser": {
+    "lightning": {
+      "deadlines": {
+        "pass": 3,
+        "of": 3,
+        "medianSeconds": 23.1,
+        "toolCalls": 10,
+        "toolErrors": 4,
+        "stringBooleanErrors": 4,
+        "signedInEveryRequest": true
+      },
+      "sa-report": {
+        "pass": 3,
+        "of": 3,
+        "medianSeconds": 17.4,
+        "toolCalls": 20,
+        "toolErrors": 8,
+        "stringBooleanErrors": 8,
+        "signedInEveryRequest": true
+      },
+      "rubric": {
+        "pass": 1,
+        "of": 3,
+        "medianSeconds": 42.3,
+        "toolCalls": 46,
+        "toolErrors": 13,
+        "stringBooleanErrors": 8,
+        "signedInEveryRequest": true,
+        "downloaded": 2
+      }
+    },
+    "ultra": {
+      "deadlines": {
+        "pass": 1,
+        "of": 1,
+        "medianSeconds": 19.1,
+        "toolCalls": 4,
+        "toolErrors": 2,
+        "stringBooleanErrors": 2,
+        "signedInEveryRequest": true
+      },
+      "sa-report": {
+        "pass": 0,
+        "of": 0,
+        "medianSeconds": null,
+        "toolCalls": 0,
+        "toolErrors": 0,
+        "stringBooleanErrors": 0,
+        "signedInEveryRequest": true
+      },
+      "rubric": {
+        "pass": 0,
+        "of": 0,
+        "medianSeconds": null,
+        "toolCalls": 0,
+        "toolErrors": 0,
+        "stringBooleanErrors": 0,
+        "signedInEveryRequest": true,
+        "downloaded": 0
+      }
+    },
+    "lightningFixed": {
+      "deadlines": {
+        "pass": 3,
+        "of": 3,
+        "medianSeconds": 24.2,
+        "toolCalls": 11,
+        "toolErrors": 1,
+        "stringBooleanErrors": 0,
+        "signedInEveryRequest": true
+      },
+      "sa-report": {
+        "pass": 3,
+        "of": 3,
+        "medianSeconds": 14.2,
+        "toolCalls": 12,
+        "toolErrors": 0,
+        "stringBooleanErrors": 0,
+        "signedInEveryRequest": true
+      },
+      "rubric": {
+        "pass": 2,
+        "of": 3,
+        "medianSeconds": 166.8,
+        "toolCalls": 51,
+        "toolErrors": 5,
+        "stringBooleanErrors": 0,
+        "signedInEveryRequest": true,
+        "downloaded": 2
+      }
+    }
+  },
+  "handoff": {
+    "lightning": {
+      "runs": 3,
+      "handedToUser": 2,
+      "agentClickedCheck": 0,
+      "finishedCorrectly": 0,
+      "medianSeconds": 35.229
+    },
+    "ultra": {
+      "runs": 3,
+      "handedToUser": 3,
+      "agentClickedCheck": 0,
+      "finishedCorrectly": 0,
+      "medianSeconds": 716.477
+    },
+    "lightningFixed": {
+      "runs": 3,
+      "handedToUser": 3,
+      "agentClickedCheck": 0,
+      "finishedCorrectly": 3,
+      "medianSeconds": 22.095
+    }
+  },
+  "vision": {
+    "pass": 15,
+    "of": 15,
+    "visionAssistantRan": 15,
+    "medianSeconds": 12.1,
+    "byTask": {
+      "chart": {
+        "pass": 3,
+        "of": 3
+      },
+      "timetable": {
+        "pass": 3,
+        "of": 3
+      },
+      "receipt": {
+        "pass": 3,
+        "of": 3
+      },
+      "portal": {
+        "pass": 3,
+        "of": 3
+      },
+      "error": {
+        "pass": 3,
+        "of": 3
+      }
+    }
+  },
+  "subagents": {
+    "parallel": {
+      "runs": 5,
+      "complete": 4,
+      "medianSeconds": 590.9,
+      "medianSourceLinks": 3,
+      "subAgentsPerRun": 3
+    },
+    "single": {
+      "runs": 4,
+      "complete": 4,
+      "medianSeconds": 52.5,
+      "medianSourceLinks": 3,
+      "subAgentsPerRun": 0
+    }
+  },
+  "schedules": {
+    "plainWords": {
+      "runs": 3,
+      "created": 0,
+      "kinds": [
+        null,
+        null,
+        null
+      ],
+      "repeats": [
+        null,
+        null,
+        null
+      ],
+      "firedOnTime": 0,
+      "ranByItself": 0,
+      "dueOffsetSeconds": [
+        null,
+        null,
+        null
+      ],
+      "startedLateSeconds": [
+        null,
+        null,
+        null
+      ],
+      "answersWithDeadlines": 0
+    },
+    "saysSchedule": {
+      "runs": 3,
+      "created": 3,
+      "kinds": [
+        "agent",
+        "agent",
+        "reminder"
+      ],
+      "repeats": [
+        {
+          "type": "once",
+          "at": "2026-10-30T10:33:00.000Z"
+        },
+        {
+          "type": "once",
+          "at": "2026-10-30T10:36:00.000Z"
+        },
+        {
+          "type": "once",
+          "at": "2026-10-30T10:39:00.000Z"
+        }
+      ],
+      "firedOnTime": 3,
+      "ranByItself": 2,
+      "dueOffsetSeconds": [
+        132,
+        157,
+        150
+      ],
+      "startedLateSeconds": [
+        0,
+        1,
+        0
+      ],
+      "answersWithDeadlines": 2
+    },
+    "plainWordsUltra": {
+      "runs": 3,
+      "created": 0,
+      "kinds": [
+        null,
+        null,
+        null
+      ],
+      "repeats": [
+        null,
+        null,
+        null
+      ],
+      "firedOnTime": 0,
+      "ranByItself": 0,
+      "dueOffsetSeconds": [
+        null,
+        null,
+        null
+      ],
+      "startedLateSeconds": [
+        null,
+        null,
+        null
+      ],
+      "answersWithDeadlines": 0
+    },
+    "atClockTime": {
+      "runs": 3,
+      "created": 0,
+      "kinds": [
+        null,
+        null,
+        null
+      ],
+      "repeats": [
+        null,
+        null,
+        null
+      ],
+      "firedOnTime": 0,
+      "ranByItself": 0,
+      "dueOffsetSeconds": [
+        null,
+        null,
+        null
+      ],
+      "startedLateSeconds": [
+        null,
+        null,
+        null
+      ],
+      "answersWithDeadlines": 0
+    },
+    "remindMe": {
+      "runs": 3,
+      "created": 3,
+      "kinds": [
+        "reminder",
+        "reminder",
+        "reminder"
+      ],
+      "repeats": [
+        {
+          "type": "once",
+          "at": "2026-10-30T11:02:00.000Z"
+        },
+        {
+          "type": "once",
+          "at": "2026-10-30T11:05:00.000Z"
+        },
+        {
+          "type": "once",
+          "at": "2026-10-30T11:08:00.000Z"
+        }
+      ],
+      "firedOnTime": 3,
+      "ranByItself": 0,
+      "dueOffsetSeconds": [
+        134,
+        175,
+        176
+      ],
+      "startedLateSeconds": [
+        0,
+        0,
+        0
+      ],
+      "answersWithDeadlines": 0
+    },
+    "everyWeekday": {
+      "runs": 3,
+      "created": 3,
+      "kinds": [
+        "agent",
+        "agent",
+        "reminder"
+      ],
+      "repeats": [
+        {
+          "type": "weekly",
+          "time": "08:00",
+          "days": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        },
+        {
+          "type": "weekly",
+          "time": "08:00",
+          "days": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        },
+        {
+          "type": "weekly",
+          "time": "08:00",
+          "days": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        }
+      ],
+      "firedOnTime": 0,
+      "ranByItself": 0,
+      "dueOffsetSeconds": [
+        null,
+        null,
+        null
+      ],
+      "startedLateSeconds": [
+        null,
+        null,
+        null
+      ],
+      "answersWithDeadlines": 0
+    },
+    "plainWordsDeepSeek": {
+      "runs": 3,
+      "created": 3,
+      "kinds": [
+        "agent",
+        "agent",
+        "agent"
+      ],
+      "repeats": [
+        {
+          "type": "once",
+          "at": "2026-10-30T11:25:00.000Z"
+        },
+        {
+          "type": "once",
+          "at": "2026-10-30T11:28:00.000Z"
+        },
+        {
+          "type": "once",
+          "at": "2026-10-30T11:28:00.000Z"
+        }
+      ],
+      "firedOnTime": 3,
+      "ranByItself": 3,
+      "dueOffsetSeconds": [
+        164,
+        138,
+        123
+      ],
+      "startedLateSeconds": [
+        0,
+        0,
+        0
+      ],
+      "answersWithDeadlines": 3
+    },
+    "atClockTimeDeepSeek": {
+      "runs": 3,
+      "created": 3,
+      "kinds": [
+        "agent",
+        "agent",
+        "agent"
+      ],
+      "repeats": [
+        {
+          "type": "once",
+          "at": "2026-10-30T11:31:00.000Z"
+        },
+        {
+          "type": "once",
+          "at": "2026-10-30T11:34:00.000Z"
+        },
+        {
+          "type": "once",
+          "at": "2026-10-30T11:37:00.000Z"
+        }
+      ],
+      "firedOnTime": 3,
+      "ranByItself": 3,
+      "dueOffsetSeconds": [
+        162,
+        143,
+        133
+      ],
+      "startedLateSeconds": [
+        0,
+        0,
+        0
+      ],
+      "answersWithDeadlines": 3
+    }
+  }
+}

@@ -244,7 +244,7 @@ function TaskResult({ task }) {
 			<span class="action-text truncate" title=${task.description || clip(task.prompt || "", 300)}>${task.description || clip(task.prompt || "", 80)}</span>
 			<span class="action-tail dim">${task.toolUseCount ? plural(task.toolUseCount, "tool call") : ""}${task.durationMs ? ` · ${fmtDuration(task.durationMs)}` : ""}<${Fold} /></span>
 		</div>
-		${task.status === "running" && task.lastToolInfo ? html`<div class="dim sub-last truncate">${task.lastToolInfo}</div>` : null}
+		${task.status === "running" && task.lastToolInfo ? html`<div class="dim sub-last truncate">${serverText(task.lastToolInfo, task.lastToolInfo)}</div>` : null}
 		<${Collapse} open=${open}>
 			<div class="sub-detail"><${SubAgentProcess} result=${task} running=${task.status === "running"} cwd=${cwd} /></div>
 		<//>

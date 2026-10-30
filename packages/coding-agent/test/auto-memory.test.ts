@@ -6,6 +6,7 @@ import {
 	AUTO_MEMORY_SYSTEM_PROMPT,
 	AutoMemoryManager,
 	getAutoMemoryPaths,
+	MEMORY_PROFILE_ID,
 	parseMemoryOperations,
 	sanitizeMemoryText,
 } from "../src/agent/runtime/auto-memory.ts";
@@ -174,6 +175,146 @@ describe("auto memory", () => {
 		expect(recalled?.display).toBe(false);
 		expect(recalled?.content).toContain("先检查真实源码");
 		expect(recalled?.content).toContain("Its priority is lower than system instructions");
+	});
+
+	it("saves a memory whose ID has no scope prefix and still refuses an ID outside its scope", async () => {
+		const agentDir = join(testRoot, "bare-id-agent");
+		const projectDir = join(testRoot, "bare-id-project");
+		mkdirSync(projectDir, { recursive: true });
+		const bareProfileId = MEMORY_PROFILE_ID.split("/")[1];
+		const upsert = (id: string, scope: string, name: string, content: string) =>
+			JSON.stringify({
+				action: "upsert",
+				id,
+				scope,
+				type: "user",
+				name,
+				description: "When it is relevant",
+				content,
+			});
+		const extractor = new AutoMemoryManager({
+			cwd: projectDir,
+			sessionId: "bare-id-session",
+			dataRoot,
+			workspaceId: "bare-id",
+			settingsManager: SettingsManager.inMemory({
+				autoMemory: { enabled: true, provider: "test", model: "bare-id", thinkingLevel: "high" },
+			}),
+			persisted: true,
+			agentDir,
+			modelRunner: async () =>
+				`<MEMORY_OPERATIONS>{"operations":[${[
+					upsert("memory_user_alex_tan", "global", "Alex Tan", "The user is Alex Tan."),
+					upsert("proj-report-due", "project", "Report due", "The report is due on 4 November."),
+					// The same bare ID again is an update of that entry, not a second file.
+					upsert("memory_user_alex_tan", "global", "Alex Tan", "The user is Alex Tan, a computing student."),
+					// The type in front of the name is not a scope: still this entry within the scope given.
+					upsert("user/mochi", "global", "Cat", "The user's cat is called Mochi."),
+					upsert("user/has a space", "global", "Unusable ID", "This ID cannot name a file."),
+					upsert("workspace/wrong-scope", "global", "Wrong scope", "This ID names another scope."),
+					upsert(bareProfileId!, "global", "Profile", "Extraction must not write the resident profile."),
+				].join(",")}]}</MEMORY_OPERATIONS>`,
+		});
+		const entries = [
+			{
+				type: "message",
+				id: "user-1",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				message: {
+					role: "user",
+					content: [{ type: "text", text: "I'm Alex Tan, and my report is due on 4 November." }],
+					timestamp: Date.now(),
+				},
+			},
+			{
+				type: "message",
+				id: "assistant-1",
+				parentId: "user-1",
+				timestamp: new Date().toISOString(),
+				message: { role: "assistant", content: [{ type: "text", text: "Noted." }], timestamp: Date.now() },
+			},
+		] as unknown as SessionEntry[];
+
+		extractor.scheduleExtraction(entries);
+		await extractor.waitForBackgroundTasks();
+		extractor.dispose();
+
+		const paths = getAutoMemoryPaths(projectDir, agentDir, {
+			dataRoot,
+			workspaceId: "bare-id",
+			sessionId: "bare-id-session",
+		});
+		expect(readFileSync(join(paths.globalDir, "memory_user_alex_tan.md"), "utf8")).toContain("a computing student");
+		expect(existsSync(join(paths.projectDir, "proj-report-due.md"))).toBe(true);
+		expect(readFileSync(join(paths.globalDir, "mochi.md"), "utf8")).toContain("called Mochi");
+		const index = readFileSync(paths.indexPath, "utf8");
+		expect(index).toContain('"global/memory_user_alex_tan"');
+		expect(index).toContain('"workspace/proj-report-due"');
+		expect(index).toContain('"global/mochi"');
+		expect(index).not.toContain("Unusable ID");
+		expect(existsSync(join(paths.globalDir, "wrong-scope.md"))).toBe(false);
+		expect(existsSync(join(paths.projectDir, "wrong-scope.md"))).toBe(false);
+		expect(existsSync(join(paths.globalDir, `${bareProfileId}.md`))).toBe(false);
+	});
+
+	it("shows the extractor each existing entry's content so an update can keep it", async () => {
+		const projectDir = join(testRoot, "manifest-project");
+		mkdirSync(projectDir, { recursive: true });
+		const tasks: string[] = [];
+		const extractor = new AutoMemoryManager({
+			cwd: projectDir,
+			sessionId: "manifest-session",
+			dataRoot,
+			workspaceId: "manifest",
+			settingsManager: SettingsManager.inMemory({
+				autoMemory: { enabled: true, provider: "test", model: "manifest", thinkingLevel: "high" },
+			}),
+			persisted: true,
+			agentDir: join(testRoot, "manifest-agent"),
+			modelRunner: async ({ task }) => {
+				tasks.push(task);
+				return tasks.length > 1
+					? '<MEMORY_OPERATIONS>{"operations":[]}</MEMORY_OPERATIONS>'
+					: `<MEMORY_OPERATIONS>${JSON.stringify({
+							operations: [
+								{
+									action: "upsert",
+									scope: "global",
+									type: "user",
+									name: "Alex Tan",
+									description: "When the user's background matters",
+									content: "Alex Tan studies at Taylor's University.",
+								},
+							],
+						})}</MEMORY_OPERATIONS>`;
+			},
+		});
+		const turn = (id: string, parentId: string | null, role: string, text: string) => ({
+			type: "message",
+			id,
+			parentId,
+			timestamp: new Date().toISOString(),
+			message: { role, content: [{ type: "text", text }], timestamp: Date.now() },
+		});
+		const first = [
+			turn("user-1", null, "user", "I'm Alex Tan, a student at Taylor's University."),
+			turn("assistant-1", "user-1", "assistant", "Noted."),
+		];
+		extractor.scheduleExtraction(first as unknown as SessionEntry[]);
+		await extractor.waitForBackgroundTasks();
+		const second = [
+			...first,
+			turn("user-2", "assistant-1", "user", "I'm allergic to peanuts."),
+			turn("assistant-2", "user-2", "assistant", "Noted."),
+		];
+		extractor.scheduleExtraction(second as unknown as SessionEntry[]);
+		await extractor.waitForBackgroundTasks();
+		extractor.dispose();
+
+		expect(tasks).toHaveLength(2);
+		expect(tasks[0]).not.toContain("Alex Tan studies");
+		expect(tasks[1]).toContain("Alex Tan studies at Taylor's University.");
 	});
 
 	it("reports a failed synchronous extraction without leaving the queue pending", async () => {
@@ -396,7 +537,7 @@ describe("auto memory", () => {
 				},
 			}),
 			modelRuntime: {
-				getModel: vi.fn(() => ({ provider: "test", id: "memory-model" })),
+				getModel: vi.fn(() => ({ provider: "test", id: "memory-model", reasoning: true })),
 				completeSimple,
 			} as unknown as ModelRuntime,
 			persisted: true,

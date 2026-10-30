@@ -6,6 +6,7 @@ import type { SessionManager } from "../../session/manager/index.ts";
 import { sessionEntryToContextMessages } from "../../session/projection/index.ts";
 import type { SessionEntry, SessionInfo } from "../../session/types.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
+import { helperReasoning } from "./assistant-model.ts";
 
 /** Maximum prompt size used for one AI title request. */
 export const CONVERSATION_TITLE_CONTEXT_MAX_CHARS = 6000;
@@ -325,7 +326,7 @@ export async function generateConversationTitle(
 			timeoutMs: getTitleRequestTimeout(model, options.settingsManager),
 			maxRetries: options.maxRetries ?? retry.maxRetries,
 			maxRetryDelayMs: retry.maxRetryDelayMs,
-			reasoning: options.thinkingLevel === "off" ? undefined : options.thinkingLevel,
+			reasoning: helperReasoning(model, options.thinkingLevel),
 			// Lets provider-level session headers (e.g. `x-opencode-session`) ride the
 			// conversation ID, like foreground chats do.
 			sessionId: options.sessionId,

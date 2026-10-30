@@ -1,0 +1,147 @@
+{
+ "labs": [
+  "labA",
+  "labM1",
+  "labM2",
+  "labM3",
+  "labM4",
+  "labS",
+  "labS2",
+  "labS3",
+  "C:\\eval\\memory-copy-10",
+  "C:\\eval\\memory-copy-11",
+  "C:\\eval\\memory-copy-12",
+  "C:\\eval\\memory-copy-13",
+  "C:\\eval\\memory-copy-14",
+  "C:\\eval\\memory-copy-15",
+  "C:\\eval\\memory-copy-16",
+  "C:\\eval\\memory-copy-17",
+  "C:\\eval\\memory-copy-18",
+  "C:\\eval\\memory-copy-19",
+  "C:\\eval\\memory-copy-5",
+  "C:\\eval\\memory-copy-6",
+  "C:\\eval\\memory-copy-7",
+  "C:\\eval\\memory-copy-8",
+  "C:\\eval\\memory-copy-9"
+ ],
+ "byModelAndJob": [
+  {
+   "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+   "role": "main",
+   "requests": 569,
+   "input": 5962154,
+   "cacheRead": 32056832,
+   "output": 86122,
+   "reasoning": 49529,
+   "cost": 6.2205,
+   "medianSeconds": 3.6
+  },
+  {
+   "model": "nvidia/Nemotron-3_5-Lightning",
+   "role": "main",
+   "requests": 2358,
+   "input": 21190687,
+   "cacheRead": 72299424,
+   "output": 642489,
+   "reasoning": 411957,
+   "cost": 1.4256,
+   "medianSeconds": 3.3
+  },
+  {
+   "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+   "role": "delegated",
+   "requests": 90,
+   "input": 905332,
+   "cacheRead": 1048832,
+   "output": 31325,
+   "reasoning": 8711,
+   "cost": 0.9993,
+   "medianSeconds": 5.4
+  },
+  {
+   "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+   "role": "main",
+   "requests": 17,
+   "input": 346741,
+   "cacheRead": 194688,
+   "output": 14165,
+   "reasoning": 10906,
+   "cost": 0.121,
+   "medianSeconds": 4.2
+  }
+ ],
+ "byModel": {
+  "nvidia/Nemotron-3-Ultra-550b-a55b": {
+   "requests": 659,
+   "input": 6867486,
+   "cacheRead": 33105664,
+   "output": 117447,
+   "cost": 7.2198
+  },
+  "nvidia/Nemotron-3_5-Lightning": {
+   "requests": 2358,
+   "input": 21190687,
+   "cacheRead": 72299424,
+   "output": 642489,
+   "cost": 1.4256
+  },
+  "deepseek-ai/DeepSeek-V4.1-Flash-1017": {
+   "requests": 17,
+   "input": 346741,
+   "cacheRead": 194688,
+   "output": 14165,
+   "cost": 0.121
+  }
+ },
+ "spendCounters": {
+  "labA": {
+   "total": 1.807790740000001,
+   "currency": "USD",
+   "requests": 1822,
+   "since": "2026-10-30T07:21:22.806Z"
+  },
+  "labM1": {
+   "total": 0.013495259999999999,
+   "currency": "USD",
+   "requests": 19,
+   "since": "2026-10-30T07:37:20.232Z"
+  },
+  "labM2": {
+   "total": 0.06584654000000001,
+   "currency": "USD",
+   "requests": 90,
+   "since": "2026-10-30T07:40:01.516Z"
+  },
+  "labM3": {
+   "total": 0.06853937999999998,
+   "currency": "USD",
+   "requests": 118,
+   "since": "2026-10-30T07:48:29.701Z"
+  },
+  "labM4": {
+   "total": 0.07220769999999999,
+   "currency": "USD",
+   "requests": 113,
+   "since": "2026-10-30T07:48:30.711Z"
+  },
+  "labS": {
+   "total": 2.058883100000001,
+   "currency": "USD",
+   "requests": 892,
+   "since": "2026-10-30T07:55:49.335Z"
+  },
+  "labS2": {
+   "total": 4.153096960000003,
+   "currency": "USD",
+   "requests": 439,
+   "since": "2026-10-30T08:14:05.866Z"
+  },
+  "labS3": {
+   "total": 0.9178617400000012,
+   "currency": "USD",
+   "requests": 1099,
+   "since": "2026-10-30T10:05:56.868Z"
+  }
+ },
+ "spendTotal": 9.1577
+}

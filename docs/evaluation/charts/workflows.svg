@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="814" viewBox="0 0 800 814" role="img" aria-label="Core workflows: runs that gave the right result">
+<style>
+	.bg { fill: #fcfcfb; } .t1 { fill: #0b0b0b; } .t2 { fill: #52514e; } .t3 { fill: #6f6e69; }
+	.grid { stroke: #e4e3df; } .axis { stroke: #c9c8c2; }
+	.hi { fill: #2a78d6; } .mute { fill: #a9a79f; } .ref { fill: #d9d8d2; } .ok { fill: #1baf7a; }
+	@media (prefers-color-scheme: dark) {
+		.bg { fill: #1a1a19; } .t1 { fill: #f0efec; } .t2 { fill: #c3c2b7; } .t3 { fill: #a3a29a; }
+		.grid { stroke: #2f2f2d; } .axis { stroke: #4a4945; }
+		.hi { fill: #3987e5; } .mute { fill: #77766f; } .ref { fill: #474641; } .ok { fill: #199e70; }
+	}
+	text { font-family: "Segoe UI", system-ui, -apple-system, sans-serif; }</style>
+<rect class="bg" width="800" height="814" rx="8"/>
+<text class="t1" x="16" y="26" font-size="17" font-weight="700">Core workflows: runs that gave the right result</text>
+<text class="t2" x="16" y="47" font-size="13">Each run in a new chat</text>
+<line class="grid" x1="320" y1="72" x2="320" y2="784" stroke-width="1"/><text class="t3" x="320" y="802" font-size="11" text-anchor="middle">0%</text><line class="grid" x1="410" y1="72" x2="410" y2="784" stroke-width="1"/><text class="t3" x="410" y="802" font-size="11" text-anchor="middle">25%</text><line class="grid" x1="500" y1="72" x2="500" y2="784" stroke-width="1"/><text class="t3" x="500" y="802" font-size="11" text-anchor="middle">50%</text><line class="grid" x1="590" y1="72" x2="590" y2="784" stroke-width="1"/><text class="t3" x="590" y="802" font-size="11" text-anchor="middle">75%</text><line class="grid" x1="680" y1="72" x2="680" y2="784" stroke-width="1"/><text class="t3" x="680" y="802" font-size="11" text-anchor="middle">100%</text>
+<line class="axis" x1="320" y1="72" x2="320" y2="784" stroke-width="1"/>
+<text class="t3" x="16" y="92" font-size="12" font-weight="600" letter-spacing="0.04em">NEMOTRON 3.5 SUPER VL (VISION ASSISTANT)</text>
+<text class="t1" x="16" y="124" font-size="14">Reading charts, receipts, screenshots</text>
+<path class="hi" d="M320,107 H676 Q680,107 680,111 V127 Q680,131 676,131 H320 Z"><title>Reading charts, receipts, screenshots: 15 / 15</title></path>
+<text class="t1" x="688" y="124" font-size="14" font-weight="700">15 / 15</text>
+<text class="t3" x="16" y="158" font-size="12" font-weight="600" letter-spacing="0.04em">SIGNED-IN WEBSITE (NEMOTRON 3.5 LIGHTNING)</text>
+<text class="t1" x="16" y="190" font-size="14">Deadlines from the portal</text>
+<path class="hi" d="M320,173 H676 Q680,173 680,177 V193 Q680,197 676,197 H320 Z"><title>Deadlines from the portal: 3 / 3</title></path>
+<text class="t1" x="688" y="190" font-size="14" font-weight="700">3 / 3</text>
+<text class="t1" x="16" y="234" font-size="14">Group report details from a course page</text>
+<path class="hi" d="M320,217 H676 Q680,217 680,221 V237 Q680,241 676,241 H320 Z"><title>Group report details from a course page: 3 / 3</title></path>
+<text class="t1" x="688" y="234" font-size="14" font-weight="700">3 / 3</text>
+<text class="t1" x="16" y="278" font-size="14">Download a PDF and read a value</text>
+<path class="hi" d="M320,261 H556 Q560,261 560,265 V281 Q560,285 556,285 H320 Z"><title>Download a PDF and read a value: 2 / 3</title></path>
+<text class="t1" x="568" y="278" font-size="14" font-weight="700">2 / 3</text>
+<text class="t3" x="16" y="312" font-size="12" font-weight="600" letter-spacing="0.04em">HANDING A HUMAN CHECK TO A REAL PERSON</text>
+<text class="t1" x="16" y="344" font-size="14">Handed over, then finished the task</text>
+<path class="hi" d="M320,327 H676 Q680,327 680,331 V347 Q680,351 676,351 H320 Z"><title>Handed over, then finished the task: 3 / 3</title></path>
+<text class="t1" x="688" y="344" font-size="14" font-weight="700">3 / 3</text>
+<text class="t3" x="16" y="378" font-size="12" font-weight="600" letter-spacing="0.04em">SCHEDULED TASKS</text>
+<text class="t1" x="16" y="410" font-size="14">"Remind me in 3 minutes..."</text>
+<path class="hi" d="M320,393 H676 Q680,393 680,397 V413 Q680,417 676,417 H320 Z"><title>"Remind me in 3 minutes...": 3 / 3</title></path>
+<text class="t1" x="688" y="410" font-size="14" font-weight="700">3 / 3</text>
+<text class="t1" x="16" y="454" font-size="14">"Schedule a task...": ran and did the job</text>
+<path class="hi" d="M320,437 H556 Q560,437 560,441 V457 Q560,461 556,461 H320 Z"><title>"Schedule a task...": ran and did the job: 2 / 3</title></path>
+<text class="t1" x="568" y="454" font-size="14" font-weight="700">2 / 3</text>
+<text class="t1" x="16" y="498" font-size="14">"Every weekday at 08:00...": agent task set</text>
+<path class="hi" d="M320,481 H556 Q560,481 560,485 V501 Q560,505 556,505 H320 Z"><title>"Every weekday at 08:00...": agent task set: 2 / 3</title></path>
+<text class="t1" x="568" y="498" font-size="14" font-weight="700">2 / 3</text>
+<text class="t1" x="16" y="542" font-size="14">"In 3 minutes, do X" on DeepSeek V4.1 Flash</text>
+<path class="hi" d="M320,525 H676 Q680,525 680,529 V545 Q680,549 676,549 H320 Z"><title>"In 3 minutes, do X" on DeepSeek V4.1 Flash: 6 / 6</title></path>
+<text class="t1" x="688" y="542" font-size="14" font-weight="700">6 / 6</text>
+<text class="t3" x="16" y="576" font-size="12" font-weight="600" letter-spacing="0.04em">SUB-AGENTS (NEMOTRON 3 ULTRA)</text>
+<text class="t1" x="16" y="608" font-size="14">Complete report from parallel sub-agents</text>
+<path class="hi" d="M320,591 H604 Q608,591 608,595 V611 Q608,615 604,615 H320 Z"><title>Complete report from parallel sub-agents: 4 / 5</title></path>
+<text class="t1" x="616" y="608" font-size="14" font-weight="700">4 / 5</text>
+<text class="t3" x="16" y="642" font-size="12" font-weight="600" letter-spacing="0.04em">MEMORY IN NEW CHATS (NEMOTRON 3.5 LIGHTNING)</text>
+<text class="t1" x="16" y="674" font-size="14">Student A, 3 runs, all questions</text>
+<path class="hi" d="M320,657 H646 Q650,657 650,661 V677 Q650,681 646,681 H320 Z"><title>Student A, 3 runs, all questions: 55 / 60</title></path>
+<text class="t1" x="658" y="674" font-size="14" font-weight="700">55 / 60</text>
+<text class="t1" x="16" y="718" font-size="14">Student B (facts never tuned on), 3 runs</text>
+<path class="hi" d="M320,701 H652 Q656,701 656,705 V721 Q656,725 652,725 H320 Z"><title>Student B (facts never tuned on), 3 runs: 56 / 60</title></path>
+<text class="t1" x="664" y="718" font-size="14" font-weight="700">56 / 60</text>
+<text class="t1" x="16" y="762" font-size="14">Said "I don't know" when never told</text>
+<path class="hi" d="M320,745 H676 Q680,745 680,749 V765 Q680,769 676,769 H320 Z"><title>Said "I don't know" when never told: 24 / 24</title></path>
+<text class="t1" x="688" y="762" font-size="14" font-weight="700">24 / 24</text>
+</svg>

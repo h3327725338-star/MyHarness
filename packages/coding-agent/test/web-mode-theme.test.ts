@@ -133,11 +133,25 @@ describe("All selectable palettes stay readable", () => {
 		it(`${name}: control borders can be seen`, () => {
 			expect(contrast(get("border-strong"), get("bg-panel"))).toBeGreaterThanOrEqual(1.6);
 		});
+		it(`${name}: text and accent are readable, on the surfaces and on the accent`, () => {
+			for (const surface of ["bg-app", "bg-panel", "bg-raised"]) {
+				for (const text of ["text", "text-2", "text-3"]) {
+					expect(contrast(get(text), get(surface)), `${text} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+				}
+				expect(contrast(get("accent"), get(surface)), `accent on ${surface}`).toBeGreaterThanOrEqual(3);
+			}
+			expect(contrast(get("on-accent"), get("accent"))).toBeGreaterThanOrEqual(4.5);
+		});
 	}
 	it("does not couple surface colors to chat mode", () => {
 		expect(css).not.toContain('[data-chat-mode="general"]');
-		for (const scheme of ["forest", "amber"]) {
-			expect(palette("light", scheme)).toEqual(palette("light", "classic"));
+	});
+	it("gives each scheme colors of its own in both display modes", () => {
+		for (const theme of ["dark", "light"]) {
+			const schemes = ["classic", "forest", "amber"].map((scheme) => palette(theme, scheme));
+			for (const token of ["bg-app", "bg-panel", "bg-raised", "text-3", "accent"]) {
+				expect(new Set(schemes.map((p) => p[token])).size, `${theme} ${token}`).toBe(3);
+			}
 		}
 	});
 	it("restores the saved forest preview and retains classic charcoal", () => {
@@ -145,6 +159,53 @@ describe("All selectable palettes stay readable", () => {
 		expect(palette("dark", "forest").accent).toBe("#a7c080");
 		expect(palette("dark", "classic")["bg-panel"]).toBe("#1c1d1d");
 		expect(palette("dark", "classic").accent).toBe("#79a8f5");
+	});
+	it("keeps classic light as the base light palette", () => {
+		expect(palette("light", "classic")["bg-panel"]).toBe("#fbfbfa");
+		expect(palette("light", "classic").accent).toBe("#2c66d6");
+	});
+});
+
+describe("Light Quiet Forest and Warm Amber palettes", () => {
+	for (const [scheme, panel, accent] of [
+		["forest", "#f0f4eb", "#47773a"],
+		["amber", "#f8f2e8", "#96632b"],
+	]) {
+		it(`${scheme}: steps up from the window to the raised surfaces, tinted but not saturated`, () => {
+			const p = palette("light", scheme);
+			expect(p["bg-panel"]).toBe(panel);
+			expect(p.accent).toBe(accent);
+			for (const [lower, upper] of [
+				["bg-app", "bg-panel"],
+				["bg-panel", "bg-raised"],
+			]) {
+				expect(luminance(p[lower])).toBeLessThan(luminance(p[upper]));
+			}
+			expect(contrast(p["bg-app"], p["bg-panel"])).toBeGreaterThanOrEqual(1.15);
+			for (const surface of ["bg-app", "bg-panel", "bg-raised"]) {
+				const channels = hex3(p[surface]);
+				expect(Math.max(...channels) - Math.min(...channels), surface).toBeLessThanOrEqual(24);
+			}
+		});
+		it(`${scheme}: differs enough from Classic for the mode reveal to be seen over the whole window`, () => {
+			const p = palette("light", scheme);
+			const classic = palette("light", "classic");
+			for (const surface of ["bg-app", "bg-panel"]) {
+				const distance = hex3(p[surface]).reduce(
+					(sum, channel, i) => sum + Math.abs(channel - hex3(classic[surface])[i]),
+					0,
+				);
+				expect(distance, surface).toBeGreaterThanOrEqual(30);
+			}
+		});
+	}
+	it("leans each palette its own way", () => {
+		const forest = hex3(palette("light", "forest")["bg-app"]);
+		expect(forest[1]).toBeGreaterThan(forest[0]);
+		expect(forest[1]).toBeGreaterThan(forest[2]);
+		const amber = hex3(palette("light", "amber")["bg-app"]);
+		expect(amber[0]).toBeGreaterThan(amber[1]);
+		expect(amber[1]).toBeGreaterThan(amber[2]);
 	});
 });
 
@@ -177,12 +238,14 @@ describe("Warm Amber dark palette", () => {
 			expect(Math.max(...channels) - Math.min(...channels), token).toBeLessThanOrEqual(24);
 		}
 	});
-	it("maps each switch side to its own saved dark theme accent", () => {
-		for (const mode of ["coding", "general"]) {
-			for (const scheme of ["forest", "amber"]) {
-				expect(block(`:root[data-theme="dark"][data-${mode}-color-theme="${scheme}"]`)[`mode-${mode}`]).toBe(
-					palette("dark", scheme).accent,
-				);
+	it("maps each switch side to the accent of its own saved theme", () => {
+		for (const theme of ["dark", "light"]) {
+			for (const mode of ["coding", "general"]) {
+				for (const scheme of ["forest", "amber"]) {
+					expect(block(`:root[data-theme="${theme}"][data-${mode}-color-theme="${scheme}"]`)[`mode-${mode}`]).toBe(
+						palette(theme, scheme).accent,
+					);
+				}
 			}
 		}
 	});

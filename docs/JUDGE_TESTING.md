@@ -1,6 +1,6 @@
 # Judge testing guide
 
-This document is written for hackathon judges who need to run and evaluate MyHarness without prior context. It describes what to install, how to attach a model, and what to look at in five minutes.
+This document is written for hackathon judges who need to run and evaluate MyHarness without prior context. It describes what to install, how to attach a model, and what to look at in five minutes. What MyHarness did on real runs, with every failure and its cause, is in the [evaluation](evaluation/README.md).
 
 ## What the project is
 
@@ -68,21 +68,29 @@ Without a Token Factory key the UI still starts and every non-model feature stil
 
 ## Five-minute test script
 
-1. Start the app. A fresh install starts with a chat under **Default**, which belongs to no project. Add a project folder (any Git repository, or this one) with **Add workspace**, the **+** in the sidebar.
-2. The composer shows **DeepSeek V4.1 Flash 1017**, which the setup made the main model, with a 1.0M context window.
-3. Ask: `Read package.json and list the packages/ directories, then summarize the repository structure. Do not modify any files.`
-   - Expected: the agent calls file and shell tools itself, and the turn header reports elapsed time and operation count.
-   - The answer names version `0.0.5` and the five directories under `packages/`.
-4. Open the **Changes** panel. The turn's tool operations are listed there, and the same session is on disk under `%USERPROFILE%\.myharness\agent\sessions\`.
-5. Open Settings → **Providers**. **Nebius Token Factory**, first in the list, shows:
-   - its Base URL and the models;
-   - the console links for balance and top-up;
-   - this computer's spending estimate.
+Start each step in a new chat (**New chat** in the sidebar) unless it says otherwise. The models are not deterministic, so the wording will differ from run to run. Measured results for these workflows, failures included, are in the [evaluation](evaluation/README.md).
 
-   Settings → **Agent** shows which model each job uses.
-6. Ask something that needs the web, for example `What did NVIDIA announce about Nemotron 3.5 Lightning?`.
+1. **Start.** A fresh install starts with a chat under **Default**, which belongs to no project. The composer shows **DeepSeek V4.1 Flash 1017**, which the setup made the main model, with a 1.0M context window.
+2. **Web search with Tavily.** Ask: `What did NVIDIA announce about Nemotron 3.5 Lightning? Look it up on the web and give your sources.`
    - Web search is on by default. Tavily answers without a key through its free keyless access, and the search step lists the results it read.
    - **Get a free key** in Settings → **Web search** adds 1,000 searches a month.
+3. **The built-in browser.** Ask: `Open https://github.com/h3327725338-star/MyHarness/releases in your browser and tell me the latest MyHarness version and what changed in it.`
+   - Expected: the answer names version `0.0.6`. The agent works in its own background tab, so nothing jumps in front of you. The **Browser** button, the globe at the top right, shows its tabs.
+   - To try a real sign-in, sign in to a site of your own in that browser, then ask about something behind it. The sign-in survives restarts. If a page needs a sign-in or a human check, a request bar appears on that tab and the agent waits for you.
+4. **Memory across chats.** Send: `I'm vegetarian and allergic to peanuts, and I go to the gym on Mondays and Thursdays.` After the reply, wait about 30 seconds while Auto Memory saves it in the background. Then ask each of these in its own new chat:
+   - `Which days do I go to the gym?` Expected: Mondays and Thursdays.
+   - `Suggest a quick lunch for me.` Expected: vegetarian and without peanuts, with no reminder from you.
+   - `What is my sister's name?` Expected: it says it does not know, because you never told it.
+5. **A scheduled task.** Ask: `Remind me in 3 minutes to stand up and stretch.`
+   - Expected: it confirms the time, and a card pops up when the time comes. Settings → **Scheduled tasks** lists what is set.
+   - An agent task works the same way, for example `In 3 minutes, look up the weather in Kuala Lumpur and summarize it.` It starts a new chat at that time.
+6. **An image.** Paste or drop a screenshot and ask what it says. Nemotron 3.5 Super VL reads it through the vision assistant, and the main model answers from its report.
+7. **Which model does what.**
+   - Settings → **Agent** shows which model each job uses.
+   - Settings → **Providers** → **Nebius Token Factory**, first in the list, shows its Base URL and the models, the console links for balance and top-up, and this computer's spending estimate.
+8. **Coding (optional).** Add a project folder (any Git repository, or this one) with **Add workspace**, the **+** in the sidebar, and ask: `Read package.json and list the packages/ directories, then summarize the repository structure. Do not modify any files.`
+   - Expected: the agent calls file and shell tools itself, and the turn header reports elapsed time and operation count. The answer names version `0.0.6` and the five directories under `packages/`.
+   - The **Changes** panel lists the turn's tool operations, and the same session is on disk under `%USERPROFILE%\.myharness\agent\sessions\`.
 
 ## What to inspect in the source
 
@@ -99,9 +107,10 @@ Without a Token Factory key the UI still starts and every non-model feature stil
 - Model replies need a Nebius Token Factory key, or another Provider. Without one the UI starts but no model answers.
 - Token Factory has no balance API. The balance itself is only in its console; MyHarness shows a local estimate.
 - Tavily rate-limits its keyless access. When the limit is used up, the search says so and links to a free key.
-- Google Drive sync is implemented against the Drive API and covered by tests with an in-memory transport. A run across two real machines has not been done yet.
+- Google Drive sync runs only while the app is open (the tray counts). It has been run for real between two PCs on one Google account. Apart from the browser's sealed sign-in vault, the copy on Drive is not end-to-end encrypted.
 - Symbols (semantic code navigation) needs optional per-language modules and is disabled by default.
 - Sessions, settings and credentials live under `%USERPROFILE%\.myharness\`. Nothing is sent anywhere except the model, search and sync services you configure.
+- MyHarness has no sandbox and no per-tool approval: the agent has its user's access to their own PC. The evaluation lists [everything else we measured or found](evaluation/README.md#limitations-and-problems-found).
 
 ## During the judging window
 

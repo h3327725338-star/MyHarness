@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getSupportedThinkingLevels } from "@myharness/ai/compat";
+import { calculateCost, getSupportedThinkingLevels } from "@myharness/ai/compat";
 import { describe, expect, it } from "vitest";
 import {
 	NEBIUS_BASE_URL,
@@ -155,6 +155,57 @@ describe("Nebius Token Factory preset", () => {
 		expect(upgradeNebiusPresetModels("other", provider)).toBe(provider);
 		// Already current: the same object comes back.
 		expect(upgradeNebiusPresetModels("nebius", upgraded)).toBe(upgraded);
+	});
+
+	it("prices cached input as Token Factory lists it", () => {
+		const picks = pickNebiusModels(undefined);
+		const prices = Object.fromEntries(picks.map((pick) => [pick.slot, pick.model.cost]));
+		expect(prices.flash).toMatchObject({ input: 0.3, output: 1.2, cacheRead: 0.006 });
+		expect(prices.ultra).toMatchObject({ input: 1, output: 3, cacheRead: 0.12 });
+		expect(prices.lightning).toMatchObject({ input: 0.06, output: 0.24, cacheRead: 0.03 });
+		expect(prices.vision).toMatchObject({ input: 0.3, output: 0.9, cacheRead: 0.06 });
+		// A million tokens each of input, cached input and output on Lightning: 0.06 + 0.03 + 0.24.
+		const usage = {
+			input: 1_000_000,
+			output: 1_000_000,
+			cacheRead: 1_000_000,
+			cacheWrite: 0,
+			totalTokens: 3_000_000,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		expect(calculateCost({ cost: prices.lightning } as any, usage).total).toBeCloseTo(0.33, 6);
+	});
+
+	it("brings cached input written at $0 up to date and leaves prices the user changed alone", () => {
+		const provider = {
+			baseUrl: NEBIUS_BASE_URL,
+			api: "openai-completions" as const,
+			models: [
+				{
+					id: "nvidia/Nemotron-3_5-Lightning",
+					cost: { input: 0.06, output: 0.24, cacheRead: 0, cacheWrite: 0, currency: "USD" as const },
+				},
+				// Other prices than the preset wrote, and a cached price of the user's own: kept as they are.
+				{ id: "nvidia/Nemotron-3-Ultra-550b-a55b", cost: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 } },
+				{ id: "nvidia/Nemotron-3.5-Super-VL", cost: { input: 0.3, output: 0.9, cacheRead: 0.01, cacheWrite: 0 } },
+				{ id: "zai-org/GLM-5.3-Flash", cost: { input: 0.15, output: 0.5, cacheRead: 0, cacheWrite: 0 } },
+			],
+		};
+		const upgraded = upgradeNebiusPresetModels("nebius", provider);
+		expect(upgraded.models?.[0]?.cost).toEqual({
+			input: 0.06,
+			output: 0.24,
+			cacheRead: 0.03,
+			cacheWrite: 0,
+			currency: "USD",
+		});
+		expect(upgraded.models?.[1]).toBe(provider.models[1]);
+		expect(upgraded.models?.[2]?.cost?.cacheRead).toBe(0.01);
+		expect(upgraded.models?.[3]).toBe(provider.models[3]);
+		expect(upgradeNebiusPresetModels("other", provider)).toBe(provider);
+		// Already current: the same object comes back.
+		const again = upgradeNebiusPresetModels("nebius", upgraded);
+		expect(again.models?.[0]).toBe(upgraded.models?.[0]);
 	});
 
 	it("adds only the models an existing entry lacks and keeps the rest as the user left it", () => {

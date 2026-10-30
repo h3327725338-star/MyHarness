@@ -63,10 +63,10 @@ const LEGACY_EFFORT_MAP = {
 	max: "max",
 } as const;
 
-const usd = (input: number, output: number) => ({
+const usd = (input: number, output: number, cacheRead: number) => ({
 	input,
 	output,
-	cacheRead: 0,
+	cacheRead,
 	cacheWrite: 0,
 	currency: "USD" as const,
 });
@@ -76,7 +76,8 @@ const usd = (input: number, output: number) => ({
  * Factory on 2026-10-25; DeepSeek V4.1 Flash 1017's ID is the routing key its public endpoint page showed on 2026-10-29.
  * Nano's ID comes from third-party listings and no job uses it now (retired); like Super VL it declares no reasoning
  * effort, so MyHarness never sends `reasoning_effort` to it (turning reasoning off through Token Factory was only tried
- * on Super VL, where it broke the answer).
+ * on Super VL, where it broke the answer). Prices, per million input, output and cached input tokens, are what Token
+ * Factory's public endpoints page showed on 2026-10-30.
  */
 const PRESET_MODELS: readonly PresetModel[] = [
 	{
@@ -90,7 +91,7 @@ const PRESET_MODELS: readonly PresetModel[] = [
 			input: ["text", "image"],
 			contextWindow: 1_048_576,
 			maxTokens: 65_536,
-			cost: usd(0.3, 1.2),
+			cost: usd(0.3, 1.2, 0.006),
 			compat: { supportsReasoningEffort: true },
 			thinkingLevelMap: { ...DEEPSEEK_LEVELS },
 		},
@@ -106,7 +107,7 @@ const PRESET_MODELS: readonly PresetModel[] = [
 			input: ["text"],
 			contextWindow: 1_048_576,
 			maxTokens: 65_536,
-			cost: usd(1, 3),
+			cost: usd(1, 3, 0.12),
 			compat: { supportsReasoningEffort: true },
 			thinkingLevelMap: { ...ULTRA_LEVELS },
 		},
@@ -122,7 +123,7 @@ const PRESET_MODELS: readonly PresetModel[] = [
 			input: ["text"],
 			contextWindow: 1_048_576,
 			maxTokens: 65_536,
-			cost: usd(0.06, 0.24),
+			cost: usd(0.06, 0.24, 0.03),
 			compat: { supportsReasoningEffort: true },
 			thinkingLevelMap: { ...LIGHTNING_LEVELS },
 		},
@@ -138,7 +139,7 @@ const PRESET_MODELS: readonly PresetModel[] = [
 			input: ["text", "image"],
 			contextWindow: 1_048_576,
 			maxTokens: 4096,
-			cost: usd(0.3, 0.9),
+			cost: usd(0.3, 0.9, 0.06),
 			thinkingLevelMap: { ...ALWAYS_REASONING },
 		},
 	},
@@ -154,32 +155,43 @@ const PRESET_MODELS: readonly PresetModel[] = [
 			input: ["text"],
 			contextWindow: 262_144,
 			maxTokens: 16_384,
-			cost: usd(0.06, 0.24),
+			cost: usd(0.06, 0.24, 0.012),
 			thinkingLevelMap: { ...ALWAYS_REASONING },
 		},
 	},
 ];
 
 /**
- * A preset model as MyHarness 0.0.3 wrote it, brought to the levels the model really has (above). An entry the user
- * changed in any way is left as it is; so is every other provider. Used when models.json is read, so an existing setup
- * shows the right levels without being set up again.
+ * A preset model as an earlier MyHarness wrote it, brought up to date: 0.0.3 wrote levels the model does not have
+ * (above), and setups before 2026-10-30 wrote cached input at $0. An entry the user changed in any way is left as it
+ * is; so is every other provider. Used when models.json is read, so an existing setup is right without being set up
+ * again.
  */
 export function upgradeNebiusPresetModels(providerId: string, provider: ModelsJsonProvider): ModelsJsonProvider {
 	if (providerId !== NEBIUS_PROVIDER_ID || !provider.models?.length) return provider;
 	let changed = false;
 	const models = provider.models.map((model) => {
 		const preset = PRESET_MODELS.find((candidate) => candidate.match.test(model.id));
-		if (!preset?.entry.thinkingLevelMap) return model;
+		if (!preset?.entry.thinkingLevelMap || !preset.entry.cost) return model;
 		const legacy =
 			preset.slot === "ultra" || preset.slot === "lightning"
 				? JSON.stringify(model.thinkingLevelMap) === JSON.stringify(LEGACY_EFFORT_MAP)
 				: (preset.slot === "vision" || preset.slot === "nano") &&
 					model.thinkingLevelMap === undefined &&
 					!(model.compat && "supportsReasoningEffort" in model.compat);
-		if (!legacy) return model;
+		const cost =
+			model.cost?.cacheRead === 0 &&
+			model.cost.input === preset.entry.cost.input &&
+			model.cost.output === preset.entry.cost.output
+				? { ...model.cost, cacheRead: preset.entry.cost.cacheRead }
+				: undefined;
+		if (!legacy && !cost) return model;
 		changed = true;
-		return { ...model, thinkingLevelMap: { ...preset.entry.thinkingLevelMap } };
+		return {
+			...model,
+			...(legacy ? { thinkingLevelMap: { ...preset.entry.thinkingLevelMap } } : {}),
+			...(cost ? { cost } : {}),
+		};
 	});
 	return changed ? { ...provider, models } : provider;
 }

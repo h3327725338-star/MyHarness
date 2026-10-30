@@ -195,14 +195,17 @@
 	--hl-type: #12796a;
 }
 
-/* Each switch side follows that mode's saved scheme, even while the other mode is on screen.
-   Light display shares the blue base accent, just like its page palette. */
+/* Each switch side follows that mode's saved scheme, even while the other mode is on screen. */
 :root[data-theme="dark"] { --mode-coding: #79a8f5; --mode-general: #79a8f5; --mode-on: #242b36; }
 :root[data-theme="light"] { --mode-coding: #2c66d6; --mode-general: #2c66d6; --mode-on: #ffffff; }
 :root[data-theme="dark"][data-coding-color-theme="forest"] { --mode-coding: #a7c080; }
 :root[data-theme="dark"][data-coding-color-theme="amber"] { --mode-coding: #d4ae82; }
 :root[data-theme="dark"][data-general-color-theme="forest"] { --mode-general: #a7c080; }
 :root[data-theme="dark"][data-general-color-theme="amber"] { --mode-general: #d4ae82; }
+:root[data-theme="light"][data-coding-color-theme="forest"] { --mode-coding: #47773a; }
+:root[data-theme="light"][data-coding-color-theme="amber"] { --mode-coding: #96632b; }
+:root[data-theme="light"][data-general-color-theme="forest"] { --mode-general: #47773a; }
+:root[data-theme="light"][data-general-color-theme="amber"] { --mode-general: #96632b; }
 
 /* Colour schemes apply to both chat modes. Classic uses the base palette above. */
 :root[data-theme="dark"][data-color-theme="forest"] {
@@ -321,4 +324,93 @@
 	--hl-type: #9bbfb0;
 }
 
-/* Light display uses the shared base palette for every colour scheme. */
+/* The light versions of the same schemes: a quiet grey-green and a warm paper. Classic uses the base light palette; the
+   status and diff colours stay those of the base light palette in all three. packages/desktop/start-page.cjs repeats the
+   colours of the conversation column for the page shown before the app. */
+:root[data-theme="light"][data-color-theme="forest"] {
+	--bg-app: #dde5d8;
+	--bg-panel: #f0f4eb;
+	--bg-raised: #f9fbf6;
+	--bg-inset: #e8eee2;
+	--surface-hover: #e4ebde;
+	--surface-active: #dae3d3;
+	--surface-select: #d9e6cd;
+	--border: #d2dacb;
+	--border-soft: #d2dacb;
+	--border-strong: #aab5a2;
+	--border-hover: #75816e;
+	--border-focus: #6b9a54;
+
+	--text: #1b201a;
+	--text-2: #4e574b;
+	--text-3: #5a6356;
+	--text-4: #737e6d;
+	--text-inverse: #ffffff;
+
+	--accent: #47773a;
+	--accent-strong: #386330;
+	--accent-soft: rgba(71, 119, 58, 0.11);
+	--accent-line: rgba(71, 119, 58, 0.42);
+	--on-accent: #ffffff;
+	--selection-bg: rgba(71, 119, 58, 0.24);
+	--quote-hl-bg: rgba(71, 119, 58, 0.18);
+	--quote-hl-edge: rgba(71, 119, 58, 0.36);
+
+	--user-bg: #e2ecd9;
+	--user-border: #cfdec2;
+	--code-bg: #e8eee2;
+	--inline-code-bg: #e2e9dc;
+	--diff-hunk: #5a7a6a;
+
+	--hl-keyword: #84467a;
+	--hl-string: #3f7a34;
+	--hl-number: #a85a1a;
+	--hl-comment: #798274;
+	--hl-title: #47773a;
+	--hl-attr: #8f6a10;
+	--hl-type: #27766a;
+}
+
+:root[data-theme="light"][data-color-theme="amber"] {
+	--bg-app: #ebe2d4;
+	--bg-panel: #f8f2e8;
+	--bg-raised: #fdfaf4;
+	--bg-inset: #f2ebdf;
+	--surface-hover: #efe7da;
+	--surface-active: #e6dccc;
+	--surface-select: #eddfc9;
+	--border: #e0d6c6;
+	--border-soft: #e0d6c6;
+	--border-strong: #bfb3a0;
+	--border-hover: #877c6c;
+	--border-focus: #b1864f;
+
+	--text: #221e18;
+	--text-2: #59524a;
+	--text-3: #655d53;
+	--text-4: #80776a;
+	--text-inverse: #ffffff;
+
+	--accent: #96632b;
+	--accent-strong: #7c5021;
+	--accent-soft: rgba(150, 99, 43, 0.11);
+	--accent-line: rgba(150, 99, 43, 0.42);
+	--on-accent: #ffffff;
+	--selection-bg: rgba(150, 99, 43, 0.24);
+	--quote-hl-bg: rgba(150, 99, 43, 0.18);
+	--quote-hl-edge: rgba(150, 99, 43, 0.36);
+
+	--user-bg: #f0e6d5;
+	--user-border: #e3d5bf;
+	--code-bg: #f1eadd;
+	--inline-code-bg: #eae2d4;
+	--diff-hunk: #7d7052;
+
+	--hl-keyword: #84466c;
+	--hl-string: #4c7a33;
+	--hl-number: #a8551a;
+	--hl-comment: #877e72;
+	--hl-title: #8a5a25;
+	--hl-attr: #8a6410;
+	--hl-type: #2a7468;
+}

@@ -25,6 +25,7 @@ packages/ai/src/providers/.model-generation-*/
 !/CONTRIBUTING.md
 !/CONTRIBUTING.zh-CN.md
 !/DEVELOPMENT_ROADMAP.md
+!/DEVELOPMENT_ROADMAP.zh-CN.md
 !/DOCUMENTATION_INDEX.md
 !/MAINTENANCE.md
 !/PROJECT_STATUS.md

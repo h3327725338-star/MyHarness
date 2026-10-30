@@ -311,6 +311,99 @@ describe("applySemanticStringCoercion", () => {
 		});
 	});
 
+	it("coerces the fields of the union branch the call names", () => {
+		const tool: Tool = {
+			name: "browser",
+			description: "",
+			parameters: Type.Union([
+				Type.Object({ operation: Type.Literal("open"), background: Type.Optional(Type.Boolean()) }),
+				Type.Object({
+					operation: Type.Literal("read"),
+					links: Type.Optional(Type.Boolean()),
+					maxChars: Type.Optional(Type.Integer()),
+				}),
+			]),
+		};
+		const call = (args: Record<string, unknown>): ToolCall => ({
+			type: "toolCall",
+			id: "call-union",
+			name: "browser",
+			arguments: args,
+		});
+		expect(validateToolArguments(tool, call({ operation: "open", background: "False" }))).toEqual({
+			operation: "open",
+			background: false,
+		});
+		expect(validateToolArguments(tool, call({ operation: "read", links: " True ", maxChars: "500" }))).toEqual({
+			operation: "read",
+			links: true,
+			maxChars: 500,
+		});
+		// A word the coercion does not accept is still a real error; a field the branch does not declare is left alone.
+		expect(() => validateToolArguments(tool, call({ operation: "open", background: "maybe" }))).toThrow(
+			"Validation failed",
+		);
+		expect(validateToolArguments(tool, call({ operation: "open", links: "True" }))).toEqual({
+			operation: "open",
+			links: "True",
+		});
+	});
+
+	it("treats a provider-safe root around a TypeBox union as TypeBox-declared", () => {
+		const union = Type.Union([
+			Type.Object({ operation: Type.Literal("open"), background: Type.Optional(Type.Boolean()) }),
+			Type.Object({ operation: Type.Literal("read"), links: Type.Optional(Type.Boolean()) }),
+		]);
+		const tool: Tool = {
+			name: "browser",
+			description: "",
+			parameters: Type.Unsafe({ type: "object", anyOf: union.anyOf }),
+		};
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-safe-root",
+			name: "browser",
+			arguments: { operation: "open", background: "False" },
+		};
+		expect(validateToolArguments(tool, toolCall)).toEqual({ operation: "open", background: false });
+	});
+
+	it("keeps a plain JSON schema union strict", () => {
+		const tool: Tool = {
+			name: "mcp_browser",
+			description: "",
+			parameters: {
+				type: "object",
+				anyOf: [
+					{ type: "object", properties: { operation: { const: "open" }, background: { type: "boolean" } } },
+					{ type: "object", properties: { operation: { const: "read" } } },
+				],
+			} as unknown as Tool["parameters"],
+		};
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-plain",
+			name: "mcp_browser",
+			arguments: { operation: "open", background: "False" },
+		};
+		expect(() => validateToolArguments(tool, toolCall)).toThrow("Validation failed");
+	});
+
+	it("leaves a union that names no branch strict", () => {
+		const tool: Tool = {
+			name: "either",
+			description: "",
+			parameters: Type.Union([Type.Object({ enabled: Type.Boolean() }), Type.Object({ count: Type.Integer() })]),
+		};
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "call-no-branch",
+			name: "either",
+			arguments: { enabled: "False" },
+		};
+		expect(() => validateToolArguments(tool, toolCall)).toThrow("Validation failed");
+	});
+
 	it("coerces fields nested inside objects recursively", () => {
 		const tool: Tool = {
 			name: "server",

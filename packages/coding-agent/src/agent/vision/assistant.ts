@@ -8,7 +8,12 @@ import type { SettingsManager, VisionAssistantSettings } from "../../config/sett
 import type { ModelRuntime } from "../../providers/runtime/index.ts";
 import { sdkFirstByteTimeoutMs } from "../../providers/runtime/request-timeouts.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
-import { type MainModelRef, resolveAssistantModel } from "../runtime/assistant-model.ts";
+import {
+	helperReasoning,
+	type MainModelRef,
+	resolveAssistantModel,
+	withSupportedEffort,
+} from "../runtime/assistant-model.ts";
 import type { CustomMessage } from "../runtime/messages.ts";
 import { getVisionCapabilityStatus, supportsVision, withVisionInput } from "./capability.ts";
 import {
@@ -420,7 +425,11 @@ export class VisionAssistantManager {
 				break;
 			}
 		}
-		const completeSettings = configurationReady ? resolved : undefined;
+		// The effort it really runs at ("Default" is the model's highest), as the report and the cache key name it.
+		const completeSettings =
+			configurationReady && resolved
+				? withSupportedEffort(resolved, this.options.modelRuntime.getModel(resolved.provider, resolved.model))
+				: undefined;
 		const occurrenceKeys = getOccurrenceKeys(messages);
 		const candidates: VisionAssistantCandidate[] = [];
 
@@ -992,7 +1001,7 @@ export class VisionAssistantManager {
 					],
 				},
 				{
-					reasoning: settings.thinkingLevel === "off" ? undefined : settings.thinkingLevel,
+					reasoning: helperReasoning(model, settings.thinkingLevel),
 					signal: controller.signal,
 					timeoutMs: sdkFirstByteTimeoutMs(model, this.options.settingsManager),
 					maxRetries: retry.maxRetries,

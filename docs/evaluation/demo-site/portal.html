@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Course Portal · Demo</title>
+<style>
+	:root { --ink: #1d2433; --dim: #5d6678; --line: #e3e7ee; --bg: #f5f7fa; --card: #ffffff; --brand: #3b5bdb; --warn: #c2410c; }
+	* { box-sizing: border-box; }
+	body { margin: 0; font: 15px/1.5 "Segoe UI", system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+	header { display: flex; align-items: center; gap: 14px; height: 60px; padding: 0 28px; background: var(--card); border-bottom: 1px solid var(--line); }
+	.mark { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, #3b5bdb, #6c8cff); }
+	header b { font-size: 17px; }
+	.tag { font-size: 11px; color: var(--dim); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+	header .grow { flex: 1; }
+	.who { display: flex; align-items: center; gap: 10px; color: var(--dim); font-size: 14px; }
+	.who i { width: 30px; height: 30px; border-radius: 50%; background: #cfd8ea; display: inline-block; }
+	main { display: grid; grid-template-columns: 210px 1fr; min-height: calc(100vh - 60px); }
+	nav { padding: 18px 12px; border-right: 1px solid var(--line); background: var(--card); }
+	nav a { display: block; padding: 8px 12px; border-radius: 8px; color: var(--dim); text-decoration: none; margin-bottom: 2px; }
+	nav a.on { background: #eef2ff; color: var(--brand); font-weight: 600; }
+	section { padding: 26px 30px; }
+	h1 { font-size: 22px; margin: 0 0 4px; }
+	.sub { color: var(--dim); margin: 0 0 20px; }
+	/* One column at every width: the cards stay at the left, where a narrow side panel shows the page. */
+	.grid { display: grid; grid-template-columns: minmax(0, 520px); gap: 14px; }
+	.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+	.card h3 { margin: 0 0 4px; font-size: 15px; }
+	.card p { margin: 0; color: var(--dim); font-size: 14px; }
+	.due { margin-top: 10px; font-weight: 600; font-size: 14px; }
+	.due.soon { color: var(--warn); }
+	h2 { font-size: 16px; margin: 26px 0 10px; }
+	ul { list-style: none; margin: 0; padding: 0; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+	li { display: flex; gap: 14px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+	li:last-child { border-bottom: 0; }
+	li time { color: var(--dim); min-width: 92px; font-size: 14px; }
+	/* A course card opens its course page (a click, as a student would; the page has no link to guess). */
+	.card[data-course] { cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+	.card[data-course]:hover { border-color: #b9c6f5; box-shadow: 0 4px 14px rgba(59, 91, 219, 0.08); }
+	.crumb { color: var(--dim); font-size: 13px; margin-bottom: 8px; }
+	.crumb span { color: var(--brand); cursor: pointer; }
+	.task { margin-top: 6px; }
+	.task h3 { font-size: 16px; }
+	.task dl { display: grid; grid-template-columns: 130px 1fr; gap: 6px 14px; margin: 12px 0 0; font-size: 14px; }
+	.task dt { color: var(--dim); }
+	.task dd { margin: 0; }
+	.task ol { margin: 4px 0 0; padding-left: 18px; }
+	.files li { justify-content: space-between; }
+	.files li span:last-child { color: var(--dim); font-size: 13px; }
+	.files a { color: var(--brand); text-decoration: none; }
+	.files a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header><span class="mark"></span><b>Course Portal</b><span class="tag">demo site</span><span class="grow"></span><span class="who">Alex Tan <i></i></span></header>
+<main>
+	<nav><a class="on" href="#">Dashboard</a><a href="#">Courses</a><a href="#">Assignments</a><a href="#">Grades</a><a href="#">Calendar</a><a href="#">Messages</a></nav>
+	<section id="home">
+		<h1>Good morning, Alex</h1>
+		<p class="sub">3 deadlines in the next 7 days</p>
+		<div class="grid">
+			<div class="card" data-course="os"><h3>Operating Systems</h3><p>Assignment 2 · Process scheduling</p><div class="due soon">Due Fri 30 Oct, 23:59</div></div>
+			<div class="card" data-course="dsa"><h3>Data Structures &amp; Algorithms</h3><p>Quiz 3 · Graphs</p><div class="due">Opens Mon 2 Nov, 10:00</div></div>
+			<div class="card" data-course="sa"><h3>Software Architecture</h3><p>Group report · First draft</p><div class="due">Due Wed 4 Nov, 17:00</div></div>
+		</div>
+		<h2>Announcements</h2>
+		<ul>
+			<li><time>Today</time><span>Operating Systems: Lab 5 moved to Room B204.</span></li>
+			<li><time>Yesterday</time><span>Software Architecture: Group sign-up closes Friday.</span></li>
+			<li><time>Mon 26 Oct</time><span>Library hours extended during the exam weeks.</span></li>
+		</ul>
+	</section>
+	<section id="course" hidden></section>
+</main>
+<script>
+// Course pages (#course/<id>), opened from the dashboard's cards. Made up for this demo, like the rest of the site.
+const COURSES = {
+	os: {
+		name: "Operating Systems", meta: "Dr. Lim · Mon 10:00 · Room B204",
+		task: "Assignment 2 · Process scheduling", due: "Due Fri 30 Oct, 23:59", soon: true,
+		rows: [["Submit", "One ZIP: your C source and a 2-page report"], ["Implement", "<ol><li>First come, first served</li><li>Shortest job first</li><li>Round robin (quantum 4 ms)</li></ol>"], ["Report", "Average waiting and turnaround time for the 5 given workloads"]],
+		files: [["Assignment 2 brief.pdf", "PDF · 240 KB"], ["Workloads.zip", "ZIP · 12 KB"], ["Week 6 slides · CPU scheduling", "PDF · 3.1 MB"]],
+	},
+	dsa: {
+		name: "Data Structures & Algorithms", meta: "Dr. Siva · Tue 09:00 · Lab 3",
+		task: "Quiz 3 · Graphs", due: "Opens Mon 2 Nov, 10:00",
+		rows: [["Length", "30 minutes, one attempt"], ["Covers", "BFS, DFS, Dijkstra, topological sort"], ["Allowed", "One handwritten A4 page"]],
+		files: [["Week 7 slides · Graphs", "PDF · 2.4 MB"], ["Practice quiz", "Opens now"]],
+	},
+	sa: {
+		name: "Software Architecture", meta: "Dr. Wong · Wed 14:00 · Room A301",
+		task: "Group report · First draft", due: "Due Wed 4 Nov, 17:00",
+		rows: [["Length", "1,500 – 2,000 words"], ["Must cover", "<ol><li>The system's context and its users</li><li>Three architecture decisions, with the options you rejected</li><li>The trade-offs of each decision</li><li>The top three risks</li></ol>"], ["Submit", "One PDF per group, under Assignments"], ["Your group", "Alex Tan, Mei Ling, Arjun Rao, Daniel Ho"]],
+		files: [["Report template.docx", "DOCX · 48 KB"], ["Marking rubric.pdf", "PDF · 1 KB"], ["Week 7 slides · Decision records", "PDF · 1 KB"]],
+	},
+};
+// The PDFs download (serve.mjs makes a one-page demo PDF for each); the other files are only listed.
+function fileLink(name, size) {
+	if (!size.startsWith("PDF")) return name;
+	const file = name.endsWith(".pdf") ? name : `${name}.pdf`;
+	return `<a href="/files/${encodeURIComponent(file)}" download="${file}">${name}</a>`;
+}
+const home = document.getElementById("home");
+const course = document.getElementById("course");
+const nav = document.querySelectorAll("nav a");
+function route() {
+	const c = COURSES[(location.hash.match(/^#course\/(\w+)/) || [])[1]];
+	home.hidden = !!c;
+	course.hidden = !c;
+	nav.forEach((a, i) => a.classList.toggle("on", c ? i === 1 : i === 0));
+	document.title = c ? `${c.name} · Course Portal · Demo` : "Course Portal · Demo";
+	if (!c) return;
+	course.innerHTML = `<div class="crumb"><span onclick="location.hash=''">Dashboard</span> / Courses / ${c.name.replace("&", "&amp;")}</div>
+		<h1>${c.name.replace("&", "&amp;")}</h1><p class="sub">${c.meta}</p>
+		<div class="card task"><h3>${c.task}</h3><div class="due${c.soon ? " soon" : ""}">${c.due}</div>
+		<dl>${c.rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl></div>
+		<h2>Files</h2><ul class="files">${c.files.map(([n, s]) => `<li><span>${fileLink(n, s)}</span><span>${s}</span></li>`).join("")}</ul>`;
+	window.scrollTo(0, 0);
+}
+document.querySelectorAll(".card[data-course]").forEach((card) => card.addEventListener("click", () => { location.hash = `course/${card.dataset.course}`; }));
+nav[0].addEventListener("click", (event) => { event.preventDefault(); location.hash = ""; });
+addEventListener("hashchange", route);
+route();
+</script>
+</body>
+</html>

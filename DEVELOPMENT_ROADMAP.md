@@ -1,59 +1,61 @@
-# 后续开发路线与边界
+# Development roadmap and boundaries
 
-这是基于当前源码整理的开发候选清单，不是排期，也不代表功能已经实现。每项工作开始前都要重新核对源码和测试；源码变化后以新的实现为准。
+[English](DEVELOPMENT_ROADMAP.md) | [简体中文](DEVELOPMENT_ROADMAP.zh-CN.md)
 
-## 当前基线
+This is a list of candidate development directions drawn from the current source. It is not a schedule, and an item being listed does not mean it is implemented. Before work on any item starts, check the source and tests again; once the source has changed, the new implementation is what counts.
 
-- 产品入口是 `packages/coding-agent/src/web.ts` → `src/main.ts`；跨领域装配由 `packages/coding-agent/src/application/resource-loader.ts` 和 `AgentSession` 完成。
-- Agent Core 只处理 Agent state、event、loop、tool lifecycle、取消和队列，不拥有 Provider catalog、TUI 或 Node SQLite。
-- AI 包提供 Provider/Models/API/auth contract，但 `providers/all.ts` 不提供上游 Provider catalog；应用必须注册或配置 Provider。
-- Coding Agent 的 model runtime 负责 `models.json`、credential、模型 store 和 extension/native Provider 组合。
-- Session 当前以 Coding Agent JSONL storage 为产品层路径；Node SQLite 是独立 backend，不能假设产品默认已经切换到它。
+## Current baseline
 
-## 候选方向
+- The product entry is `packages/coding-agent/src/web.ts` → `src/main.ts`; cross-domain assembly is done by `packages/coding-agent/src/application/resource-loader.ts` and `AgentSession`.
+- Agent Core handles only agent state, events, the loop, the tool lifecycle, cancellation and queues. It does not own a Provider catalog, a TUI or Node SQLite.
+- The AI package provides the Provider/Models/API/auth contracts, but `providers/all.ts` does not ship an upstream Provider catalog; the application must register or configure Providers.
+- The Coding Agent model runtime owns `models.json`, credentials, the model store, and how extension and native Providers are combined.
+- Sessions currently use the Coding Agent JSONL storage as the product path. Node SQLite is a separate backend; do not assume the product has switched to it by default.
 
-### Provider 与模型运行时
+## Candidate directions
 
-目标：让 `models.json`、extension Provider、credential、缓存和模型解析继续保持清晰边界。
+### Provider and model runtime
 
-验收条件：Provider 未配置时不会被文档或 UI 伪称为可用；refresh 的 network/cache/cancel/error 状态可观察；API implementation、Provider registration 和真实请求分别有测试证据。
+Goal: keep clear boundaries between `models.json`, extension Providers, credentials, caching and model resolution.
 
-禁止把 `packages/ai/src/providers/all.ts` 重新写成假 catalog 来解决产品层配置问题。
+Acceptance criteria: a Provider that is not configured is never presented as available by the docs or the UI; the network, cache, cancel and error states of a refresh are observable; the API implementation, the Provider registration and real requests each have their own test evidence.
 
-### Agent / Session 能力
+Do not rewrite `packages/ai/src/providers/all.ts` into a fake catalog to solve a product-level configuration problem.
 
-目标：扩展 Agent event、队列、取消、compaction、branch 和 persistence 时，沿用现有 Agent/Session contract。
+### Agent / Session capabilities
 
-验收条件：新增状态可持久化、恢复、分支和失败；对应 JSONL/migration/SQLite（若涉及）测试同时更新；不把 UI 特例写进 Agent Core。
+Goal: when extending agent events, queues, cancellation, compaction, branches and persistence, keep using the existing Agent/Session contracts.
+
+Acceptance criteria: new state survives persistence, restore, branching and failure; the matching JSONL, migration and (where involved) SQLite tests are updated in the same change; UI special cases are not written into Agent Core.
 
 ### Storage backend
 
-目标：继续完善 SQLite backend 或新增 backend 时复用 `packages/storage/sqlite-node/src/sqlite/types.ts` 的抽象。
+Goal: when improving the SQLite backend or adding a new backend, reuse the abstractions in `packages/storage/sqlite-node/src/sqlite/types.ts`.
 
-验收条件：每个 schema 变化都有递增 migration、transaction rollback、materialized state 重建和重开恢复测试；明确 backend 是否真的被产品 runtime 选用。
+Acceptance criteria: every schema change comes with an incrementing migration and with tests for transaction rollback, rebuilding the materialized state and recovery after reopening; it is stated clearly whether the product runtime really selects the backend.
 
-### Coding Agent 模块演进
+### Coding Agent module evolution
 
-目标：保持 `agent/runtime`、`session`、`context`、`providers`、`tools`、`extensions`、`git`、`modes` 等领域边界。
+Goal: keep the domain boundaries of `agent/runtime`, `session`, `context`, `providers`, `tools`, `extensions`, `git`, `modes` and the other domains.
 
-验收条件：新逻辑放入职责最接近的现有目录；公共能力通过正式 API entry/runtime 连接；`packages/coding-agent/src/utils` 不吸收领域业务；新增运行模式必须有参数、生命周期和 output contract 测试。
+Acceptance criteria: new logic goes into the existing directory closest to its responsibility; shared capabilities connect through formal API entries or the runtime; `packages/coding-agent/src/utils` does not absorb domain logic; a new run mode has tests for its arguments, lifecycle and output contract.
 
-### Prompt、skills 与 extensions
+### Prompts, skills and extensions
 
-目标：固定系统文本、组合逻辑、用户资源和 extension 变换继续可追踪。
+Goal: keep fixed system text, composition logic, user resources and extension transforms traceable.
 
-验收条件：修改 Prompt 时同步 loader/composer 文档和相关测试；区分静态文本生效、Project Trust、extension transform 与真实 Provider 请求；不要新增不存在的“隐式”资源文件。
+Acceptance criteria: a Prompt change updates the loader/composer docs and the related tests in the same change; evidence that static text takes effect, Project Trust, extension transforms and real Provider requests are kept apart; no "implicit" resource files that do not exist are introduced.
 
-### 工具、Symbols 与展示层
+### Tools, Symbols and presentation
 
-目标：保持工具执行 contract、presentation、symbols backend 和展示层解耦。
+Goal: keep the tool execution contract, tool presentation, the symbols backend and the UI layer decoupled.
 
-验收条件：工具结果可脱敏、可持久化；symbols 明确 semantic/LSP/runtime source；纯文本检索使用 grep/find/ls；展示层沿用 Web dialogs 与纯文本 widgets，不重新引入已移出的终端组件包，并有对应 Web 交互测试。
+Acceptance criteria: tool results can be redacted and persisted; symbols results state whether they come from a semantic, LSP or runtime source; plain-text search uses grep/find/ls; the UI layer keeps using Web dialogs and plain-text widgets, does not bring back the terminal component package that was moved out, and has matching Web interaction tests.
 
-## 每项后续开发都必须留下的记录
+## What every later development item must record
 
-1. 受影响的源码目录和公共出口；
-2. 配置、Session、migration、Prompt 或 package export 是否改变；
-3. 文档入口和 source-to-text 核对结果；
-4. 实际运行的测试命令及未验证边界；
-5. 是否产生 `dist`、lockfile、用户数据或外部服务写入。
+1. the affected source directories and public exports;
+2. whether configuration, Sessions, migrations, Prompts or package exports changed;
+3. the documentation entry points and the result of checking the text against the source;
+4. the test commands actually run, and the boundaries not verified;
+5. whether it produced `dist` output, lockfile changes, user data or writes to external services.

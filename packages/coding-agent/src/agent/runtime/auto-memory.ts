@@ -28,7 +28,7 @@ import {
 import type { SessionEntry } from "../../session/types.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
 import { parseFrontmatter } from "../../utils/frontmatter.ts";
-import { type MainModelRef, resolveAssistantModel } from "./assistant-model.ts";
+import { helperReasoning, type MainModelRef, resolveAssistantModel } from "./assistant-model.ts";
 import type { CustomMessage } from "./messages.ts";
 
 export type MemoryScope = "global" | "workspace" | "session" | "project";
@@ -617,8 +617,9 @@ export function parseMemoryOperations(output: string): MemoryOperation[] | undef
 function formatManifest(entries: MemoryEntry[]): string {
 	// 输入不设上限：已有记忆清单全部送给提取器，不再按 16KB 截断。
 	const rows: Array<Record<string, unknown>> = [];
-	for (const { id, name, description, type, scope, updatedAt, importance, triggers } of entries) {
-		// Show existing annotations so the memory model keeps them instead of rewriting or duplicating the entry.
+	for (const { id, name, description, type, scope, updatedAt, importance, triggers, content } of entries) {
+		// Show existing annotations so the memory model keeps them instead of rewriting or duplicating the entry, and the
+		// body because an update replaces it: facts the model cannot see would be lost.
 		const row = {
 			id,
 			name,
@@ -628,6 +629,7 @@ function formatManifest(entries: MemoryEntry[]): string {
 			updatedAt,
 			...(importance ? { importance } : {}),
 			...(triggers?.length ? { triggers } : {}),
+			content,
 		};
 		rows.push(row);
 	}
@@ -1629,7 +1631,7 @@ export class AutoMemoryManager {
 					],
 				},
 				{
-					reasoning: parameters.settings.thinkingLevel === "off" ? undefined : parameters.settings.thinkingLevel,
+					reasoning: helperReasoning(model, parameters.settings.thinkingLevel),
 					signal: abortController.signal,
 					timeoutMs: sdkFirstByteTimeoutMs(model, this.options.settingsManager),
 					maxRetries: retry.maxRetries,
@@ -1981,14 +1983,20 @@ export class AutoMemoryManager {
 				const isProfileBootstrap = operation.id === MEMORY_PROFILE_ID && scope === "global";
 				if (allowDelete && !isProfileBootstrap && (!operation.id || existing.get(operation.id)?.scope !== scope))
 					continue;
-				if (operation.id && (!isSafeMemoryId(operation.id) || !operation.id.startsWith(`${scope}/`))) {
+				// Models also make up IDs ("user_alex_tan", or "user/alex_tan" with the type in front): that means this entry
+				// within the scope they gave. An ID that names another scope stays refused.
+				const operationId =
+					operation.id && !isSafeMemoryId(operation.id)
+						? `${scope}/${operation.id.split("/").pop()}`
+						: operation.id;
+				if (operationId && (!isSafeMemoryId(operationId) || !operationId.startsWith(`${scope}/`))) {
 					continue;
 				}
 				let id =
-					operation.id && isSafeMemoryId(operation.id) && operation.id.startsWith(`${scope}/`)
-						? operation.id
+					operationId && isSafeMemoryId(operationId) && operationId.startsWith(`${scope}/`)
+						? operationId
 						: `${scope}/${slugify(operation.name)}`;
-				if (!existing.has(id) && !operation.id) {
+				if (!existing.has(id) && !operationId) {
 					const base = id;
 					let suffix = 2;
 					while (existing.has(id)) id = `${base}-${suffix++}`;

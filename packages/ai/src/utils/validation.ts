@@ -403,16 +403,21 @@ function semanticCoerceString(value: string, schemaTypes: string[]): unknown {
 }
 
 /**
- * Walks the *declared* schema shape (object properties only, no array-item guessing) and
- * replaces strings that the schema type explicitly accepts with their semantic value.
+ * Walks the *declared* schema shape (object properties, or those of the union branch the
+ * call names; no array-item guessing) and replaces strings that the schema type explicitly
+ * accepts with their semantic value.
  */
 function applySemanticStringCoercion(value: unknown, schema: JsonSchemaObject | undefined): void {
-	if (!schema?.properties || value === null || typeof value !== "object" || Array.isArray(value)) {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return;
+	}
+	const shape = schema?.properties ? schema : discriminatedBranch(value, schema);
+	if (!shape?.properties) {
 		return;
 	}
 	const record = value as Record<string, unknown>;
 	for (const key of Object.keys(record)) {
-		const propertySchema = schema.properties[key];
+		const propertySchema = shape.properties[key];
 		if (!propertySchema) {
 			continue;
 		}
@@ -490,19 +495,28 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): any {
  * @returns The validated (and potentially coerced) arguments
  * @throws Error with formatted message if validation fails
  */
+function isTypeBoxDeclared(schema: unknown): boolean {
+	return (
+		typeof schema === "object" &&
+		schema !== null &&
+		("~kind" in schema || Object.getOwnPropertySymbols(schema).includes(TYPEBOX_KIND))
+	);
+}
+
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
 	const args = structuredClone(toolCall.arguments);
 	// Repair stringified containers before Value.Convert: the repair is schema-driven and leaves genuine strings
 	// alone, while Convert would already wrap a loose string into a one-element array and hide the real shape.
 	repairStringifiedContainers(args, tool.parameters as unknown as JsonSchemaObject);
+	const parameters = tool.parameters as unknown as JsonSchemaObject | undefined;
+	// A provider-safe root (`Type.Unsafe({ type: "object", anyOf: union.anyOf })`) loses the mark; its branches keep it.
 	const isTypeBoxSchema =
-		typeof tool.parameters === "object" &&
-		tool.parameters !== null &&
-		("~kind" in tool.parameters || Object.getOwnPropertySymbols(tool.parameters).includes(TYPEBOX_KIND));
+		isTypeBoxDeclared(parameters) ||
+		[...(parameters?.anyOf ?? []), ...(parameters?.oneOf ?? [])].some(isTypeBoxDeclared);
 	// Semantic coercion only for TypeBox-declared schemas: plain JSON schemas keep their
 	// existing AJV-style strictness (e.g. "1" for a boolean stays a rejected string).
 	if (isTypeBoxSchema) {
-		applySemanticStringCoercion(args, tool.parameters as unknown as JsonSchemaObject);
+		applySemanticStringCoercion(args, parameters);
 	}
 	Value.Convert(tool.parameters, args);
 

@@ -204,6 +204,19 @@ describe("Compact model settings runtime", () => {
 				expect(requests[0]?.model.id).toBe("compact-model");
 				expect(requests[0]?.options?.reasoning).toBe(reasoning ? "high" : undefined);
 				expect(harness.session.model?.provider).toBe("faux");
+				// Left at "Default": the compaction model's highest level ("high" for a model without a level map), and none
+				// for a model without reasoning.
+				harness.settingsManager.setCompactionModelSettings({
+					provider: "compact-provider",
+					model: "compact-model",
+					thinkingLevel: undefined,
+				});
+				await harness.settingsManager.flush();
+				harness.settingsManager.reload();
+				expect(harness.settingsManager.getCompactionModelSettings().thinkingLevel).toBeUndefined();
+				await harness.session.compact();
+				expect(requests.at(-1)?.model.id).toBe("compact-model");
+				expect(requests.at(-1)?.options?.reasoning).toBe(reasoning ? "high" : undefined);
 				harness.settingsManager.setCompactionModelSettings({
 					provider: undefined,
 					model: undefined,

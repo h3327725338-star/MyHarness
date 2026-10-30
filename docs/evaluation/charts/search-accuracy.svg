@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="550" viewBox="0 0 800 550" role="img" aria-label="Short fact questions answered correctly (SimpleQA)">
+<style>
+	.bg { fill: #fcfcfb; } .t1 { fill: #0b0b0b; } .t2 { fill: #52514e; } .t3 { fill: #6f6e69; }
+	.grid { stroke: #e4e3df; } .axis { stroke: #c9c8c2; }
+	.hi { fill: #2a78d6; } .mute { fill: #a9a79f; } .ref { fill: #d9d8d2; } .ok { fill: #1baf7a; }
+	@media (prefers-color-scheme: dark) {
+		.bg { fill: #1a1a19; } .t1 { fill: #f0efec; } .t2 { fill: #c3c2b7; } .t3 { fill: #a3a29a; }
+		.grid { stroke: #2f2f2d; } .axis { stroke: #4a4945; }
+		.hi { fill: #3987e5; } .mute { fill: #77766f; } .ref { fill: #474641; } .ok { fill: #199e70; }
+	}
+	text { font-family: "Segoe UI", system-ui, -apple-system, sans-serif; }</style>
+<rect class="bg" width="800" height="550" rx="8"/>
+<text class="t1" x="16" y="26" font-size="17" font-weight="700">Short fact questions answered correctly (SimpleQA)</text>
+<text class="t2" x="16" y="47" font-size="13">Graded with OpenAI's own SimpleQA grader prompt</text>
+<line class="grid" x1="290" y1="72" x2="290" y2="520" stroke-width="1"/><text class="t3" x="290" y="538" font-size="11" text-anchor="middle">0%</text><line class="grid" x1="387.5" y1="72" x2="387.5" y2="520" stroke-width="1"/><text class="t3" x="387.5" y="538" font-size="11" text-anchor="middle">25%</text><line class="grid" x1="485" y1="72" x2="485" y2="520" stroke-width="1"/><text class="t3" x="485" y="538" font-size="11" text-anchor="middle">50%</text><line class="grid" x1="582.5" y1="72" x2="582.5" y2="520" stroke-width="1"/><text class="t3" x="582.5" y="538" font-size="11" text-anchor="middle">75%</text><line class="grid" x1="680" y1="72" x2="680" y2="520" stroke-width="1"/><text class="t3" x="680" y="538" font-size="11" text-anchor="middle">100%</text>
+<line class="axis" x1="290" y1="72" x2="290" y2="520" stroke-width="1"/>
+<text class="t3" x="16" y="92" font-size="12" font-weight="600" letter-spacing="0.04em">THIS EVALUATION: NEMOTRON 3.5 LIGHTNING, RANDOM SIMPLEQA SAMPLES</text>
+<text class="t1" x="16" y="124" font-size="14">Google + Tavily key, first 100</text>
+<path class="hi" d="M290,107 H664.3 Q668.3,107 668.3,111 V127 Q668.3,131 664.3,131 H290 Z"><title>Google + Tavily key, first 100: 97 / 100</title></path>
+<text class="t1" x="676.3" y="124" font-size="14" font-weight="700">97 / 100</text>
+<text class="t1" x="16" y="168" font-size="14">Google + Tavily key, second 100</text>
+<path class="hi" d="M290,151 H672.1 Q676.1,151 676.1,155 V171 Q676.1,175 672.1,175 H290 Z"><title>Google + Tavily key, second 100: 99 / 100</title></path>
+<text class="t1" x="684.1" y="168" font-size="14" font-weight="700">99 / 100</text>
+<text class="t1" x="16" y="212" font-size="14">Bing + keyless Tavily, no setup</text>
+<path class="hi" d="M290,195 H637 Q641,195 641,199 V215 Q641,219 637,219 H290 Z"><title>Bing + keyless Tavily, no setup: 90 / 100</title></path>
+<text class="t1" x="649" y="212" font-size="14" font-weight="700">90 / 100</text>
+<text class="t1" x="16" y="256" font-size="14">Same model, no search</text>
+<path class="mute" d="M290,239 H325 Q329,239 329,243 V259 Q329,263 325,263 H290 Z"><title>Same model, no search: 10 / 100</title></path>
+<text class="t2" x="337" y="256" font-size="14" font-weight="400">10 / 100</text>
+<text class="t3" x="16" y="290" font-size="12" font-weight="600" letter-spacing="0.04em">VENDORS' PUBLISHED NUMBERS: OTHER DATES AND SAMPLES, NOT HEAD-TO-HEAD</text>
+<text class="t1" x="16" y="322" font-size="14">Parallel + GPT-5.6 (SimpleQA Verified)</text>
+<path class="ref" d="M290,305 H664.3 Q668.3,305 668.3,309 V325 Q668.3,329 664.3,329 H290 Z"><title>Parallel + GPT-5.6 (SimpleQA Verified): 97%</title></path>
+<text class="t2" x="676.3" y="322" font-size="14" font-weight="400">97%</text>
+<text class="t1" x="16" y="366" font-size="14">Tavily + GPT-4.1</text>
+<path class="ref" d="M290,349 H649.87 Q653.87,349 653.87,353 V369 Q653.87,373 649.87,373 H290 Z"><title>Tavily + GPT-4.1: 93.3%</title></path>
+<text class="t2" x="661.87" y="366" font-size="14" font-weight="400">93.3%</text>
+<text class="t1" x="16" y="410" font-size="14">Brave AI Grounding, research</text>
+<path class="ref" d="M290,393 H649.675 Q653.675,393 653.675,397 V413 Q653.675,417 649.675,417 H290 Z"><title>Brave AI Grounding, research: 93.25%</title></path>
+<text class="t2" x="661.675" y="410" font-size="14" font-weight="400">93.25%</text>
+<text class="t1" x="16" y="454" font-size="14">GPT-4o search preview (OpenAI)</text>
+<path class="ref" d="M290,437 H637 Q641,437 641,441 V457 Q641,461 637,461 H290 Z"><title>GPT-4o search preview (OpenAI): 90%</title></path>
+<text class="t2" x="649" y="454" font-size="14" font-weight="400">90%</text>
+<text class="t1" x="16" y="498" font-size="14">GPT-4o, no search (OpenAI)</text>
+<path class="ref" d="M290,481 H434.2 Q438.2,481 438.2,485 V501 Q438.2,505 434.2,505 H290 Z"><title>GPT-4o, no search (OpenAI): 38%</title></path>
+<text class="t2" x="446.2" y="498" font-size="14" font-weight="400">38%</text>
+</svg>

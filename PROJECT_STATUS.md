@@ -15,6 +15,38 @@ API key (or another Provider configured by hand) is needed before the first
 model-backed session. Claims that still need runtime evidence are called out
 below.
 
+## Verified in real use
+
+The maintainer uses MyHarness every day on two Windows PCs: the development
+desktop and a second PC set up from the installer. As of October 2026 the
+following has been run there for real, with real accounts and a real Nebius
+Token Factory key:
+
+- **Install and models.** The Windows installer (NSIS, not code-signed) on a
+  fresh PC; the one-key Token Factory setup; DeepSeek V4.1 Flash 1017 as the
+  main chat, including tool calls and its thinking levels; NVIDIA Nemotron
+  models for sub-agents, naming, translation, background jobs and images.
+- **Built-in browser.** The agent works in sites the user is signed into: it
+  reads full pages, clicks and types, uses bookmarks and their purpose notes,
+  and hands control back at sign-in pages and human checks.
+- **Memory.** Global, workspace and session memory saved without being asked, a
+  user profile built from it, background tidying, and recall in new chats.
+- **Conversations.** Several chats at once, answers that draw on earlier chats,
+  long work that continues through compaction, rewind and fork, steering a
+  running turn, search, archive and HTML export.
+- **Workspaces and prompts.** A workspace for each part of life with its own
+  memory, the personal prompt and saved prompts.
+- **Sync.** Memory, General-mode chats, scheduled tasks, bookmarks, prompts and
+  drafts through the user's own Google Drive, several rounds between the two
+  PCs.
+- **On its own.** Scheduled tasks with corner cards and desktop notifications,
+  running in the tray and starting with Windows.
+- **Everyday tools.** Quote and ask, translating a selection with UK/US
+  pronunciation, understanding images, and sub-agents working in parallel.
+
+Measured runs of these workflows on NVIDIA Nemotron, with every failure and its
+cause, are in the [evaluation](docs/evaluation/README.md).
+
 ## Confirmed in source and targeted tests
 
 - `packages/agent` provides the Provider-independent Agent loop, event stream,
@@ -43,8 +75,11 @@ below.
 
 ## Experimental or partial
 
-- `agent`, `workflow` and `ultracode` are optional exploration tools. They are
-  disabled by default and their child Bash guard is not a security sandbox.
+- Sub-agents (`agent`, `workflow`, `ultracode`, `agent_tasks`) are off in the
+  factory settings. The Nebius Token Factory one-key setup, which is the normal
+  first-run path, turns them on with Nemotron 3 Ultra unless the user turned
+  them off first; with a Provider configured by hand they stay off until the
+  user turns them on. Their child Bash guard is not a security sandbox.
 - Web Search is on by default with Tavily API and Google. Without a user key Tavily is called through its free
   keyless access (`X-Tavily-Access-Mode: keyless`, rate limited by Tavily); a free key adds 1,000 searches a month.
   Optional selections include Bing, DuckDuckGo and Brave. Google/Bing use lightweight HTTP first and may
@@ -68,13 +103,10 @@ below.
 - A real Provider-backed first conversation cannot be verified without a user
   supplied Provider/model and credential. No credential is stored in this
   repository.
-- The built-in Nebius Token Factory setup is tested against a local stub
-  endpoint. A real Token Factory key, the real low-balance error, and tool calls
-  and `reasoning_effort` levels (`none`, `low`, `high`, `max`) of DeepSeek V4.1
-  Flash 1017 through Token Factory have not been verified.
-- The Windows installer (`npm run desktop:installer`, NSIS, not code-signed)
-  was installed, started and uninstalled on the development machine with an
-  isolated profile. A fresh install on another PC has not been run yet.
+- Token Factory's real low-balance error has not been seen, and how far each
+  thinking level of DeepSeek V4.1 Flash 1017 changes the amount of reasoning has
+  not been measured. The setup's automated tests run against a local stub
+  endpoint.
 - A fresh Linux/macOS checkout was not run in this Windows audit.
 - The local public-release validation covered the Windows Coding Agent suite and
   the targeted recovery tests. Hosted runner results and path spelling behavior

@@ -8,8 +8,8 @@ This document describes the implemented behavior. The automated tests use an in-
 account. On 2026-10-26 the catch-up path was also run read-only against a real Drive folder (about 6,100 batches from
 two computers, every write refused) as a fresh computer: from a snapshot built from the other computer's state it caught
 up in about 100 seconds including 500 MB of downloads, and from the batches alone in about 7.5 minutes, about 5 of them
-reading the 5,660 change lists. Two computers running this build against each other, including publishing snapshots to
-Drive, have not been verified yet.
+reading the 5,660 change lists. Since then the maintainer has run two computers against each other for real, several
+rounds through one Google account (October 2026).
 
 ## What is synced
 
@@ -511,13 +511,14 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 
 ## Limits and not-yet-verified behavior
 
-- Real Google OAuth sign-in, two physical machines running this build, publishing snapshots, folder rename, revoked
-  authorization, quota exhaustion and Drive outage behavior have not been run against a live account; besides the
-  in-memory Drive tests, only the read-only catch-up dry run described at the top was run against a real Drive. MyHarness's
-  own app is registered and published, but a sign-in through it is tested only with a stand-in app up to the
-  authorization URL, not end to end. Merging Workspaces is tested with two devices on the in-memory Drive only.
-- Background sync stops when MyHarness quits and continues on the next start. Tray support and launch-at-login are not
-  implemented, so after a reboot nothing uploads until MyHarness is opened.
+- Real Google sign-in through MyHarness's own registered app and sync between two physical machines have been run by
+  the maintainer (October 2026), besides the in-memory Drive tests and the read-only catch-up dry run described at the
+  top. Folder rename, revoked authorization, quota exhaustion and Drive outage behavior have not been run against a live
+  account, and snapshot publishing has not been checked on its own. Merging Workspaces is tested with two devices on the
+  in-memory Drive only.
+- Background sync stops when MyHarness quits and continues on the next start. The desktop app can keep running in the
+  tray when its window is closed and can start with Windows (both are user settings), so sync does not need an open
+  window.
 - Built-in browser sync was run between two profiles of one Electron process and with the in-memory Drive, not between two
   physical computers through a real Drive. A vault is written again whenever its sign-ins changed (at most every 30
   minutes while browsing), and Drive keeps every uploaded version as an object; old versions are not cleaned up.
@@ -533,8 +534,9 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 - Workspace files that live outside the MyHarness Data root are synced by the file channel only when the user turns it
   on; a Drive-managed folder is never uploaded by MyHarness, because `drive.file` only grants access to files this app
   created and double management is refused on purpose.
-- Real Google resumable upload and `Range` download against a live account, and a real two-computer transfer, have not
-  been executed here. The protocol, resume bookkeeping, checksum verification, conflict handling and deletion guard are
+- Sync between two real computers has been run by the maintainer: several rounds between two PCs on one Google account
+  (October 2026). The file channel's resumable upload and `Range` download have not been checked on their own against a
+  live account. The protocol, resume bookkeeping, checksum verification, conflict handling and deletion guard are
   covered by `test/workspace-file-sync.test.ts` with an in-memory transport.
 - The file channel does not detect renames heuristically: a rename is published as a new path plus a delete of the old
   one only after the new content is safely uploaded, so the result is correct even when it costs a re-upload.

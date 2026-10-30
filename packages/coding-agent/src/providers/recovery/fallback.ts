@@ -16,6 +16,7 @@
 import type { Agent, ThinkingLevel } from "@myharness/agent-core";
 import type { AssistantMessage, Model } from "@myharness/ai/compat";
 import { modelsAreEqual } from "@myharness/ai/compat";
+import { OWN_MODEL_DEFAULT_THINKING } from "../../agent/runtime/defaults.ts";
 import type { FallbackModelSettings } from "../../config/settings/index.ts";
 import {
 	explainFallbackFailure,
@@ -141,7 +142,8 @@ export class ModelFallbackCoordinator {
 
 		const primaryThinkingLevel = this.host.agent.state.thinkingLevel;
 		try {
-			await this.host.switchModel(fallback, settings.thinkingLevel ?? "off", { compact: true });
+			// No effort set: the fallback model's highest (switchModel brings it within the model's levels).
+			await this.host.switchModel(fallback, settings.thinkingLevel ?? OWN_MODEL_DEFAULT_THINKING, { compact: true });
 		} catch (error) {
 			return unavailable(error instanceof Error ? error.message : String(error));
 		}

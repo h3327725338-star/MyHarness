@@ -814,7 +814,7 @@ function Appearance({ conversation = false }) {
 			<${Row} label=${t("Display mode")} description=${t("System follows Windows.")}><${Segmented} value=${view.theme} onChange=${(v) => set({ theme: v })} options=${[{ value: "system", label: t("System") }, { value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }]} /><//>
 			<${Row} label=${t("Animations")} description=${t("Loading, folds and fades.")}><${Segmented} value=${view.motion} onChange=${(v) => set({ motion: v })} options=${[{ value: "system", label: t("System") }, { value: "on", label: t("On") }, { value: "off", label: t("Off") }]} /><//>
 			<${Row} label=${t("Reading width")} description=${t("620–1100 px; empty: auto.")}><input class="field num" type="number" min="620" max="1100" step="20" aria-label=${t("Reading width")} placeholder=${t("Auto")} value=${view.readWidth === "auto" ? "" : view.readWidth} onChange=${(e) => set({ readWidth: readWidthValue(e.target.value) })} /><//>
-			<${Row} label=${t("Color theme")} description=${t("Saved for the current chat mode. Dark colors only; light uses the shared palette.")}><${Select} ariaLabel=${t("Color theme")} value=${view.colorTheme} onChange=${(next) => set({ colorTheme: next })} options=${COLOR_THEMES.map((theme) => ({ value: theme.value, label: t(theme.label) }))} /><//>
+			<${Row} label=${t("Color theme")} description=${t("Saved for the current chat mode.")}><${Select} ariaLabel=${t("Color theme")} value=${view.colorTheme} onChange=${(next) => set({ colorTheme: next })} options=${COLOR_THEMES.map((theme) => ({ value: theme.value, label: t(theme.label) }))} /><//>
 			${builtinBrowserAvailable() ? html`<${Row} label=${t("Open web links in")} description=${t("Links in chats and file previews. Sign-in pages always use the system browser.")}><${Segmented} value=${linkTargetOf(view.linkTarget)} onChange=${(v) => set({ linkTarget: v })} options=${[{ value: "builtin", label: t("Built-in browser") }, { value: "system", label: t("System browser") }]} /><//>` : null}
 		<//><${DesktopApp} />` : html`<${Card} title=${t("Conversation")}>
 			<${Row} label=${t("While a task is running")} description=${t({ steer: N_("After tools, before the next model step."), followUp: N_("After the run finishes."), interrupt: N_("Stop now, then send.") }[runMode])}><${Segmented} value=${runMode} onChange=${(v) => set({ runMode: v })} options=${Object.entries(RUN_MODES).map(([value, mode]) => ({ value, label: t(mode.label), title: t(mode.long) }))} /><//>
@@ -1236,7 +1236,7 @@ const SEARCH_ROWS = [
 	["appearance", N_("Display mode"), N_("System follows Windows.")],
 	["appearance", N_("Animations"), N_("Loading, folds and fades.")],
 	["appearance", N_("Reading width"), N_("620–1100 px; empty: auto.")],
-	["appearance", N_("Color theme"), N_("Saved for the current chat mode. Dark colors only; light uses the shared palette.")],
+	["appearance", N_("Color theme"), N_("Saved for the current chat mode.")],
 	["appearance", N_("Open web links in"), N_("Links in chats and file previews. Sign-in pages always use the system browser."), "desktop"],
 	["appearance", N_("Interface zoom"), N_("Ctrl + / Ctrl − / Ctrl 0, or Ctrl + mouse wheel. A website tab zooms on its own."), "desktop"],
 	["appearance", N_("Start with Windows"), N_("Opens MyHarness when you sign in to Windows."), "desktop"],

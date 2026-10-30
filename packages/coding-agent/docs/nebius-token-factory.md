@@ -31,7 +31,7 @@ Token Factory exposes an OpenAI-compatible Chat Completions surface, so the port
 | `nvidia/Nemotron-3_5-Lightning` | Nemotron 3.5 Lightning | 1,048,576 | 65,536 | text | off / high, as `reasoning_effort` |
 | `nvidia/Nemotron-3.5-Super-VL` | Nemotron 3.5 Super VL | 1,048,576 | not published | text + image (the endpoint also accepts video) | always on; do **not** send `reasoning_effort: none` |
 
-Prices recorded in the example configuration are `$0.3 / $1.2` (DeepSeek V4.1 Flash 1017, as listed on Token Factory on 2026-10-29), `$1 / $3` (Ultra), `$0.3 / $0.9` (Super and Super-VL) and `$0.06 / $0.24` (Lightning) per million input/output tokens (USD). They are configuration values, not a live price feed; confirm current pricing on the Token Factory pricing page before budgeting a long session.
+Prices recorded in the built-in setup and the example configuration are `$0.3 / $0.006 / $1.2` (DeepSeek V4.1 Flash 1017), `$1 / $0.12 / $3` (Ultra), `$0.3 / $0.06 / $0.9` (Super and Super-VL) and `$0.06 / $0.03 / $0.24` (Lightning) per million input/cached input/output tokens (USD), as Token Factory's public endpoints page listed them on 2026-10-30. They are configuration values, not a live price feed; confirm current pricing on the Token Factory pricing page before budgeting a long session.
 
 The same Provider entry can also carry non-NVIDIA models served by Token Factory (for example `zai-org/GLM-5.3-Flash` for cheap fast turns) as long as at least one NVIDIA open-source model is part of the workflow when the project is used to demonstrate Token Factory usage.
 
@@ -57,7 +57,7 @@ What happens on save (`POST /api/providers/nebius/setup`):
 
 - A model the account does not list hands its jobs on: DeepSeek's to Ultra (Lightning when Ultra is missing too), Ultra's to Lightning. Super VL has no stand-in.
 - The main chat is on DeepSeek V4.1 Flash because the Nemotron models had problems calling tools as the main agent in testing; Nemotron keeps the sub-agent, naming, translation, background and image work.
-- The main model (when it is set up now), sub-agents and commit descriptions get their model's highest thinking level (max for DeepSeek, high for Ultra); the other jobs keep the provider's default.
+- The main model (when it is set up now), sub-agents and commit descriptions get their model's highest thinking level (max for DeepSeek, high for Ultra); the other jobs are left at Default, which also runs a job at its model's highest level (high for Ultra and Lightning; Super VL always reasons).
 - Conversation naming, the vision assistant, sub-agents and the fallback model are turned on when the user never touched them; one the user turned off stays off.
 
 Nano (added by versions before 2026-10-29) is declared without `compat.supportsReasoningEffort` (like Super VL), so MyHarness never sends `reasoning_effort` to it and it always reasons; its 16,384-token output cap is a conservative value, since Token Factory does not publish one.
@@ -119,7 +119,7 @@ Token Factory's Chat Completions API accepts `reasoning_effort` values `none`, `
 | Nemotron 3.5 Lightning | reasoning on or off | `off` → `none`, `high` → `high` |
 | Nemotron 3.5 Super VL, Nemotron 3 Nano | (no `reasoning_effort` is sent) | `high` only: the model's default, reasoning on |
 
-What Token Factory runs for each name is not documented by Nebius. For DeepSeek V4.1 Flash 1017 the levels follow DeepSeek's own API; whether Token Factory passes `low` and `max` through, and whether `none` turns its thinking off, has not been tested with a real key, and neither have its tool calls. A third-party measurement on Super found `none` answers without reasoning, `low` reasons less than `medium`, and `high` reasons as long as `medium`, which matches Super's three modes. That Ultra's `medium` runs its medium-effort mode has not been measured.
+What Token Factory runs for each name is not documented by Nebius. For DeepSeek V4.1 Flash 1017 the levels follow DeepSeek's own API. The maintainer ran it through Token Factory with a real key on a second PC (October 2026): its tool calls and switching between its thinking levels worked; how far each level changes the amount of reasoning was not measured. A third-party measurement on Super found `none` answers without reasoning, `low` reasons less than `medium`, and `high` reasons as long as `medium`, which matches Super's three modes. That Ultra's `medium` runs its medium-effort mode has not been measured.
 
 MyHarness 0.0.3 wrote every accepted name as a level of its own for Ultra and Lightning, and no map for Super VL and Nano. Such entries, exactly as that version wrote them, get the levels above when `models.json` is read (`upgradeNebiusPresetModels`); an entry the user changed is left alone.
 

@@ -762,7 +762,7 @@ function appearanceScreen() {
 				chevron: true,
 				onEnter: (ctx) => ctx.push(() => inputScreen({ title: t("Reading width"), label: t("Width of the conversation column in px (620–1100). Empty: grows with the window."), value: state.view.readWidth === "auto" ? "" : String(state.view.readWidth), type: "number", min: 620, max: 1100, placeholder: t("Auto"), onSubmit: (value, c) => (setView({ readWidth: readWidthValue(value) }), c.pop()) })),
 			},
-			choice("colorTheme", "Color theme", "Saved for the current chat mode. Dark colors only; light uses the shared palette.", "colorTheme", COLOR_THEMES),
+			choice("colorTheme", "Color theme", "Saved for the current chat mode.", "colorTheme", COLOR_THEMES),
 			choice("processDefault", "Run steps", "Whether the steps behind a finished answer start expanded.", "processDefault", [{ value: "collapsed", label: "Collapsed" }, { value: "expanded", label: "Expanded" }]),
 		],
 	};

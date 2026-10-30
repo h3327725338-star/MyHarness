@@ -11,6 +11,7 @@ import type { Agent, AgentMessage, AgentTool, ThinkingLevel } from "@myharness/a
 import { contentText } from "@myharness/ai";
 import type { Model, Usage } from "@myharness/ai/compat";
 import { clampThinkingLevel } from "@myharness/ai/compat";
+import { OWN_MODEL_DEFAULT_THINKING } from "../../agent/runtime/defaults.ts";
 import type { SettingsManager } from "../../config/settings/index.ts";
 import type { SessionManager } from "../../session/manager/index.ts";
 import { getLatestCompactionEntry } from "../../session/projection/index.ts";
@@ -99,10 +100,11 @@ export class SessionCompactionRunner {
 
 	private _resolveThinkingLevel(model: Model<any>): ThinkingLevel {
 		const configured = this._host.settingsManager.getCompactionModelSettings();
-		// A compaction model of its own without an effort sends none; the main model brings the main effort along.
+		// A compaction model of its own without an effort thinks as hard as it can; the main model brings the main effort
+		// along.
 		const level =
 			configured.provider && configured.model
-				? (configured.thinkingLevel ?? "off")
+				? (configured.thinkingLevel ?? OWN_MODEL_DEFAULT_THINKING)
 				: (configured.thinkingLevel ?? this._host.agent.state.thinkingLevel);
 		return clampThinkingLevel(model, level) as ThinkingLevel;
 	}

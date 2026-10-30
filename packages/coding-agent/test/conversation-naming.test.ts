@@ -71,7 +71,8 @@ function fixture(seed: "reply" | "commit" = "reply") {
 	const manager = SessionManager.inMemory();
 	const settings = SettingsManager.inMemory();
 	settings.setConversationNamingSettings({ enabled: true, provider: "test", model: "namer", thinkingLevel: "low" });
-	const model = { provider: "test", id: "namer" };
+	// A reasoning model: the configured effort reaches the request only within the levels the model has.
+	const model = { provider: "test", id: "namer", reasoning: true };
 	const completeSimple = vi.fn().mockResolvedValue(reply("对话自动命名"));
 	const session = {
 		sessionManager: manager,

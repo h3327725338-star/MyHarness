@@ -17,7 +17,7 @@ Web UI 的每个对话都有自己的 `SettingsManager`，共用同一份 settin
 
 ## Web 外观与配色主题
 
-设置 → 外观的“显示模式”保留跟随系统／深色／浅色；“阅读宽度”下方新增“配色主题”：经典炭黑（`classic`，原 Coding 配色）、静谧森林（`forest`，克制灰绿）和暖夜琥珀（`amber`，暖棕深灰）。选择立即生效，并通过现有浏览器偏好 `myharness.web.prefs` 的 `colorThemes.coding` / `colorThemes.general` 分别保存，刷新前的启动脚本也读取它，避免先显示另一套配色。旧版共享 `colorTheme` 首次读取时作为两边初始值保留，之后各自独立修改；未设置或无效值时 Coding 用经典炭黑、General 用静谧森林。每次保存都会写下两边的配色，所以没有 `colorThemesVersion: 2` 的旧保存里 General 的经典炭黑是当时的默认值而不是选择，按未设置处理（显示静谧森林）；之后保存都带这个版本号，用户再选经典炭黑会被保留。设置只修改当前 Coding／General 模式的配色，切换时恢复目标模式的选择；当前三套仅改变深色显示，浅色共用基础配色。无需重启，不写入项目或全局 Agent settings。
+设置 → 外观的“显示模式”保留跟随系统／深色／浅色；“阅读宽度”下方新增“配色主题”：经典炭黑（`classic`，原 Coding 配色）、静谧森林（`forest`，克制灰绿）和暖夜琥珀（`amber`，暖棕深灰）。选择立即生效，并通过现有浏览器偏好 `myharness.web.prefs` 的 `colorThemes.coding` / `colorThemes.general` 分别保存，刷新前的启动脚本也读取它，避免先显示另一套配色。旧版共享 `colorTheme` 首次读取时作为两边初始值保留，之后各自独立修改；未设置或无效值时 Coding 用经典炭黑、General 用静谧森林。每次保存都会写下两边的配色，所以没有 `colorThemesVersion: 2` 的旧保存里 General 的经典炭黑是当时的默认值而不是选择，按未设置处理（显示静谧森林）；之后保存都带这个版本号，用户再选经典炭黑会被保留。设置只修改当前 Coding／General 模式的配色，切换时恢复目标模式的选择；三套都有深色和浅色两个版本，随显示模式切换：经典炭黑的浅色是原来的基础浅色配色，静谧森林的浅色是浅灰绿，暖夜琥珀的浅色是暖米色。无需重启，不写入项目或全局 Agent settings。
 
 ## Web 专属快捷键与代码智能状态
 
@@ -214,7 +214,7 @@ Package 资源和 project-local settings 走同一套 Project Trust flow：启�
 Conversation Naming、Auto Memory、Sub Agent、Vision Assistant、Compact Model、Commit Description、Worktree Naming 和 Branch Summary 选模型的规则相同（`src/agent/runtime/assistant-model.ts`）：
 
 - 没有设置 `provider` / `model`（Web UI 里的“使用主模型”）：运行时使用当前 main model，并且连同它当前的 Thinking Effort 一起继承；main model 变了就跟着变。如果另外写了 `thinkingLevel`，只覆盖 Effort。
-- 设置了自己的 `provider` + `model`：使用这个 model 和它自己的 `thinkingLevel`；没写 `thinkingLevel`（Web UI 里的“默认”）时不发送 Effort，相当于 `off`（例如 Gemini 会明确关闭 thinking）；模型没有 `off` 档时按它支持的最低档。Web UI 把这一点直接写在“默认”开关上，例如“默认（off）”。定时任务例外：没写 `thinkingLevel` 时沿用目标对话当前的档位，显示为“默认（与对话相同）”。
+- 设置了自己的 `provider` + `model`：使用这个 model 和它自己的 `thinkingLevel`；没写 `thinkingLevel`（Web UI 里的“默认”）时用这个 model 支持的最高档：运行时按 `max` 请求，再收窄到 model 实际有的档位（`OWN_MODEL_DEFAULT_THINKING` 与 `clampThinkingLevel`），例如 DeepSeek V4.1 Flash 是 `max`，Nemotron Ultra 和 Lightning 是 `high`，没有推理的 model 不发送。Web UI 把这一档直接写在“默认”开关上，例如“默认（max）”。定时任务例外：没写 `thinkingLevel` 时沿用目标对话当前的档位，显示为“默认（与对话相同）”。
 - 只写了 `provider` 或 `model` 其中一个，视为没有配置。
 
 #### conversationNaming（对话自动命名）
@@ -278,7 +278,7 @@ Global，设置 → 智能体 → “跨对话衔接”分组。三个部分共�
 3. Task 完成后，只等待待处理任务安全写入当前 Conversation 的 `memory/maintenance.json`，不等待记忆模型。后台合并短时间内的任务快照，逐批处理尚未提取的 conversation delta，提取持久的 preferences、corrections、project facts 和 references；
 4. 每个 Workspace 的新增或实质更新累计达到 5 条时立即后台整理；不足 5 条但大于零时，从第一条待整理变化起满 3 小时整理，后续变化不重置计时。重复且无变化的写入不计数，整理自身的修改不计入下一轮。计数与起始时间保存在 `state.json`（关闭期间也保留，下次打开按原时间算），成功整理后清零，失败保留；旧 session-count 状态按当前 active memories 的更新时间恢复。软件开着时，任一存活的 persisted Chat runtime 每 30 秒检查到期任务，无需新消息：先整本 Workspace，再顺带清扫其他到期 Workspace（含 `unbound`）的 Global＋Workspace 共享部分，不为此新建 runtime；关闭服务期间不运行，打开任意 Chat 后恢复检查（含逾期的顺带清扫）。本 Workspace 整理读取该 runtime 可见的 Global、Workspace 和当前 Conversation，顺带清扫只读 Global＋对应 Workspace（其会话私密笔记仍等本人点开），超出输入保护的记忆分批全部检查，不跨 Conversation 提升归属。被替代条目和更新前的版本保存到所属层的 `archive/`，不永久删除。同一 Workspace 的整理（含顺带清扫）同时只运行一个：后来者本轮直接跳过，由 30 秒后的下一轮自然排队；写回前的乐观快照校验保留为安全网。模型调用不写死输出上限，与主聊天一致走 Provider 默认（思考与正文共用该预算）。
 
-选中的 model 用于后台 extraction 和 consolidation，不用于同步 recall。Extraction 收到有边界的 conversation delta 和 manifest，没有 project tools。启用后会将 conversation content 发送给选中的 model，产生额外 usage，但聊天和重启不等待这些请求。待处理快照在落盘前过滤常见敏感值；不包含 tools 和图片。后台失败最多尝试三次，延后重试；连续失败保留快照并显示安静状态，不弹出 transcript warning。整理（consolidation/顺带清扫）的失败同样降噪：单次失败静默退避，连续 3 轮仍失败才在顶栏亮黄灯，悬停可见最近一条失败原因（详情在会话 `memory/maintenance.log`）；任何一轮成功（含无任务）即熄灯并清零计数。会话替换导致的中止不计入失败、不亮灯。顶栏黄字旁有重试和归档两个小按钮：重试把次数清零再跑一次，归档把待处理快照收进会话归档并熄灯，两者都不永久删除。重启/替换 runtime 时取消模型请求，重新打开对应 Chat 后继续未完成工作；尚未打开的 Chat 不会自动创建 runtime 来处理任务。
+选中的 model 用于后台 extraction 和 consolidation，不用于同步 recall。Extraction 收到有边界的 conversation delta 和 manifest（已有记忆的标题、描述和正文：更新会整条替换正文，模型要看到旧内容才能保留仍然有效的事实），没有 project tools。启用后会将 conversation content 发送给选中的 model，产生额外 usage，但聊天和重启不等待这些请求。待处理快照在落盘前过滤常见敏感值；不包含 tools 和图片。后台失败最多尝试三次，延后重试；连续失败保留快照并显示安静状态，不弹出 transcript warning。整理（consolidation/顺带清扫）的失败同样降噪：单次失败静默退避，连续 3 轮仍失败才在顶栏亮黄灯，悬停可见最近一条失败原因（详情在会话 `memory/maintenance.log`）；任何一轮成功（含无任务）即熄灯并清零计数。会话替换导致的中止不计入失败、不亮灯。顶栏黄字旁有重试和归档两个小按钮：重试把次数清零再跑一次，归档把待处理快照收进会话归档并熄灯，两者都不永久删除。重启/替换 runtime 时取消模型请求，重新打开对应 Chat 后继续未完成工作；尚未打开的 Chat 不会自动创建 runtime 来处理任务。
 
 Recall 搜索三个所属层的全部 active entries，而不是只搜索最近 200 条；查询全文都拿来匹配，不截断；本地词项稀有度和文本长度参与排序，按相对相关性筛选（最佳得分一半以上）并在同层去重，另保底 8 条最佳词面匹配（得分再低也带，触发词直达的最多 3 条不计入），保证换个说法也找得到。输出用分层 token 预算（`estimateMemoryTokens`：非 ASCII 字符每字符约 1 token、ASCII 约 1/4 token；约 8000 token 总量：画像固定位 3500 ＋目录位 4200 ＋动态卡片用剩余额度；规矩头不计），不再是 20 KB 字节卡片；也不是语义向量检索。除画像和卡片外，上下文里常驻一份本轮可见记忆的 id 目录（`id | scope | name | 一句话摘要`，超出目录位预算时截断并标注；第一次整份发，之后只发变化），模型需要全文再用 `memory_get` 按需取，避免卡片截断导致“有但看不见”；卡片装不下时跳过该张、继续尝试后面更小的卡片，而不是整段停止；只要目录非空，上下文里就有它，不会出现“整轮看不到记忆”。
 
@@ -460,7 +460,7 @@ Memory Markdown files 是 source of truth：
 
 #### commitDescription（AI 提交描述）与 worktreeNaming（副本命名）
 
-两个都是 global 设置，默认都为空，即“使用主模型”：运行时使用当前主对话模型并继承它当前的 Thinking Effort，与改动前的行为完全一致；显式配置 `provider` + `model` 后改用独立模型，此时没写 `thinkingLevel`（Web UI 里的“默认”）表示不发送 Effort，相当于 `off`，只写其中一个视为没有配置。思考档位透传为一次性模型请求的 `reasoning` 参数（`off` 则不传）。两个请求都不再设置 `maxTokens`，输出上限走 Provider 默认。提交描述用于 `/commit` 从 diff 生成标题与正文，副本命名用于工作区副本的 AI 命名（2–5 词的展示名，只返回名称本身）。配置删除或 Provider 停用时回退到主模型；删除 Provider/模型时会清理指向它的引用。
+两个都是 global 设置，默认都为空，即“使用主模型”：运行时使用当前主对话模型并继承它当前的 Thinking Effort，与改动前的行为完全一致；显式配置 `provider` + `model` 后改用独立模型，此时没写 `thinkingLevel`（Web UI 里的“默认”）表示用这个模型支持的最高档，只写其中一个视为没有配置。思考档位透传为一次性模型请求的 `reasoning` 参数（`off` 则不传）。两个请求都不再设置 `maxTokens`，输出上限走 Provider 默认。提交描述用于 `/commit` 从 diff 生成标题与正文，副本命名用于工作区副本的 AI 命名（2–5 词的展示名，只返回名称本身）。配置删除或 Provider 停用时回退到主模型；删除 Provider/模型时会清理指向它的引用。
 
 #### gitCommit 与 gitPush（Commit 和 Push 的模式与提示词）
 
@@ -604,7 +604,7 @@ Project `.myharness/settings.json`:
 | `compaction.enabled` | boolean | `true` | 启用 auto-compaction |
 | `compaction.provider` | string | Current chat provider | 独立选择的 Compact Model 使用的 Provider |
 | `compaction.model` | string | Current chat model | Compact Model ID；通过 `/settings` 与 `provider` 一起配置 |
-| `compaction.thinkingLevel` | string | 未选 Compact Model 时为 current chat effort；选了 model 时不发送 | 独立的 Compact Thinking Effort，会限制在所选 model 支持的 levels 内；对于 non-reasoning models 不会发送 |
+| `compaction.thinkingLevel` | string | 未选 Compact Model 时为 current chat effort；选了 model 时为该 model 支持的最高档 | 独立的 Compact Thinking Effort，会限制在所选 model 支持的 levels 内；对于 non-reasoning models 不会发送 |
 | `compaction.reserveTokens` | number | `16384` | 为 LLM response 预留的 tokens |
 | `compaction.keepRecentTokens` | number | `20000` | 压缩后在摘要之后原样保留的最新消息的 token 上限（同时不超过有效窗口的 15%）；这部分也会被摘要 |
 
@@ -626,7 +626,7 @@ Project `.myharness/settings.json`:
 | `branchSummary.skipPrompt` | boolean | `false` | session tree navigation 时跳过 `"Summarize branch?"` prompt（默认不生成 summary） |
 | `branchSummary.provider` | string | 当前主对话 Provider | 独立选择的分支摘要模型使用的 Provider；为空表示使用主模型 |
 | `branchSummary.model` | string | 当前主对话模型 | 分支摘要模型 ID；与 `provider` 一起配置，为空表示使用主模型 |
-| `branchSummary.thinkingLevel` | string | 未选独立模型时为当前主对话档位；选了独立模型时不发送 | 独立的分支摘要思考档位，会限制在所选模型支持的档位内；`off` 表示不发送 |
+| `branchSummary.thinkingLevel` | string | 未选独立模型时为当前主对话档位；选了独立模型时为该模型支持的最高档 | 独立的分支摘要思考档位，会限制在所选模型支持的档位内；`off` 表示不发送 |
 
 ### Retry
 

@@ -1,0 +1,810 @@
+[
+ {
+  "dir": "search-myharness",
+  "id": "sqa-081",
+  "startedAt": "2026-10-30T08:16:54.773Z",
+  "seconds": 83,
+  "toolCalls": 6,
+  "error": "Request timed out."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-082",
+  "startedAt": "2026-10-30T08:16:57.803Z",
+  "seconds": 94,
+  "toolCalls": 3,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-083",
+  "startedAt": "2026-10-30T08:17:12.808Z",
+  "seconds": 69,
+  "toolCalls": 3,
+  "error": "Request timed out."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-084",
+  "startedAt": "2026-10-30T08:18:17.758Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-085",
+  "startedAt": "2026-10-30T08:18:21.685Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-086",
+  "startedAt": "2026-10-30T08:18:22.696Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-087",
+  "startedAt": "2026-10-30T08:18:26.619Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-088",
+  "startedAt": "2026-10-30T08:18:27.631Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-089",
+  "startedAt": "2026-10-30T08:18:31.574Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-090",
+  "startedAt": "2026-10-30T08:18:31.931Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-091",
+  "startedAt": "2026-10-30T08:18:32.584Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-092",
+  "startedAt": "2026-10-30T08:18:36.519Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-093",
+  "startedAt": "2026-10-30T08:18:36.878Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-094",
+  "startedAt": "2026-10-30T08:18:37.533Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-095",
+  "startedAt": "2026-10-30T08:18:41.474Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-096",
+  "startedAt": "2026-10-30T08:18:41.831Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-097",
+  "startedAt": "2026-10-30T08:18:42.485Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-098",
+  "startedAt": "2026-10-30T08:18:46.475Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-099",
+  "startedAt": "2026-10-30T08:18:46.792Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness",
+  "id": "sqa-100",
+  "startedAt": "2026-10-30T08:18:47.422Z",
+  "seconds": 5,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-029",
+  "startedAt": "2026-10-30T08:16:08.801Z",
+  "seconds": 127,
+  "toolCalls": 6,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-030",
+  "startedAt": "2026-10-30T08:16:32.613Z",
+  "seconds": 129,
+  "toolCalls": 7,
+  "error": "terminated"
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-031",
+  "startedAt": "2026-10-30T08:17:08.369Z",
+  "seconds": 75,
+  "toolCalls": 5,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-033",
+  "startedAt": "2026-10-30T08:17:25.541Z",
+  "seconds": 51,
+  "toolCalls": 1,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-034",
+  "startedAt": "2026-10-30T08:18:16.166Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-035",
+  "startedAt": "2026-10-30T08:18:16.444Z",
+  "seconds": 0,
+  "toolCalls": 0,
+  "error": "Error: POST /api/model -> 409 {\"error\":\"Cannot switch models while the agent is running.\"} at MH.req (file:///C:/myharne"
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-036",
+  "startedAt": "2026-10-30T08:18:16.469Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-037",
+  "startedAt": "2026-10-30T08:18:23.348Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-038",
+  "startedAt": "2026-10-30T08:18:23.455Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-039",
+  "startedAt": "2026-10-30T08:18:23.549Z",
+  "seconds": 0,
+  "toolCalls": 0,
+  "error": "Error: POST /api/model -> 409 {\"error\":\"Cannot switch models while the agent is running.\"} at MH.req (file:///C:/myharne"
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-040",
+  "startedAt": "2026-10-30T08:18:23.567Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-041",
+  "startedAt": "2026-10-30T08:18:30.326Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-042",
+  "startedAt": "2026-10-30T08:18:30.437Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-043",
+  "startedAt": "2026-10-30T08:18:30.559Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-044",
+  "startedAt": "2026-10-30T08:18:37.283Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-045",
+  "startedAt": "2026-10-30T08:18:37.395Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-046",
+  "startedAt": "2026-10-30T08:18:37.519Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-047",
+  "startedAt": "2026-10-30T08:18:41.771Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-048",
+  "startedAt": "2026-10-30T08:18:44.247Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-049",
+  "startedAt": "2026-10-30T08:18:44.368Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-050",
+  "startedAt": "2026-10-30T08:18:44.482Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-051",
+  "startedAt": "2026-10-30T08:18:48.797Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-052",
+  "startedAt": "2026-10-30T08:18:51.248Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-053",
+  "startedAt": "2026-10-30T08:18:51.342Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-054",
+  "startedAt": "2026-10-30T08:18:51.424Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-055",
+  "startedAt": "2026-10-30T08:18:55.792Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-056",
+  "startedAt": "2026-10-30T08:18:58.205Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-057",
+  "startedAt": "2026-10-30T08:18:58.317Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-058",
+  "startedAt": "2026-10-30T08:18:58.407Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-059",
+  "startedAt": "2026-10-30T08:19:02.760Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-060",
+  "startedAt": "2026-10-30T08:19:05.147Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-061",
+  "startedAt": "2026-10-30T08:19:05.263Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-062",
+  "startedAt": "2026-10-30T08:19:05.347Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-063",
+  "startedAt": "2026-10-30T08:19:09.713Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-064",
+  "startedAt": "2026-10-30T08:19:12.113Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-065",
+  "startedAt": "2026-10-30T08:19:12.228Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-066",
+  "startedAt": "2026-10-30T08:19:12.317Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-067",
+  "startedAt": "2026-10-30T08:19:16.679Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-068",
+  "startedAt": "2026-10-30T08:19:19.056Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-069",
+  "startedAt": "2026-10-30T08:19:19.182Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-070",
+  "startedAt": "2026-10-30T08:19:19.274Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-071",
+  "startedAt": "2026-10-30T08:19:23.631Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-072",
+  "startedAt": "2026-10-30T08:19:26.016Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-073",
+  "startedAt": "2026-10-30T08:19:26.142Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-074",
+  "startedAt": "2026-10-30T08:19:26.257Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-075",
+  "startedAt": "2026-10-30T08:19:30.801Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-076",
+  "startedAt": "2026-10-30T08:19:32.982Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-077",
+  "startedAt": "2026-10-30T08:19:33.107Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-078",
+  "startedAt": "2026-10-30T08:19:33.221Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-079",
+  "startedAt": "2026-10-30T08:19:37.764Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-080",
+  "startedAt": "2026-10-30T08:19:39.928Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-081",
+  "startedAt": "2026-10-30T08:19:40.069Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-082",
+  "startedAt": "2026-10-30T08:19:40.185Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-083",
+  "startedAt": "2026-10-30T08:19:44.723Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-084",
+  "startedAt": "2026-10-30T08:19:46.870Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-085",
+  "startedAt": "2026-10-30T08:19:47.028Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-086",
+  "startedAt": "2026-10-30T08:19:47.308Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-087",
+  "startedAt": "2026-10-30T08:19:51.665Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-088",
+  "startedAt": "2026-10-30T08:19:53.821Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-089",
+  "startedAt": "2026-10-30T08:19:53.991Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-090",
+  "startedAt": "2026-10-30T08:19:54.272Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-091",
+  "startedAt": "2026-10-30T08:19:58.643Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-092",
+  "startedAt": "2026-10-30T08:20:00.778Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-093",
+  "startedAt": "2026-10-30T08:20:01.010Z",
+  "seconds": 0,
+  "toolCalls": 0,
+  "error": "Error: POST /api/model -> 409 {\"error\":\"Cannot switch models while the agent is running.\"} at MH.req (file:///C:/myharne"
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-094",
+  "startedAt": "2026-10-30T08:20:01.041Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-095",
+  "startedAt": "2026-10-30T08:20:01.213Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-096",
+  "startedAt": "2026-10-30T08:20:05.603Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-097",
+  "startedAt": "2026-10-30T08:20:07.922Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-098",
+  "startedAt": "2026-10-30T08:20:07.988Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-099",
+  "startedAt": "2026-10-30T08:20:08.175Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "search-myharness-ultra",
+  "id": "sqa-100",
+  "startedAt": "2026-10-30T08:20:12.545Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "browser-ultra",
+  "id": "deadlines-r1",
+  "startedAt": "2026-10-30T08:18:42.725Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "browser-ultra",
+  "id": "deadlines-r2",
+  "startedAt": "2026-10-30T08:19:03.824Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "browser-ultra",
+  "id": "deadlines-r3",
+  "startedAt": "2026-10-30T08:19:24.821Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "browser-ultra",
+  "id": "rubric-r1",
+  "startedAt": "2026-10-30T08:18:56.841Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "browser-ultra",
+  "id": "rubric-r2",
+  "startedAt": "2026-10-30T08:19:17.832Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "browser-ultra",
+  "id": "rubric-r3",
+  "startedAt": "2026-10-30T08:19:38.842Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "browser-ultra",
+  "id": "sa-report-r1",
+  "startedAt": "2026-10-30T08:18:49.816Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "browser-ultra",
+  "id": "sa-report-r2",
+  "startedAt": "2026-10-30T08:19:10.840Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "browser-ultra",
+  "id": "sa-report-r3",
+  "startedAt": "2026-10-30T08:19:31.819Z",
+  "seconds": 7,
+  "toolCalls": 0,
+  "error": "Connection error."
+ },
+ {
+  "dir": "handoff-ultra",
+  "id": "handoff-r3",
+  "startedAt": "2026-10-30T08:17:22.331Z",
+  "seconds": 79,
+  "toolCalls": 4,
+  "error": "Connection error."
+ }
+]

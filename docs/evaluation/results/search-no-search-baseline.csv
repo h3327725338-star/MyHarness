@@ -1,0 +1,101 @@
+id,question,gold,grade,answer
+sqa-001,Whose famous quotation did Thomas Edison have displayed on a placard over his desk?,Sir Joshua Reynolds,INCORRECT,"Thomas Edison's own famous quotation: **""Genius is 1% inspiration and 99% perspiration.""** (displayed on a placard over his desk.)"
+sqa-002,To whom was R. C. Harvey married?,Linda Kubicek,NOT_ATTEMPTED,I don't have publicly available information about R. C. Harvey's spouse.
+sqa-003,What is the name of the recipient of the Dickson Prize in Medicine in 1981?,Philip Leder,INCORRECT,The 1981 recipient of the Dickson Prize in Medicine was **Donald S. Fredrickson**.
+sqa-004,"In Season 2, Episode 22 of Airwolf, what is the name and surname of the archaeologist who accompanied Caitlin and four students on a trip to explore Maya temples?",Ozzie Hathaway,NOT_ATTEMPTED,"I do not have the specific name and surname of the archaeologist for Airwolf Season 2, Episode 22 readily available in my dataset."
+sqa-005,"Within plus or minus one minute, when did Costacurta receive a yellow card in the Champions League semi-final match between Barcelona and Milan on April 27, 2006?",44th minute,INCORRECT,"Costacurta did not receive a yellow card in the Barcelona vs Milan Champions League semi-final on April 27, 2006."
+sqa-006,In what year was Valery Matveevich Panov awarded the Lenin Prize?,1969,INCORRECT,1964
+sqa-007,"From what year to what year was Mary Ann Willson, an American folk artist, active?", 1810 to 1825,INCORRECT,1790 to 1867
+sqa-008,What was the name of Lord Takeru's partner in the 2019 video game Sekiro: Shadows Die Twice?,Lady Tomoe,INCORRECT,"There is no character named Lord Takeru in *Sekiro: Shadows Die Twice*. The game's major figures include Isshin Ashina, Genichiro Ashina, Wolf (Sekiro), Lady Butterfly, Emma, and the Divine Child Kuro. If you meant a different name or game, let me know and I'll gladly clarify."
+sqa-009,"Name the plant taxonomist who identified all the plant specimens collected for the study in the article ""The local medicinal plant knowledge in Kashmir Western Himalaya: A way to foster ecological transition via community-centred health-seeking strategies""?",Dr Mushtaq Ahmad,NOT_ATTEMPTED,The specific plant taxonomist is not identified in the abstract or metadata I have access to for this article.
+sqa-010,Which team won the 2013–14 CEV Challenge Cup?,Fenerbahçe Grundig,INCORRECT,Belogorie Belgorod (Russia)
+sqa-011,What is the name of India's first nano-satellite?,Jugnu,CORRECT,Jugnu
+sqa-012,"On which day, month, and year was Max Vuyisile Sisulu born?",23 August 1945,INCORRECT,10 July 1953
+sqa-013,What role did Hugh Ledigo play for The Jazzmen at the time of Kenny Ball's death (March 2013)?,Piano,INCORRECT,Hugh Ledigo served as the trombonist for Kenny Ball and his Jazzmen at the time of Kenny Ball's death in March 2013.
+sqa-014,What is the percentage of the natural occurrence of the stable tantalum isotope 180m?,0.012%,CORRECT,Approximately 0.012% (about 12 parts per million) of natural tantalum is the metastable isotope ¹⁸⁰ᵐTa.
+sqa-015,Who was the first Deputy Chief Minister of Jammu and Kashmir?,Mirza Afzal Beg,CORRECT,The first Deputy Chief Minister of Jammu and Kashmir was **Mirza Afzal Beg**.
+sqa-016,What female disc jockey sued the Maryland Racing Commission for the right to be granted a license in 1968?,Kathy Kusner,INCORRECT,"Sandra ""Sandy"" Brown"
+sqa-017,"What year was the municipality of Ramiriquí, Boyacá, Colombia, founded?",1541,INCORRECT,1549
+sqa-018,Give the full name of Rana Ayyub's father (an Indian journalist).,Mohammad Ayyub Waqif,INCORRECT,Zahid Ayyub
+sqa-019,"By 1913, how many stars could astronomer Annie Jump Cannon classify per hour?",200,CORRECT,"By 1913, Annie Jump Cannon could classify about 200 stars per hour. (Her rate was roughly 3 stars per minute.)"
+sqa-020,"As of 2020, what efficiency rate in percent was achieved by the latest perovskite solar cells?",25.5,INCORRECT,Approximately 25.2% (certified single-junction record as of 2020).
+sqa-021,"On what month, day, and year did D.C. Reeves announce his candidacy for the 2022 mayoral election in Pensacola?","September 1, 2021",INCORRECT,"September 14, 2021"
+sqa-022,What's Dreadbolt's secret identity?,Terrence Bolatinsky,INCORRECT,Julius Hardiman (Marvel Comics)
+sqa-023,"In what year did Eilenberg, in a joint paper with Chevalley, give an algebraic approach to the cohomology of Lie groups using the Lie algebra as the basic object?",1948,CORRECT,1948
+sqa-024,"How many children did Swiss painter Johann Caspar Füssli have with his wife, Elisabeth?",18,INCORRECT,Three children.
+sqa-025,What is the title of the firework display that Cornelia Parker showed at the opening of Jupiter Artland?,Nocturne (A Moon Landing),NOT_ATTEMPTED,Firework
+sqa-026,What President nominated Elliott Fitch Shepard as United States Attorney for the Southern District of New York?,Rutherford B. Hayes,INCORRECT,Chester A. Arthur
+sqa-027,What are the names of the two scientists who received the Salem Prize after the year Akshay Venkatesh received his?,Bo'az Klartag and Assaf Naor,INCORRECT,Brian Conrad and Alessio Figalli
+sqa-028,What was the title of the first piece that Merce Cunningham composed using the graphic animation program LifeForms?,Trackers.,INCORRECT,Scribble (1995)
+sqa-029,What is the name of the documentary Ellen Kuzwayo was involved in with Betty Wolpert in 1982?,Awake from Mourning,INCORRECT,Ellen Kuzwayo (1982 documentary directed by Betty Wolpert)
+sqa-030,"According to the 2011 census of India, after Hindi, which is the second fastest growing language of India, followed by Meitei (Manipuri) in third place and Bengali in fourth place?", Kashmiri,INCORRECT,Urdu
+sqa-031,To whom was Ida Adamoff married?,Claude Bourdet,NOT_ATTEMPTED,"I don't have information on Ida Adamoff's spouse in my records. If you have additional context or a different spelling, I'd be glad to help further."
+sqa-032,In which category did Ricky Whittle win an award in 2010?,TV Soap Personality,INCORRECT,Best Dramatic Performance at the 2010 Inside Soap Awards.
+sqa-033,With which political party was Karl Wilhelm Rudolf von Bennigsen associated?,National Liberal Party,INCORRECT,He was not affiliated with a modern political party; he was a Prussian general and statesman associated with the Stein–Hardenberg reform movement.
+sqa-034,"In which year was the municipality of Rondón, Boyacá, Colombia, founded?",1904,INCORRECT,1994
+sqa-035,"What month, day, and year did the New York City Department of Parks and Recreation rename Railroad Park in Queens for Gwen Ifill?","June 17, 2021",NOT_ATTEMPTED,"I don't have the specific month, day, and year for that renaming in my training data. For the exact date, I recommend checking the NYC Department of Parks and Recreation's official announcements or press releases."
+sqa-036,What year did Bill Brown start teaching at the University of Chicago?,1989.,INCORRECT,Bill Brown began teaching at the University of Chicago in 2001.
+sqa-037,"On which day, month, and year was the first race of the Two Oceans Marathon in Cape Town?",2 May 1970,INCORRECT,"April 18, 1970"
+sqa-038,"How many referees were selected from the South American Football Confederation (CONMEBOL) for the 2010 FIFA World Cup in Durban, South Africa?",6,INCORRECT,5
+sqa-039,"On what specific day, month, and year was Carrie Underwood's album ""Cry Pretty"" certified Platinum by the RIAA?","February 12, 2020",INCORRECT,"June 25, 2019"
+sqa-040,During which year did Yayoi Kusama have her first exhibition in Spain?,2011,INCORRECT,1966
+sqa-041,What is the total area in acres of Bobbili Fort?,10 acres ,CORRECT,The Bobbili Fort complex is approximately 10 acres.
+sqa-042,What is Kinoko Teikoku's first EP?,Long Good Bye,INCORRECT,"Kinoko Teikoku (self-titled EP, released in 2010)"
+sqa-043,In which year was the Bronze Wrangler first awarded?,1961,INCORRECT,1991
+sqa-044,"At which festival did Robert Amirkhanyan win ""Best Song"" in 1973?",Berlin City World Youth Festival,INCORRECT,Yerevan International Song Festival.
+sqa-045,What is the name of the astronomer who discovered 216433 Milianleo in 2009?,Erwin Schwab,NOT_ATTEMPTED,"The discoverer of 216433 Milianleo is not widely cited in my training data, but the asteroid was discovered in 2009 by the **Mount Lemmon Survey**."
+sqa-046,How many goals did the Selkirk Fishermen score in Game 2 of the 1920 Memorial Cup against the Toronto Canoe Club Paddlers?,4,INCORRECT,2
+sqa-047,Which river of India is known as the Lion's Mouth in Tibet?,Indus River,INCORRECT,Brahmaputra
+sqa-048,Which scientist was the recipient of the John Tuzo Wilson Medal in 2011?,Fred Cook,INCORRECT,The 2011 John Tuzo Wilson Medal was awarded to **Dr. Don Francis**.
+sqa-049,"On what day, month, and year did Bruno Kreisky (an Austrian social democratic politician) marry Vera Fürth?","April 23, 1942",INCORRECT,"July 20, 1935"
+sqa-050,"On what day, month, and year was Cléo Hamon, a French pair skater, born?","November 25, 2001",INCORRECT,12 September 2004
+sqa-051,The Wandanlage stereo system was originally released in which year?,1965,INCORRECT,1956
+sqa-052,"What year was the municipality of Sora, Boyacá, Colombia, founded?",1556,INCORRECT,"Sora, Boyacá, was founded in 1537."
+sqa-053,What was the first and last name of the voice actor who voiced the Little Sisters in the video game BioShock 2 (2010)?,Jodelle Ferland,INCORRECT,Tara Strong
+sqa-054,"In the 2021 research paper titled ""EEG-Based Driving Fatigue Detection Using a Two-Level Learning Hierarchy Radial Basis Function"" by Ziwu Ren et al., how many participants did the researchers collect EEG data from?",six,INCORRECT,The paper reports collecting EEG data from **15 participants**.
+sqa-055,In what prison did Jean-Marc Rouillan marry Nathalie Ménigon?, Fleury-Mérogis Prison,INCORRECT,Baumettes prison in Marseille.
+sqa-056,Who was awarded the Darwin Medal in 1952?,J.B.S. Haldane,INCORRECT,Sir Julian Huxley was awarded the Darwin Medal in 1952.
+sqa-057,What year was the Briggs & Stratton Raptor III engine released?,1995,INCORRECT,"There is no official ""Briggs & Stratton Raptor III engine"" model. The ""Raptor"" name is used for Briggs & Stratton's riding lawn mower and outdoor power equipment lineup, not as a specific engine model year. If you're looking for a particular engine series, Briggs & Stratton typically categorizes its engines under names like Intek, Vanguard, or OHV."
+sqa-058,What is the name of the tallest mountain?,Mount Everest,CORRECT,Mount Everest
+sqa-059,"Which streamer won the ""Best Philanthropic Streamer"" award at The Streamer Awards in 2022?",jacksepticeye,INCORRECT,Karl Jacobs
+sqa-060,For which song was Vibha Saraf nominated for Best Female Playback Singer at the 20th International Indian Film Academy Awards?,Dilbaro,INCORRECT,Abhi Toh Party Shuru Hui Hai
+sqa-061,"On what date (day, month, year) did composer Sigrid Ingeborg Henriette Wienecke die?","April 18, 1907",NOT_ATTEMPTED,I don't have a verified death date for Sigrid Ingeborg Henriette Wienecke in my knowledge base.
+sqa-062,Who was the first person to build a Gregorian reflecting telescope?,Robert Hooke,INCORRECT,James Gregory
+sqa-063,"Why did David Chow come to Genoa City on ""The Young and the Restless""?","To avenge the murder of his former fiancée, Carmen Mesta.",INCORRECT,He came to Genoa City to pursue a romantic relationship with Lauren Fenmore.
+sqa-064,"What did Edvard Bull Sr., the Norwegian politician, die of in 1932?",Brain Tumor,INCORRECT,Edvard Bull Sr. died of a heart attack in 1932.
+sqa-065,"Within plus or minus one minute, when was Pepe given a yellow card in the Champions League semi-final match between Real Madrid and Man City in 2016?",24th minute,INCORRECT,"36th minute (first leg, May 3, 2016)"
+sqa-066,What was the first name of the wife of the American chemist Ralph E. Oesper?,Helen,INCORRECT,Ethel
+sqa-067,What year was the first SoCal Sword Fight tournament held?,2012,NOT_ATTEMPTED,"I don't have the specific year for the first SoCal Sword Fight tournament in my training data. If you have more context (e.g., organization, location, or associated event), I'd be happy to help look it up further."
+sqa-068,"According to the last population update in 2010, the rural locality of Taz Russky in the Klyapovskoye Rural Settlement of Russia has a population of what?",175,NOT_ATTEMPTED,"I couldn't locate a verified 2010 population figure for Taz Russky in Klyapovskoye Rural Settlement in my training data. For official 2010 Russian census data on rural localities, consult Rosstat's archived settlement reports or the 2010 All-Russian Population Census datasets."
+sqa-069,How tall in feet is Zerxus from Exandria Unlimited: Calamity?,6 feet,INCORRECT,Zerxus's official height has not been publicly disclosed by Critical Role or Mercer.
+sqa-070,"How many stolen vehicles were recovered in Nigeria by the Nigerian Police Force between 2002 and 2004, when Mustafa Adebayo Balogun was Nigeria's Inspector General of Police?","2,148",NOT_ATTEMPTED,"There is no publicly documented aggregate figure for stolen vehicles recovered by the Nigerian Police Force between 2002 and 2004 under Inspector General Mustafa Adebayo Balogun. Specific crime statistics from that period are not compiled in widely available open-source records. If you have a particular report or context in mind, I’d be glad to help analyze it."
+sqa-071,Which team was the first non-European team to enter the Battle of the Nations tournament?,Team Quebec,INCORRECT,The United States.
+sqa-072,"What year was the municipality of Salgar, Antioquia, Colombia, founded?",1880,INCORRECT,Founded in 1859.
+sqa-073,"What was the voter participation percentage in the 1971 Federal elections in the Canton of the Grisons, also known as the Canton of Graubünden, in Switzerland?",56.7%,INCORRECT,Approximately 46%.
+sqa-074,In what year was Ukrainian-born mathematician Aleksandr Yakovlevich Povzner the first to apply the technique of transformation operators of Volterra type to spectral theory?,1948,INCORRECT,1954
+sqa-075,"In which month and year was Indira Sundaram, the younger sister of Amrita Sher-Gil (a Hungarian-Indian painter), born?",March 1914,INCORRECT,November 1920
+sqa-076,"What trophy was won on October 12, 2019, by Kaizer Chiefs Football Club?",The Shell Ultra Helix Cup.,INCORRECT,2019 Telkom Knockout
+sqa-077,Who won the Gerard P. Kuiper Prize in 2001?,Bruce W. Hapke,INCORRECT,The 2001 Gerard P. Kuiper Prize was awarded to **Jean-Luc Margot**.
+sqa-078,The 16th North East Region Commonwealth Parliamentary Association (NERCPA) conference has started in which city?,IMPHAL,INCORRECT,"The 16th NERCPA conference started in **Guwahati, Assam**."
+sqa-079,"In 1981, Judith Feist Hemmendinger received her Ph.D. from which French university?",University of Strasbourg.,INCORRECT,University of Paris
+sqa-080,Who was the first Chief Minister of the State of Jammu and Kashmir?,Ghulam Mohammed Sadiq,INCORRECT,Sheikh Abdullah (Sheikh Mohammad Abdullah)
+sqa-081,In which position did Band of Joy's eponymous album debut on the UK Albums Chart?,#3,INCORRECT,It debuted at number 27 on the UK Albums Chart.
+sqa-082,What year did the International School of Athens get renamed from TASIS?,2004,INCORRECT,The International School of Athens (ISA) was not renamed from TASIS; it was established as the International School of Athens in 1998. TASIS Greece (The American International School in Greece) is a separate institution founded in 2012.
+sqa-083,"What version of the music application MusicBee had the patch note ""Mini player now supports a large album artwork layout"" as part of its update?",Version 3.2.6827,INCORRECT,3.5
+sqa-084,What year did PayPal become a jersey patch sponsor of the Phoenix Suns for the first time?,2018,INCORRECT,2023
+sqa-085,"In 2022, which university did Honda Battle of the Bands (HBOB) select to be the first-ever HBCU campus to host the in-person event?",Alabama State University,CORRECT,Alabama State University
+sqa-086,"As of 2011, what was the female population of Chitwan District?","300,897",INCORRECT,"282,318"
+sqa-087,"In which year was the ""People's Action Committee"" (a political party) established in Kashmir?",1963,INCORRECT,"There is no widely recognized political party established in Kashmir by the name ""People's Action Committee"" in documented history. If you refer to a specific local group, regional organization, or a different entity, please clarify for a more precise answer."
+sqa-088,Who was the president of Sweet Briar College in Virginia in 1987?,Nenah Elinor Fry,INCORRECT,The president of Sweet Briar College in 1987 was Dr. Joseph M. Fields.
+sqa-089,"In what month and year was Nikolai Talyzin dismissed from Nikolai Ryzhkov's government, along with many other conservatives, during the period of perestroika?",September 1989,INCORRECT,September 1990
+sqa-090,What camera has the world's first dual-driven shutter system?,Sony Alpha 1,INCORRECT,"**Phase One XF** (medium format camera, introduced with the IQ4 system, marketed as the world's first dual-driven shutter system combining mechanical and electronic shutters)."
+sqa-091,Which of Smith Wigglesworth's grandchildren became the president of Elim Pentecostal Church?,Leslie Wigglesworth,INCORRECT,"I am not aware of any Smith Wigglesworth grandchild serving as president of Elim Pentecostal Church; that role has been held by other church leaders, and no such succession is widely documented among Wigglesworth's descendants."
+sqa-092,"What was the total number of locations surveyed in all oceans for the study published in 2014 called ""Plastic Pollution in the World's Oceans: More than 5 Trillion Plastic Pieces Weighing Over 250,000 Tons Afloat at Sea"" by Marcus Eriksen, Laurent C. M. Lebreton, Henry S. Carson, Martin Thiel, Charles J. Moore, Jose C. Borerro, Francois Galgani, Peter G. Ryan, and Julia Reisser?",1571,CORRECT,"The study surveyed **1,571** locations across all oceans."
+sqa-093,What year did Nikolai Talyzin move to the post of head of the Bureau for Social Development after facing strong criticism?,1988,NOT_ATTEMPTED,I cannot confirm the exact year from my current knowledge base. The role and timeline for Nikolai Talyzin's move to head the Bureau for Social Development after criticism are not distinctly documented in widely available sources.
+sqa-094,"What album is the song ""God Is Alive, Magic Is Afoot"" by Chris Thile on?",Laysongs,INCORRECT,Deceiver (2015)
+sqa-095,"How many years did Burt work in the Optics and Design department in the show ""Severance""?",7,INCORRECT,18
+sqa-096,What was the only state in 2020 that adopted Juneteenth as a paid holiday for state employees?,Texas,INCORRECT,Virginia
+sqa-097,Which law school was Natasha Merle a lecturer at from 2020 to 2021?,Columbia Law School,INCORRECT,Natasha Merle served as a lecturer at New York University (NYU) School of Law from 2020 to 2021.
+sqa-098,"As of 2022, what year did the Centro Botín Centre in Spain have the exhibition named 'Amigos'?",2019,INCORRECT,2021
+sqa-099,"Which Salvador Dalí painting was described as ""a vast human body breaking out into monstrous excrescences of arms and legs tearing at one another in a delirium of auto-strangulation""?",Soft Construction with Boiled Beans,CORRECT,Soft Construction with Boiled Beans: Premonition of Civil War (1936)
+sqa-100,What is the NASA Space Science Data Coordinated Archive (NSSDCA) ID of the spacecraft EURECA-1?,1992-049B,INCORRECT,The NSSDCA ID for EURECA-1 is **92-031**.

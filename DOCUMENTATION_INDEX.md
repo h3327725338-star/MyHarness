@@ -39,7 +39,7 @@
 
 | 范围 | 功能说明 | 维护文档 | 后续开发文档 | 事实范围 |
 | --- | --- | --- | --- | --- |
-| 整个仓库 | [README](README.md)、[中文 README](README.zh-CN.md)、[架构与开发维护手册](ARCHITECTURE_AND_DEVELOPMENT.md)、[存储与数据边界](docs/STORAGE.md)、[隐私政策](docs/PRIVACY.md) | [根维护手册](MAINTENANCE.md) | [开发路线与边界](DEVELOPMENT_ROADMAP.md)、[项目状态](PROJECT_STATUS.md)、[ADR](docs/decisions/) | monorepo、脚本、CI、发布、数据生命周期 |
+| 整个仓库 | [README](README.md)、[中文 README](README.zh-CN.md)、[架构与开发维护手册](ARCHITECTURE_AND_DEVELOPMENT.md)、[存储与数据边界](docs/STORAGE.md)、[隐私政策](docs/PRIVACY.md) | [根维护手册](MAINTENANCE.md) | [开发路线与边界](DEVELOPMENT_ROADMAP.md)（[中文版](DEVELOPMENT_ROADMAP.zh-CN.md)）、[项目状态](PROJECT_STATUS.md)、[ADR](docs/decisions/) | monorepo、脚本、CI、发布、数据生命周期 |
 | Coding Agent 产品层 | [产品文档索引](packages/coding-agent/docs/index.md)、[中文索引](packages/coding-agent/docs/index.zh-CN.md)、[Web UI](packages/coding-agent/docs/web-ui.md) | [产品维护手册](packages/coding-agent/docs/maintenance.md) | [产品后续开发](packages/coding-agent/docs/roadmap.md) | Web UI、AgentSession、Session、Provider runtime |
 | Coding Agent 源码模块 | [源码模块地图](packages/coding-agent/docs/source-modules.md)；每个一级目录的 `packages/coding-agent/src/<目录>/README.md`（“说明”一节） | 同一份 `README.md` 的“维护”一节 | 同左 | `packages/coding-agent/src` 的 25 个一级目录（含各自子目录）和顶层入口 |
 | 其他包的源码目录 | [agent](packages/agent/src/README.md)、[ai](packages/ai/src/README.md)、[sqlite-node](packages/storage/sqlite-node/src/README.md) 的 `src/README.md` | 同一份 `README.md` 的“维护”一节 | 各包 `docs/roadmap.md` | 各包 `src` 下的每个子目录 |
@@ -50,7 +50,7 @@
 | 项目自动化 | [脚本说明](scripts/README.md)、[Release Gate](docs/RELEASE_GATE.md) | [Git 工作流](docs/maintenance/git-workflow.md)、[脚本维护](scripts/maintenance.md) | [脚本后续开发](scripts/roadmap.md) | Git 写操作、`scripts/`、`.husky`、隐私与发布审计 |
 | CI / GitHub | [GitHub 自动化](docs/maintenance/github-automation.md) | [CI 维护](.github/maintenance.md) | [CI 后续开发](.github/roadmap.md) | workflows、issue gate、audit、binary build |
 | 项目配置 | [.myharness 说明](.myharness/README.md) | [配置维护](.myharness/maintenance.md) | [配置后续开发](.myharness/roadmap.md) | 项目级设置和被忽略的运行时数据 |
-| 外部评估与演示 | [评委测试指南](docs/JUDGE_TESTING.md)、[Nebius Token Factory 配置](packages/coding-agent/docs/nebius-token-factory.md) | — | — | 安装包或源码构建路径、Provider 凭据、五分钟测试脚本、已知限制 |
+| 外部评估与演示 | [评委测试指南](docs/JUDGE_TESTING.md)、[真实运行评测](docs/evaluation/README.md)、[Nebius Token Factory 配置](packages/coding-agent/docs/nebius-token-factory.md) | — | — | 安装包或源码构建路径、Provider 凭据、五分钟测试脚本、已知限制 |
 
 ## 说明、维护、后续开发分别解决什么
 

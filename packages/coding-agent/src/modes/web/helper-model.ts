@@ -17,7 +17,7 @@ export interface HelperModelRef {
 /**
  * Resolve the model a helper (commit description, worktree naming, selection translation) runs on.
  * Default (no provider/model) follows the main chat model and effort, exactly like before;
- * an explicit provider+model uses its own effort ("off" when the level is left empty).
+ * an explicit provider+model uses its own effort (the model's highest when the level is left empty).
  * A half-filled reference (only one of the two set) is treated as not configured.
  */
 export function resolveHelperModel(

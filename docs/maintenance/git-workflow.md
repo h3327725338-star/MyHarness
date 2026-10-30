@@ -24,6 +24,10 @@ Agent、Harness、IDE Agent、自动化脚本和人工维护者。
 根级 Markdown，再逐个例外放行正式文档；以 `/.*` 忽略所有根级点条目，再例外放行
 `.gitattributes`、`.gitignore`、`.npmrc`、`.github/`、`.husky/`、`.myharness/`。因此 agent
 写在仓库根的报告、计划和此后新出现的 Harness/Agent 工作区目录都不会进入候选列表。
+当前放行的根级正式文档是 `AGENTS.md`、`ARCHITECTURE_AND_DEVELOPMENT.md`、`CONTRIBUTING.md`、
+`DEVELOPMENT_ROADMAP.md`、`DOCUMENTATION_INDEX.md`、`MAINTENANCE.md`、`PROJECT_STATUS.md`、
+`README.md`、`SECURITY.md`、`THIRD_PARTY_NOTICES.md`，以及中文版 `CONTRIBUTING.zh-CN.md`、
+`DEVELOPMENT_ROADMAP.zh-CN.md`、`README.zh-CN.md`（英文版为主文档）。
 
 在仓库根新增正式文件时，必须同时更新 `.gitignore` 的白名单例外和本段说明，否则文件会被
 静默忽略。不得用 `git add -f` 绕过忽略规则。会话产物本身不属于仓库内容：报告、回执、证据、

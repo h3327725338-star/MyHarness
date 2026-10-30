@@ -497,7 +497,7 @@ render(h(Composer,{}),document.getElementById('ch'));
 render(h(FloatingQuoteToolbar,{}),document.getElementById('qh'));
 await wait(300);
 check(!document.querySelector('.transcript .quote-hl'),'a quote is painted before anything was picked');
-const themes=[['dark','classic'],['dark','forest'],['dark','amber'],['light','classic']];
+const themes=[['dark','classic'],['dark','forest'],['dark','amber'],['light','classic'],['light','forest'],['light','amber']];
 const seen={};
 try {
 for (const theme of themes) {

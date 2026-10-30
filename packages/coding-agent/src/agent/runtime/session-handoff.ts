@@ -16,7 +16,12 @@ import { loadHistoryRecords } from "../../session/history/index-store.ts";
 import type { HistoryRecord } from "../../session/history/records.ts";
 import { loadSystemPrompt } from "../../system-prompts/loader/index.ts";
 import type { AgentSession } from "./agent-session.ts";
-import { type MainModelRef, type ResolvedAssistantModel, resolveAssistantModel } from "./assistant-model.ts";
+import {
+	helperReasoning,
+	type MainModelRef,
+	type ResolvedAssistantModel,
+	resolveAssistantModel,
+} from "./assistant-model.ts";
 
 export const HANDOFF_DEBOUNCE_MS = 45_000;
 export const HANDOFF_RETRY_DELAYS_MS = [30_000, 2 * 60_000, 10 * 60_000] as const;
@@ -317,7 +322,7 @@ export class SessionHandoff {
 						messages: [{ role: "user", content: [{ type: "text", text: task }], timestamp: Date.now() }],
 					},
 					{
-						reasoning: ref.thinkingLevel === "off" ? undefined : ref.thinkingLevel,
+						reasoning: helperReasoning(model, ref.thinkingLevel),
 						signal: controller.signal,
 						timeoutMs: sdkFirstByteTimeoutMs(model, this.session.settingsManager),
 						maxRetries: retry.maxRetries,
