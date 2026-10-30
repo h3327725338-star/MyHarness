@@ -80,7 +80,7 @@ MyHarness 起初是一名计算机专业学生为解决这些问题给自己做�
 **模型与数据**
 
 - **每项工作配自己的模型。** 子智能体、记忆、对话命名、翻译、识图、定时任务等辅助工作，都可以各自设置模型和思考强度，一个 Nebius Token Factory Key 就能全部配好。
-- **数据留在你的电脑上。** 界面只监听 `127.0.0.1`。聊天、记忆、设置和 Key 都在 `%USERPROFILE%\.myharness`，没有 MyHarness 服务器。模型请求只发给你选的 Provider（默认 Nebius Token Factory），同步走你自己的 Google Drive。同步没有端到端加密，只有浏览器的登录数据会在上传前用你的口令加密。
+- **数据留在你的电脑上。** 界面只监听 `127.0.0.1`。聊天、记忆、设置和 Key 都在 `%USERPROFILE%\.myharness`（从源码 checkout 运行时，聊天和记忆放在该 checkout 的 `data` 文件夹里），没有 MyHarness 服务器。模型请求只发给你选的 Provider（默认 Nebius Token Factory），同步走你自己的 Google Drive。同步没有端到端加密，只有浏览器的登录数据会在上传前用你的口令加密。
 
 **同样支持编程**
 
@@ -149,7 +149,7 @@ $env:NEBIUS_TOKEN_FACTORY_API_KEY = "<your-token-factory-key>"
 - 直连 Google Drive API 同步：全部记忆层（含归档、待确认条目、画像）、General 模式的工作区与聊天（含分支和交接摘要）、会话附件与产物、资料库、草稿、General 模式的个性提示词、我的提示词、定时任务，以及内置浏览器的书签、新标签页快捷方式和网站设置；浏览器的登录状态和已存密码只有设置了同步口令才会同步，上传前先在本机用口令加密。
 - 不同步：API key、OAuth token、信任决定、工具权限、锁、运行中的任务、Coding 模式的聊天与仓库，以及其它 Web 偏好。
 - 合并用的是稳定 key 加按设备的版本向量：记忆按与双方最后一致版本的差异做三方合并，聊天按 entry id 合并所以两条分支都保留，合不了的冲突保留本地版本、把对方存成可恢复副本并列在设置里。Drive 传来的数据不能授予项目信任、不能执行命令。
-- 边界：同步直连 Google Drive API。除了用内存传输的自动化测试，也已用同一个 Google 账号在两台真实电脑之间跑过多轮。退出应用后同步停止，除了浏览器加密的登录数据外没有端到端加密。详见 [Google Drive sync](packages/coding-agent/docs/google-drive-sync.md)。
+- 边界：同步直连 Google Drive API。除了用内存传输的自动化测试，维护者也已在至少四台真实电脑之间实际跑过。退出应用后同步停止，除了浏览器加密的登录数据外没有端到端加密。详见 [Google Drive sync](packages/coding-agent/docs/google-drive-sync.md)。
 
 ## Quick Start（Windows）
 

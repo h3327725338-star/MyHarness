@@ -88,7 +88,7 @@ push 的检查顺序以 [`docs/maintenance/git-workflow.md`](docs/maintenance/gi
 
 ## 公开历史边界
 
-公开仓库使用独立的 orphan public history；本地 `main` 仍保留既有私有历史。
-后续公开版本应从准备好的公开源码树重新执行隐私、License、LFS 对象和发布
-资产审计，不应直接把本地私有历史推送到公开分支。当前项目阶段、明确未完成项
-和 Code Intelligence 发布前置条件见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)。
+公开仓库的历史从 2026-09-21 的单个 orphan 提交（“MyHarness public release
+candidate”）开始，更早的私有历史不在其中；本地 `main` 与公开 `main` 是同一条
+分支，每次推送都由 pre-push hook 做完整树发布审计。当前项目阶段和明确未做的
+事项见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)。

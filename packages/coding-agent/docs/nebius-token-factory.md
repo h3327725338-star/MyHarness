@@ -1,6 +1,6 @@
 # NVIDIA Nemotron on Nebius Token Factory
 
-This page documents one concrete, verified-by-configuration Provider setup: NVIDIA Nemotron models and DeepSeek V4.1 Flash 1017 served by [Nebius Token Factory](https://api.tokenfactory.nebius.com/v1/), used as the model backend for a MyHarness coding session.
+This page documents one concrete Provider setup: NVIDIA Nemotron models and DeepSeek V4.1 Flash 1017 served by [Nebius Token Factory](https://api.tokenfactory.nebius.com/v1/), used as the model backend for a MyHarness coding session. The maintainer has run it with a real Token Factory key across at least four PCs (October 2026).
 
 The `@myharness/ai` catalog stays empty (`getBuiltinProviders()` returns `[]`, `MODELS` is `{}`). Nebius Token Factory is offered ready-made by the Coding Agent product layer instead: a preset (`src/providers/models/nebius-preset.ts`) that is written into `models.json` as an ordinary `openai-completions` Provider once the user pastes a key (`src/application/use-cases/nebius-setup.ts`). After that it is a custom Provider like any other: it can be edited or deleted, and requests use no Nebius-specific code.
 
@@ -62,7 +62,7 @@ What happens on save (`POST /api/providers/nebius/setup`):
 
 Nano (added by versions before 2026-10-29) is declared without `compat.supportsReasoningEffort` (like Super VL), so MyHarness never sends `reasoning_effort` to it and it always reasons; its 16,384-token output cap is a conservative value, since Token Factory does not publish one.
 
-**Balance and spending.** Token Factory has no balance API (the balance and **Top up** are in the console's navigation). Once set up, the Nebius card shows **Balance and top up** (opens `https://tokenfactory.nebius.com/`), **Get an API key**, and this computer's estimate: every finished model request adds `usage.cost.total` to `provider-spend.json` next to `models.json` (prices from the model entries; the Token Factory bill is what counts). A request refused with HTTP `402`, or with an error that names the balance, is explained as a balance problem. The exact error Token Factory returns for a negative balance has not been observed.
+**Balance and spending.** Token Factory has no balance API (the balance and **Top up** are in the console's navigation). Once set up, the Nebius card shows **Balance and top up** (opens `https://tokenfactory.nebius.com/`), **Get an API key**, and this computer's estimate: every finished model request adds `usage.cost.total` to `provider-spend.json` next to `models.json` (prices from the model entries; the Token Factory bill is what counts). A request refused with HTTP `402`, or with an error that names the balance, is explained as a balance problem. The exact error Token Factory returns for a negative balance has not been observed, because the maintainer's balance has never run out.
 
 ## Setup in the Web UI by hand
 
@@ -119,7 +119,7 @@ Token Factory's Chat Completions API accepts `reasoning_effort` values `none`, `
 | Nemotron 3.5 Lightning | reasoning on or off | `off` → `none`, `high` → `high` |
 | Nemotron 3.5 Super VL, Nemotron 3 Nano | (no `reasoning_effort` is sent) | `high` only: the model's default, reasoning on |
 
-What Token Factory runs for each name is not documented by Nebius. For DeepSeek V4.1 Flash 1017 the levels follow DeepSeek's own API. The maintainer ran it through Token Factory with a real key on a second PC (October 2026): its tool calls and switching between its thinking levels worked; how far each level changes the amount of reasoning was not measured. A third-party measurement on Super found `none` answers without reasoning, `low` reasons less than `medium`, and `high` reasons as long as `medium`, which matches Super's three modes. That Ultra's `medium` runs its medium-effort mode has not been measured.
+What Token Factory runs for each name is not documented by Nebius. For DeepSeek V4.1 Flash 1017 the levels follow DeepSeek's own API. The maintainer has run it through Token Factory with a real key on at least four PCs (October 2026): its tool calls and switching between its thinking levels work stably; how far each level changes the amount of reasoning was not measured. A third-party measurement on Super found `none` answers without reasoning, `low` reasons less than `medium`, and `high` reasons as long as `medium`, which matches Super's three modes. That Ultra's `medium` runs its medium-effort mode has not been measured.
 
 MyHarness 0.0.3 wrote every accepted name as a level of its own for Ultra and Lightning, and no map for Super VL and Nano. Such entries, exactly as that version wrote them, get the levels above when `models.json` is read (`upgradeNebiusPresetModels`); an entry the user changed is left alone.
 
@@ -132,7 +132,7 @@ Check these four things rather than trusting a green UI:
 - the composer shows the model you selected (for example `DeepSeek V4.1 Flash 1017` or `Nemotron 3 Ultra`, Provider `nebius`);
 - the context meter reflects the model's real window (1.0M for DeepSeek, Ultra and Lightning, 262K for Super) — MyHarness reads it from the model entry, so a wrong entry shows the wrong number;
 - the turn header reports elapsed time and tool-operation count for the finished turn;
-- the session JSONL under `~/.myharness/agent/sessions/` records the assistant turns with the model id.
+- the session JSONL under `~/.myharness/data/workspaces/<workspace-id>/sessions/<session-id>/conversation/` (a source checkout keeps it in its own `data/workspaces/`) records the assistant turns with the model id.
 
 A screenshot of a completed turn in the desktop app, with the model selector visible, is the shortest piece of evidence that the runtime call went to Token Factory and not to another Provider.
 

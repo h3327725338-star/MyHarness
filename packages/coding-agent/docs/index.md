@@ -2,11 +2,11 @@
 
 [English](index.md) | [简体中文](index.zh-CN.md)
 
-MyHarness is a local browser coding tool. The Coding Agent product layer provides the Web UI, AgentSession, tools, sessions, Provider runtime, project trust, and the extension/resource system.
+MyHarness is a personal AI for your Windows PC that also handles coding. The Coding Agent product layer provides the Web UI, AgentSession, tools, sessions, Provider runtime, project trust, and the extension/resource system.
 
 ## Quick start
 
-The repository does not currently publish `@myharness/coding-agent` to the public npm registry. Use a source checkout on Windows:
+The repository does not currently publish `@myharness/coding-agent` to the public npm registry. On Windows, download and run the `MyHarness-Setup-<version>.exe` installer from [GitHub Releases](https://github.com/h3327725338-star/MyHarness/releases/latest) (it is not code-signed, so SmartScreen asks first), or run from a source checkout:
 
 ```powershell
 npm.cmd install --ignore-scripts
@@ -31,7 +31,7 @@ Configure a Provider and model in `models.json`, Settings, or an extension befor
 - [Settings](settings.md) — global and project settings.
 - [Symbols contract](symbols.md) — structured navigation, routing, coordinates, partial results, deadlines, and continuation.
 - [Windows](windows.md) — Bash and Windows-specific setup.
-- [Web Search](web-search.md) — optional built-in web search (Google/Bing first, with optional DuckDuckGo, Brave, Tavily API and a Firefox/Chrome/Edge browser fallback) and page reading.
+- [Web Search](web-search.md) — built-in web search and page reading (on by default and can be turned off in Settings; the default engines are Tavily API and Google, with optional Bing, DuckDuckGo and Brave, and a Firefox/Chrome/Edge browser fallback).
 - [Sessions](sessions.md) — Session management, branching, and navigation.
 - [Google Drive sync](google-drive-sync.md) — background sync of memories and General-mode data through the user's own Drive folder, with merge, deletion and conflict rules.
 - [Compaction](compaction.md) — context compaction and branch summaries.

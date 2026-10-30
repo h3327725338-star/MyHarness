@@ -15,7 +15,7 @@
 <a id="provider-catalog"></a>
 ## Provider catalog 与注册
 
-当前 library 层没有 Provider catalog，Provider 只来自 `models.json`、Settings 和 Extension registration。Coding Agent 产品层只多了一个现成预设：Nebius Token Factory（`providers/models/nebius-preset.ts`）。用户在设置 → Providers 粘贴 Key 后，由 `application/use-cases/nebius-setup.ts` 先读取账户的模型列表核对 Key，再把它作为普通 `openai-completions` Provider 写入 `models.json`、保存 Key，并给还没有自己模型的工作配上 Nemotron 模型；之后它和其他自定义 Provider 一样可以编辑或删除。详见 [NVIDIA Nemotron on Nebius Token Factory](nebius-token-factory.md)。曾内置的 OpenAI ChatGPT（Codex App Server）和 Command Code Provider 已从 MyHarness 移出，MyHarness 不再加载它们。
+当前 library 层没有 Provider catalog，Provider 只来自 `models.json`、Settings 和 Extension registration。Coding Agent 产品层只多了一个现成预设：Nebius Token Factory（`providers/models/nebius-preset.ts`）。用户在设置 → Providers 粘贴 Key 后，由 `application/use-cases/nebius-setup.ts` 先读取账户的模型列表核对 Key，再把它作为普通 `openai-completions` Provider 写入 `models.json`、保存 Key，并给还没有自己模型的工作配上模型（主模型和提交说明用 DeepSeek V4.1 Flash 1017，其余用 Nemotron 模型）；之后它和其他自定义 Provider 一样可以编辑或删除。详见 [NVIDIA Nemotron on Nebius Token Factory](nebius-token-factory.md)。曾内置的 OpenAI ChatGPT（Codex App Server）和 Command Code Provider 已从 MyHarness 移出，MyHarness 不再加载它们。
 
 <a id="api-keys"></a>
 ## API Keys

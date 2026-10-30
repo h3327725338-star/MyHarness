@@ -147,7 +147,7 @@ Windows 重启经隐藏 PowerShell `Start-Process` 启动原 Node 入口、相�
 ## 启动
 
 ```powershell
-# 日常使用：桌面端（Windows 源码 checkout）
+# 日常使用：桌面端（已安装的从开始菜单启动；源码 checkout 用下面这条）
 .\dev-desktop.cmd
 # 命令行直接跑源码（在仓库根目录执行，日志打印实际地址）
 node --import ./scripts/dev-fast-loader.mjs ./packages/coding-agent/src/web.ts
@@ -418,7 +418,7 @@ packages/coding-agent/
 npm.cmd --workspace @myharness/coding-agent test -- test/web-http-server.test.ts test/web-wire-changes-dialogs.test.ts test/web-frontend-logic.test.ts test/web-host.test.ts test/web-i18n.test.ts test/web-context-breakdown.test.ts test/web-lifecycle.test.ts test/web-folder-dialog.test.ts test/web-generation-speed.test.ts test/web-terminal.test.ts test/git-branches.test.ts  test/official-effort.test.ts test/custom-provider-manager.test.ts test/tools.test.ts
 ```
 
-`official-effort.test.ts` 与 `custom-provider-manager.test.ts` 覆盖 Thinking Effort 的官方文档规则和写回规则，`web-generation-speed.test.ts` 覆盖 t/s 和每次请求缓存命中的计算，`tools.test.ts` 覆盖 `write` / `edit` 返回的 `+N −M`。`web-host.test.ts` 使用真实的 `AgentSessionRuntime`（faux provider）通过 HTTP/SSE 走完整链路：prompt → 工具 → run_finished → Changes/diff（含 `usage` 推送、连续两轮任务各自的改动卡片及其 Diff）→ Files → Settings → Sessions → 直接 shell，以及任务结束通知（页面回答已弹出 / 不能弹出 / 不回答时系统弹窗的去向；系统弹窗在测试里被替换，不会真的弹出）和 Project Trust 决定的立即生效。`web-terminal.test.ts` 通过 HTTP 接口启动真实的 Shell（Windows 上是 CMD）：输出按序号到达、输入生效、再次打开得到同一个终端及其已有输出、调整尺寸、不同文件夹各有终端、重启 / 结束 / Shell 自己退出时的事件与退出码、同时运行数量的上限；它需要可选依赖 `@lydell/node-pty` 的当前平台二进制（Windows x64 上必须有，其他平台没有时跳过）。真实 Provider、浏览器渲染（包括 xterm.js 的显示与键盘输入）和 Windows 桌面行为需要单独运行验证。
+`official-effort.test.ts` 与 `custom-provider-manager.test.ts` 覆盖 Thinking Effort 的官方文档规则和写回规则，`web-generation-speed.test.ts` 覆盖 t/s 和每次请求缓存命中的计算，`tools.test.ts` 覆盖 `write` / `edit` 返回的 `+N −M`。`web-host.test.ts` 使用真实的 `AgentSessionRuntime`（faux provider）通过 HTTP/SSE 走完整链路：prompt → 工具 → run_finished → Changes/diff（含 `usage` 推送、连续两轮任务各自的改动卡片及其 Diff）→ Files → Settings → Sessions → 直接 shell，以及任务结束通知（页面回答已弹出 / 不能弹出 / 不回答时系统弹窗的去向；系统弹窗在测试里被替换，不会真的弹出）和 Project Trust 决定的立即生效。`web-terminal.test.ts` 通过 HTTP 接口启动真实的 Shell（Windows 上是 CMD）：输出按序号到达、输入生效、再次打开得到同一个终端及其已有输出、调整尺寸、不同文件夹各有终端、重启 / 结束 / Shell 自己退出时的事件与退出码、同时运行数量的上限；它需要可选依赖 `@lydell/node-pty` 的当前平台二进制（Windows x64 上必须有，其他平台没有时跳过）。真实 Provider、浏览器渲染（包括 xterm.js 的显示与键盘输入）和 Windows 桌面行为不在这些自动化测试内，维护者已在至少四台 Windows 电脑上实际运行验证（2026 年 10 月）。
 
 分支浮层及 `/git` 副本入口的分离删除回归：`git-branches.test.ts` / `git-worktrees.test.ts` 用测试新建的临时仓库验证占用分支即使 `-D` 也拒绝、workspace snapshot 未合并提交需显式强删、副本 `--force` 保留分支和当前/主副本保护；`web-git-delete-routes.test.ts` 捕获真实路由 handler、替换底层 Git，不监听服务，验证安全/强制透传和请求所属 Chat 的守卫。浏览器回归需显式启用，使用随机端口的测试 API 和独立浏览器 profile，不删除用户现有副本或分支：
 

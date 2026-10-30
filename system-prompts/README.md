@@ -113,4 +113,4 @@ system prompt，后者作为 composer 的追加内容。
 - 这些测试文件的存在只能证明测试入口和覆盖意图；本次文档核对没有把它们的历史记录写成新的测试通过结论。
 - 历史终端 smoke 曾验证本地 Provider、429 恢复、read 工具与会话续接；对应终端测试脚本已随旧入口移除，这不是当前 Web 启动的验证结果。
 - `npm run build:offline`、全仓只读 Biome 检查、`node scripts/run-checks-parallel.mjs`（typecheck、浏览器打包、模型数据、依赖及锁文件等）通过。Biome 仅报告原有文件的两条 info；新增 HTTP 测试曾有类型错误，已修正并复验通过。
-- 仓库外的安装目录副本与实际编译的 Bun Loader 均验证了相邻 Prompt 资源加载。完整 Bun 二进制跨平台发行构建、云端模型响应及浏览器运行时文件读取未验证。
+- 仓库外的安装目录副本与实际编译的 Bun Loader 均验证了相邻 Prompt 资源加载。这次核对没有覆盖完整 Bun 二进制跨平台发行构建、云端模型响应及浏览器运行时文件读取；这是当时的记录，维护者后来的实际验证见 [PROJECT_STATUS.md](../PROJECT_STATUS.md)。

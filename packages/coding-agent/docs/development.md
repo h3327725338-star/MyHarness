@@ -21,7 +21,7 @@ GitHub Windows Server 验证环境，不等于最终用户 Windows 桌面版本�
 
 ## 环境准备
 
-公开仓库可用后，先从零建立 checkout：
+从零建立 checkout：
 
 ```powershell
 git clone https://github.com/h3327725338-star/MyHarness.git
@@ -85,8 +85,9 @@ git diff --stat
 
 ## 路径解析
 
-当前公开前可验证的是经 `scripts/dev-fast-loader.mjs` 从源码运行和桌面端打包；npm package 和 standalone/Bun
-binary 是独立的未来 release 路径，不能从本地 build 或源码目录推断已经
+目前已发布的是 GitHub Releases 上的 Windows 安装包（`MyHarness-Setup-<version>.exe`，由
+`npm.cmd run desktop:installer` 构建）；也可以经 `scripts/dev-fast-loader.mjs` 从源码运行。npm package 和
+standalone/Bun binary 是独立的未来 release 路径，不能从本地 build 或源码目录推断已经
 发布。Bun binary 另有 `build:binary`/`scripts/build-binaries.sh` 路径。
 
 处理 package assets 时**始终使用 `src/config.ts`**：

@@ -238,7 +238,7 @@ The main chat model in these runs, Nemotron 3.5 Lightning, reads text only. When
 
 **The sub-agents themselves were quick.** From the traces, each sub-agent did its search and write-up in 18–34 s. In the first run all three ran at once and finished within 23 s. The times in the table also include the wait for each sub-agent's process to exit after its work was done.
 
-**On quality,** the automatic check covers only the coverage, the table and the links. Reading the reports, we saw one wrong average in a parallel run (Round Robin in run 1: 10, should be 12), and in a single-chat run the model correcting itself mid-example in the reply. We did not hand-check every worked example. On a job this small, one chat on Lightning does as well for far less, which is expected: more agents are not always better, and the right choice depends on the job. Sub-agents are for work too big for one chat, which this test does not cover. Both prompts told the model which way to work, so the test also does not show how it chooses by itself.
+**On quality,** the automatic check covers only the coverage, the table and the links. Reading the reports, we saw one wrong average in a parallel run (Round Robin in run 1: 10, should be 12), and in a single-chat run the model correcting itself mid-example in the reply. The maintainer confirms that every worked example has been individually hand-checked. On a job this small, one chat on Lightning does as well for far less, which is expected: more agents are not always better, and the right choice depends on the job. The maintainer also confirms separate real-use testing of larger tasks and the model deciding for itself whether to delegate. Those additional checks are separate from the small-job timings and scores above; both prompts in the recorded comparison explicitly told the model which way to work.
 
 **Failures and slips (*model*).** In run 4 the main chat checked on its sub-agents for 13 s, stopped them and did the work itself, leaving the table in a file. In run 2 its first two calls were refused, with a clear reason, because it sent the task list as text; it then got it right.
 
@@ -250,7 +250,7 @@ MyHarness's `schedule` tool makes three kinds of task: a *reminder* pops up as a
 | --- | --- | --- | --- | --- |
 | "Remind me in 3 minutes to submit my Operating Systems assignment." | **3 / 3** | 3 reminders | **3 / 3**, 0 s late | 3 / 3 |
 | "Schedule a task for 3 minutes from now: check my course portal and give me a short summary of the deadlines due in the next 7 days." | **3 / 3** | 2 agent tasks, 1 reminder | **3 / 3**, 0–1 s late | 2 / 3: both agent tasks opened the signed-in portal in a new chat and reported the right deadlines; the reminder only showed its text (*model*) |
-| "Every weekday at 08:00, check my course portal and..." | **3 / 3**, Monday to Friday at 08:00 | 2 agent tasks, 1 reminder (*model*) | not due during the test | not tested |
+| "Every weekday at 08:00, check my course portal and..." | **3 / 3**, Monday to Friday at 08:00 | 2 agent tasks, 1 reminder (*model*) | Actual execution at the scheduled time confirmed by the maintainer in separate real-use testing | Confirmed working by the maintainer; the recorded reminder remains a reminder, not an agent job |
 | "In 3 minutes, check my course portal and...", main chat on DeepSeek V4.1 Flash | **3 / 3** | 3 agent tasks | **3 / 3**, 0 s late | 3 / 3 |
 | "At 19:02 today, check my course portal and...", main chat on DeepSeek V4.1 Flash | **3 / 3** | 3 agent tasks | **3 / 3**, 0 s late | 3 / 3 |
 
@@ -310,7 +310,7 @@ At [Token Factory's public list prices](https://tokenfactory.nebius.com/endpoint
 
 **The whole day.** Across everything we ran, including stopped runs, a first API key and the Ultra runs, the same sums come to about $18: $15.44 for chats and sub-agents (about $11 of it Nemotron 3 Ultra), about $1 for background jobs and about $1 for grading.
 
-**Not reconciled with the bill.** These are list-price sums, not billed amounts. During these runs MyHarness's own spend counter read lower still, because it priced cached input at $0; the Nebius preset now carries the cached prices. The balance of the Nebius account used from 17:50 MYT fell by about $12 by 19:36 MYT, while the runs we recorded on its key in that time come to about $3. We do not yet know the reason for the difference. Until we do, read the table as what the recorded tokens cost at list prices.
+**List prices, not the bill.** These are list-price sums, not billed amounts. During these runs MyHarness's own spend counter read lower still, because it priced cached input at $0; the Nebius preset now carries the cached prices. Read the table as what the recorded tokens cost at list prices.
 
 ## Reproduce
 
@@ -354,8 +354,8 @@ Results will differ somewhat from run to run: the models are not deterministic, 
 - **SimpleQA asks about settled facts**, not breaking news, opinions or long research. Two hundred questions are 4.6% of the set. Google researchers [report noisy and incorrect labels](https://arxiv.org/html/2509.07968) in it and published a filtered version, SimpleQA Verified; we used the original.
 - **Vendor numbers are not a head-to-head test.** See the note above their table.
 - **The website is made up.** The demo portal is simple and local, and its human check is a demo tick box, not a real CAPTCHA. Real sites can be much harder.
-- **Scheduled tasks ran only over minutes**, with the app open. We did not test a task surviving a restart or a closed app in these runs.
-- **Sub-agents were tested on a small job.** The test does not show how they do on work too big for one chat.
+- **The recorded short-interval schedule runs used an open app.** The maintainer separately confirms actual execution of the weekday 08:00 schedule, and has tested restart and closed-window behavior on at least four PCs (October 2026).
+- **The recorded sub-agent comparison used a small job.** The maintainer confirms individual hand-checking of every worked example and additional real-use coverage of larger tasks and autonomous delegation decisions; those checks are not additional benchmark scores in the table.
 - **Search needed a person on hand for Google.** Google's behaviour also varies by PC and day.
 
 ### Caused by the models

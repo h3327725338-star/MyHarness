@@ -90,7 +90,7 @@ Start each step in a new chat (**New chat** in the sidebar) unless it says other
    - Settings → **Providers** → **Nebius Token Factory**, first in the list, shows its Base URL and the models, the console links for balance and top-up, and this computer's spending estimate.
 8. **Coding (optional).** Add a project folder (any Git repository, or this one) with **Add workspace**, the **+** in the sidebar, and ask: `Read package.json and list the packages/ directories, then summarize the repository structure. Do not modify any files.`
    - Expected: the agent calls file and shell tools itself, and the turn header reports elapsed time and operation count. The answer names version `0.0.6` and the five directories under `packages/`.
-   - The **Changes** panel lists the turn's tool operations, and the same session is on disk under `%USERPROFILE%\.myharness\agent\sessions\`.
+   - The **Changes** panel lists the turn's tool operations, and the same session is on disk under `%USERPROFILE%\.myharness\data\workspaces\<workspace-id>\sessions\` (a source build run from a checkout keeps it in that checkout's `data\workspaces\` instead).
 
 ## What to inspect in the source
 
@@ -107,9 +107,9 @@ Start each step in a new chat (**New chat** in the sidebar) unless it says other
 - Model replies need a Nebius Token Factory key, or another Provider. Without one the UI starts but no model answers.
 - Token Factory has no balance API. The balance itself is only in its console; MyHarness shows a local estimate.
 - Tavily rate-limits its keyless access. When the limit is used up, the search says so and links to a free key.
-- Google Drive sync runs only while the app is open (the tray counts). It has been run for real between two PCs on one Google account. Apart from the browser's sealed sign-in vault, the copy on Drive is not end-to-end encrypted.
+- Google Drive sync runs only while the app is open (the tray counts). The maintainer has run it for real across at least four PCs. Apart from the browser's sealed sign-in vault, the copy on Drive is not end-to-end encrypted.
 - Symbols (semantic code navigation) needs optional per-language modules and is disabled by default.
-- Sessions, settings and credentials live under `%USERPROFILE%\.myharness\`. Nothing is sent anywhere except the model, search and sync services you configure.
+- Settings and credentials live under `%USERPROFILE%\.myharness\agent\`, and an installed copy keeps its chats under `%USERPROFILE%\.myharness\data\` (a source build keeps them in the checkout's `data\` folder). Nothing is sent anywhere except the model, search and sync services you configure.
 - MyHarness has no sandbox and no per-tool approval: the agent has its user's access to their own PC. The evaluation lists [everything else we measured or found](evaluation/README.md#limitations-and-problems-found).
 
 ## During the judging window

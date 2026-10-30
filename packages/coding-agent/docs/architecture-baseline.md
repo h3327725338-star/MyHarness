@@ -221,7 +221,9 @@ Provider credentials 不属于 settings JSON；它们仍由下面的 `auth.json`
 
 为避免源码被改写，本阶段不运行根目录 `npm run check`。需要执行等效只读检查时使用 `node scripts/run-checks-parallel.mjs`；该脚本不包含 `biome check --write`。
 
-## 10. 当前未确认边界
+## 10. Phase 0 当时未确认的边界
+
+以下是 Phase 0 当时的记录，不是现状；维护者后来的实际验证见 [PROJECT_STATUS.md](../../../PROJECT_STATUS.md)。
 
 - 没有 API key 的真实 Provider/model 网络请求成功证据；需要 API key 的 branching 测试会按当前测试条件 skip。
 - 没有把 Bun binary 真正编译并启动；本阶段只确认 build script、entrypoint 和资源复制契约。

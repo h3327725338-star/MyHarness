@@ -2,11 +2,11 @@
 
 [English](index.md) | [简体中文](index.zh-CN.md)
 
-MyHarness 是一个本机浏览器代码协作工具。Coding Agent 产品层提供 Web UI、AgentSession、工具、Session、Provider runtime、project trust 以及 extension/resource 系统。
+MyHarness 是装在你自己 Windows 电脑上的个人 AI，写代码也照样能做。Coding Agent 产品层提供 Web UI、AgentSession、工具、Session、Provider runtime、project trust 以及 extension/resource 系统。
 
 ## 快速开始
 
-当前仓库尚未把 `@myharness/coding-agent` 发布到 public npm registry。Windows 用户请从源码 checkout 运行：
+当前仓库尚未把 `@myharness/coding-agent` 发布到 public npm registry。Windows 用户可以从 [GitHub Releases](https://github.com/h3327725338-star/MyHarness/releases/latest) 下载 `MyHarness-Setup-<version>.exe` 安装包安装（安装包未做代码签名，SmartScreen 会先询问），也可以从源码 checkout 运行：
 
 ```powershell
 npm.cmd install --ignore-scripts
@@ -31,7 +31,7 @@ npm.cmd run build
 - [设置](settings.md) — 全局和项目级设置。
 - [Symbols 契约](symbols.md) — 结构化导航、路由、坐标、部分结果、deadline 和 continuation。
 - [Windows](windows.md) — Bash 和 Windows 专用设置。
-- [Web Search](web-search.md) — 可选的内置联网搜索（默认 Google/Bing，可选 DuckDuckGo、Brave、Tavily API 和 Firefox/Chrome/Edge 浏览器兜底）和网页读取。
+- [Web Search](web-search.md) — 内置联网搜索和网页读取（默认打开，可在设置里关闭；默认引擎是 Tavily API 和 Google，可选 Bing、DuckDuckGo、Brave，以及 Firefox/Chrome/Edge 浏览器兜底）。
 - [Sessions](sessions.md) — Session 管理、分支和导航。
 - [Google Drive 同步](google-drive-sync.md) — 通过用户自己的云端硬盘后台同步记忆与通用模式数据，含合并、删除和冲突规则。
 - [Compaction](compaction.md) — context compaction 和 branch summaries。

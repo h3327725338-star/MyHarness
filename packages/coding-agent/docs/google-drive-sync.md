@@ -8,8 +8,7 @@ This document describes the implemented behavior. The automated tests use an in-
 account. On 2026-10-26 the catch-up path was also run read-only against a real Drive folder (about 6,100 batches from
 two computers, every write refused) as a fresh computer: from a snapshot built from the other computer's state it caught
 up in about 100 seconds including 500 MB of downloads, and from the batches alone in about 7.5 minutes, about 5 of them
-reading the 5,660 change lists. Since then the maintainer has run two computers against each other for real, several
-rounds through one Google account (October 2026).
+reading the 5,660 change lists. Since then the maintainer has run sync for real across at least four PCs (October 2026).
 
 ## What is synced
 
@@ -509,24 +508,25 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 | `POST /api/sync/release-occupant` | `{ workspaceId, confirmed: true }` move a hidden Workspace's binding to `<dataRoot>/workspace-folders/reserved-<id8>`, keeping its chats; both the route and the service refuse the call without the flag |
 | `POST /api/sync/merge-workspace` | `{ workspaceId, targetWorkspaceId, confirmed: true }` merge the restored Workspace into the listed one that holds its folder; answers `{ status, merged: { chats, memories, kept, warnings } }`; refused without the flag or while one of its chats runs |
 
-## Limits and not-yet-verified behavior
+## Limits
 
-- Real Google sign-in through MyHarness's own registered app and sync between two physical machines have been run by
-  the maintainer (October 2026), besides the in-memory Drive tests and the read-only catch-up dry run described at the
-  top. Folder rename, revoked authorization, quota exhaustion and Drive outage behavior have not been run against a live
-  account, and snapshot publishing has not been checked on its own. Merging Workspaces is tested with two devices on the
-  in-memory Drive only.
+- Besides the in-memory Drive tests and the read-only catch-up dry run described at the top, the maintainer has run real
+  Google sign-in through MyHarness's own registered app and sync across at least four PCs (October 2026), including
+  folder rename, revoked authorization, snapshot publishing and merging Workspaces. Running out of Drive quota has not
+  come up in that use.
 - Background sync stops when MyHarness quits and continues on the next start. The desktop app can keep running in the
   tray when its window is closed and can start with Windows (both are user settings), so sync does not need an open
   window.
-- Built-in browser sync was run between two profiles of one Electron process and with the in-memory Drive, not between two
-  physical computers through a real Drive. A vault is written again whenever its sign-ins changed (at most every 30
-  minutes while browsing), and Drive keeps every uploaded version as an object; old versions are not cleaned up.
+- Besides the two-profile Electron harness and the in-memory Drive tests, the maintainer has run built-in browser sync
+  through a real Drive across at least four PCs (October 2026). A vault is written again whenever its sign-ins changed
+  (at most every 30 minutes while browsing), and Drive keeps every uploaded version as an object; old versions are not
+  cleaned up.
 - Batches over 5000 operations written by another client are refused; this daemon never writes such a batch itself.
 - Review entries remain only for a Workspace identity both devices changed and delete-vs-edit (a chat entry or title
   both changed goes to the later change); there is no “apply the other version” button yet, and the local path and the copy path are shown in
   full. Memories, the prompt, drafts, the saved prompts and files no longer create review entries: they merge
-  automatically. These merges are tested with two devices on the in-memory Drive only.
+  automatically. Besides the two-device tests on the in-memory Drive, the maintainer has run these merges through a real
+  Drive across at least four PCs (October 2026).
 - A snapshot stands for its device's own batches by batch time. A device whose clock jumped backwards could publish a
   batch with an earlier time than its last snapshot; the same exposure already exists for the per-device watermark.
 - Old batches and objects are never removed from Drive (no garbage collection yet), so the folder keeps growing; the
@@ -534,10 +534,9 @@ All routes are local-only and use the same origin checks as the rest of the Web 
 - Workspace files that live outside the MyHarness Data root are synced by the file channel only when the user turns it
   on; a Drive-managed folder is never uploaded by MyHarness, because `drive.file` only grants access to files this app
   created and double management is refused on purpose.
-- Sync between two real computers has been run by the maintainer: several rounds between two PCs on one Google account
-  (October 2026). The file channel's resumable upload and `Range` download have not been checked on their own against a
-  live account. The protocol, resume bookkeeping, checksum verification, conflict handling and deletion guard are
-  covered by `test/workspace-file-sync.test.ts` with an in-memory transport.
+- The maintainer has also run the file channel for real across those PCs, including its resumable upload and `Range`
+  download (October 2026). The protocol, resume bookkeeping, checksum verification, conflict handling and deletion guard
+  are covered by `test/workspace-file-sync.test.ts` with an in-memory transport.
 - The file channel does not detect renames heuristically: a rename is published as a new path plus a delete of the old
   one only after the new content is safely uploaded, so the result is correct even when it costs a re-upload.
 - Symbolic links, junctions and special files are not followed or copied in this version; they are reported once.
@@ -549,8 +548,9 @@ All routes are local-only and use the same origin checks as the rest of the Web 
   manual file operation.
 - There is no end-to-end encryption for workspace files, exactly as for chats and memories; uploaded content and history
   consume the account's Google storage.
-- The three existing unbound workspaces have not been touched: their binding needs an explicit confirmation in
-  Settings, and the hidden-record release is offered only for a Workspace that is no longer in the sidebar.
+- Binding a restored Workspace to a folder needs an explicit confirmation in Settings (apart from the automatic Drive-root
+  case described under "Workspaces on another machine"), and the hidden-record release is offered only for a Workspace
+  that is no longer in the sidebar.
 - A chat whose header becomes unreadable or whose mode is switched to Coding is kept locally instead of being deleted,
   and is not republished until it is written again.
 - A symlinked directory inside the Data root is refused as a safety measure, so a user who deliberately links a folder to

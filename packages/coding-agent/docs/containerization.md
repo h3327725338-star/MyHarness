@@ -44,7 +44,9 @@ Requirements: Node.js >= 22.19.0 for MyHarness (the pinned Gondolin 0.5.x packag
 
 ## Plain Docker
 
-Run the whole `MyHarness` process in Docker when you want the simplest local container boundary. The current checkout is not published to the public npm registry, so the Dockerfile below builds the CLI from the source tree.
+**Note.** The Web service listens only on `127.0.0.1` of the machine it runs on and has no `--host` option, so publishing a container port alone does not make the page reachable from the host. This example does not show how the host reaches the page, and an API key in the environment does not create a Provider (configure one in `models.json` or Settings). To isolate tool execution, use the Gondolin pattern above, where MyHarness itself stays on the host.
+
+Run the whole `MyHarness` process in Docker when you want the simplest local container boundary. The current checkout is not published to the public npm registry, so the Dockerfile below builds the Web service from the source tree.
 
 `Dockerfile.myharness`:
 
@@ -80,6 +82,8 @@ The `-v "$PWD:/workspace"` mounts your current directory into the container at /
 Use a named volume for `/root/.myharness/agent` if you want container-local settings and credentials. Sessions live under the mounted project at `/workspace/data/workspaces/<workspace-id>/sessions/<session-id>`; mounting the project exposes those Session files to the container.
 
 ## OpenShell
+
+**Note.** The Web service listens only on `127.0.0.1` of the machine it runs on and has no `--host` option, so the page is not reachable from outside the sandbox on its own. This example does not show how to reach it. To isolate tool execution, use the Gondolin pattern above, where MyHarness itself stays on the host.
 
 Use [NVIDIA OpenShell](https://docs.nvidia.com/openshell/about/overview) when you want a policy-controlled sandbox with filesystem, process, network, credential, and inference controls.
 OpenShell can run sandboxes through a local gateway backed by Docker, Podman, or a VM runtime, or through a remote Kubernetes gateway.

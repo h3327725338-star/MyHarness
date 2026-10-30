@@ -80,7 +80,7 @@ MyHarness started as one computer-science student's fix for these problems, buil
 **Your models, your data**
 
 - **A model for every job.** Sub-agents, memory, chat naming, translation, vision, schedules and the other helper jobs can each have their own model and thinking level, and one Nebius Token Factory key sets them all up.
-- **Your data stays on your PC.** The interface listens only on `127.0.0.1`. Chats, memories, settings and keys live in `%USERPROFILE%\.myharness`, and there is no MyHarness server. Model calls go to the Provider you choose (Nebius Token Factory by default), and sync goes through your own Google Drive. Sync is not end-to-end encrypted, except the browser's sign-ins, which are sealed with your passphrase before upload.
+- **Your data stays on your PC.** The interface listens only on `127.0.0.1`. Chats, memories, settings and keys live in `%USERPROFILE%\.myharness` (a source build run from a checkout keeps chats and memories in that checkout's `data` folder), and there is no MyHarness server. Model calls go to the Provider you choose (Nebius Token Factory by default), and sync goes through your own Google Drive. Sync is not end-to-end encrypted, except the browser's sign-ins, which are sealed with your passphrase before upload.
 
 **Still writes code**
 
@@ -149,7 +149,7 @@ It can also be created by hand in Settings → **Providers** → **Add provider*
 - MyHarness talks to the Google Drive API directly and syncs all memory scopes (archives, pending entries, the profile), General-mode workspaces and chats with their branches and handoff summaries, session attachments and artifacts, workspace library sources, drafts, the General-mode personal prompt, saved prompts (My prompts), scheduled tasks, and the built-in browser's bookmarks, new-tab shortcuts and site settings; the browser's sign-ins and saved passwords travel only when a sync passphrase is set, sealed with it on the device before upload.
 - It does not sync API keys, OAuth tokens, trust decisions, tool permissions, locks, running tasks, Coding-mode chats or repositories, or other Web UI preferences.
 - Merging uses a stable key plus a per-device version vector: memories merge three-way against the last version both devices agreed on, chats merge by entry id so both branches survive, and a conflict that cannot be merged keeps the local version and saves the other as a recoverable copy listed in Settings. Nothing arriving from Drive can grant Project Trust or execute a command.
-- Boundary: sync talks to the Drive API directly. Besides the in-memory-transport tests, it has been run for real between two PCs on one Google account, over several rounds. Sync stops when the app quits, and apart from the browser's sealed sign-in vault there is no end-to-end encryption. See [Google Drive sync](packages/coding-agent/docs/google-drive-sync.md).
+- Boundary: sync talks to the Drive API directly. Besides the in-memory-transport tests, the maintainer has run it for real across at least four PCs. Sync stops when the app quits, and apart from the browser's sealed sign-in vault there is no end-to-end encryption. See [Google Drive sync](packages/coding-agent/docs/google-drive-sync.md).
 
 ## Quick Start (Windows)
 

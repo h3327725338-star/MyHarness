@@ -4,12 +4,15 @@ This page gets you from install to a useful first MyHarness session.
 
 ## Install
 
-The current public-ready path is to run MyHarness from a source checkout. The
-`@myharness/coding-agent` package is not currently present in the public npm
-registry, so the global install command is a future-release example rather
-than a currently verified install path.
+On Windows, the quickest path is the installer: download
+`MyHarness-Setup-<version>.exe` from
+[GitHub Releases](https://github.com/h3327725338-star/MyHarness/releases/latest)
+and run it (it is not code-signed, so SmartScreen asks first). You can also run
+MyHarness from a source checkout. The `@myharness/coding-agent` package is not
+currently present in the public npm registry, so the global install command
+below is a future-release example, not an install path that exists today.
 
-From the repository root on Windows:
+To run from a source checkout, from the repository root on Windows:
 
 ```powershell
 npm.cmd install --ignore-scripts
@@ -67,7 +70,7 @@ repository root instead; the process operates on the directory from which you in
 
 ## Configure Provider and authentication
 
-First configure a Provider and model in Settings, `models.json`, or an extension. An environment variable alone does not create a selectable model.
+The quickest start is the built-in Nebius Token Factory setup: open Settings → Providers → Nebius Token Factory and paste a Token Factory key (see [NVIDIA Nemotron on Nebius Token Factory](nebius-token-factory.md)). Otherwise, configure a Provider and model in Settings, `models.json`, or an extension. An environment variable alone does not create a selectable model.
 
 Then provide the credential for that configured Provider before launching MyHarness:
 
@@ -98,6 +101,7 @@ By default, MyHarness gives the model these built-in tools:
 - `memory_search`, `memory_get`, `memory_delete`, `memory_claim`, `memory_write` - long-term memory (when enabled)
 - `session_search`, `session_get` - find and read earlier saved chats (read-only; `sessionContinuity.autoSearch`)
 - `ask_user_question`, `todo_write` - user interaction and task tracking
+- `schedule` - list, create, change and delete reminders and scheduled Agent tasks
 - `apply_rename` - apply a `symbols rename_preview` plan (gated with `symbols`)
 - `web_search`, `web_fetch` - only when Web Search is enabled in Settings
 - `workspace` - drive the built-in browser and the right-hand workspace (desktop app only)
@@ -168,7 +172,7 @@ Inside MyHarness, use `/new` to start a new session. Extensions may provide addi
 
 There is no terminal print mode: start the Web UI and send the prompt there, or use the SDK for in-process automation. Public terminal print, JSON and RPC modes are removed.
 
-Local `@file` input can preprocess modern Office documents, PDF pages, SVG and design/image formats, and video keyframes. A directory input discovers those supported formats recursively and continues past individual failures. Audio and legacy DOC/XLS/PPT files are not processed.
+Local `@file` input can preprocess modern Office documents, PDF pages, SVG and design/image formats, and video keyframes. A directory input discovers those supported formats recursively and continues past individual failures. Audio files and legacy DOC and XLS files are not processed (save legacy documents as DOCX or XLSX first); legacy PPT gets basic text extraction only.
 
 ## Next steps
 

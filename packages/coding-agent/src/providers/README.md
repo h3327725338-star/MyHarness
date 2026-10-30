@@ -30,7 +30,7 @@
 | `config.ts` | `ModelConfig`：`models.json` 的只读快照（不含凭证） |
 | `composer.ts` | 把一个 Provider 的配置组合成可用的 Provider/模型；请求头与兼容请求配置解析；API Key 缓存 |
 | `custom-provider-manager.ts` | 用户自定义 Provider 的增删改、模型发现、把发现结果写回 `models.json` |
-| `nebius-preset.ts` | Nebius Token Factory 预设：Base URL、控制台链接、Nemotron 模型条目（按账户模型列表里的拼写取用）、各项工作用哪个模型（`NEBIUS_ROLE_PLAN`） |
+| `nebius-preset.ts` | Nebius Token Factory 预设：Base URL、控制台链接、DeepSeek V4.1 Flash 1017 和 Nemotron 模型条目（按账户模型列表里的拼写取用）、各项工作用哪个模型（`NEBIUS_ROLE_PLAN`） |
 | `thinking-capability.ts` | 判断一个模型的 Thinking Effort 能力来自哪里（官方文档 > 模型目录 > 探测） |
 | `official-effort.ts` | Provider 官方文档明确写出的“请求档位 → 实际档位” |
 | `store.ts` | 模型缓存（`models-store.json`） |

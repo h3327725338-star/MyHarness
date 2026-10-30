@@ -1,9 +1,9 @@
 # MyHarness project status
 
-This is a source-based status snapshot for the current checkout. It is not a
-promise that every documented integration works on every machine. When a claim
-needs a Provider, a credential, an external service, a terminal, or a released
-binary, the missing runtime evidence is called out explicitly.
+This is a status snapshot for the current checkout, from the source and from the
+maintainer's real use. It is not a promise that every documented integration
+works on every machine. What has not been run is listed under
+[Current limits](#current-limits).
 
 ## Current stage
 
@@ -12,15 +12,14 @@ paths are the Windows desktop app (Electron plus a loopback-only Web UI) and a
 source checkout of the same code. The `@myharness/ai` Provider catalog is empty
 by design; the app offers Nebius Token Factory ready-made, so one Token Factory
 API key (or another Provider configured by hand) is needed before the first
-model-backed session. Claims that still need runtime evidence are called out
-below.
+model-backed session. No credential is stored in this repository.
 
 ## Verified in real use
 
-The maintainer uses MyHarness every day on two Windows PCs: the development
-desktop and a second PC set up from the installer. As of October 2026 the
-following has been run there for real, with real accounts and a real Nebius
-Token Factory key:
+The maintainer uses MyHarness every day and has tested it on at least four
+Windows PCs, including PCs set up from the installer. As of October 2026 the
+following has been run on them for real, with real accounts and a real Nebius
+Token Factory key, and works stably in that use:
 
 - **Install and models.** The Windows installer (NSIS, not code-signed) on a
   fresh PC; the one-key Token Factory setup; DeepSeek V4.1 Flash 1017 as the
@@ -36,13 +35,20 @@ Token Factory key:
   running turn, search, archive and HTML export.
 - **Workspaces and prompts.** A workspace for each part of life with its own
   memory, the personal prompt and saved prompts.
-- **Sync.** Memory, General-mode chats, scheduled tasks, bookmarks, prompts and
-  drafts through the user's own Google Drive, several rounds between the two
-  PCs.
+- **Sync.** Memory, General-mode chats, scheduled tasks, bookmarks, prompts,
+  drafts, workspace files and the built-in browser's data through the user's
+  own Google Drive, across those PCs, including merging, folder rename and
+  revoked authorization.
 - **On its own.** Scheduled tasks with corner cards and desktop notifications,
-  running in the tray and starting with Windows.
+  running in the tray, starting with Windows and carrying on after the app
+  restarts.
+- **Search.** Web search with Tavily and Google, and reusing the cookies of
+  everyday browser profiles, Chrome and Edge included.
+- **Code Intelligence.** Downloading language modules and running their
+  language servers.
 - **Everyday tools.** Quote and ask, translating a selection with UK/US
-  pronunciation, understanding images, and sub-agents working in parallel.
+  pronunciation, understanding images, sub-agents working in parallel, and the
+  Terminal panel.
 
 Measured runs of these workflows on NVIDIA Nemotron, with every failure and its
 cause, are in the [evaluation](docs/evaluation/README.md).
@@ -66,6 +72,9 @@ cause, are in the [evaluation](docs/evaluation/README.md).
   `symbols` tool is disabled by default and controlled by
   `codeIntelligence.symbolsEnabled`; optional Windows modules are managed per
   language. Plain-text search remains available through `grep`, `find` and `ls`.
+- Windows Code Intelligence archives are not stored in the source checkout; they
+  are downloaded per language from the Release named in `runtime-manifest.json`,
+  which provides exact artifact sizes and SHA-256 values.
 - The repository can build and run targeted source smoke tests (`--help` against
   the Web entry) with a synthetic local Provider fixture; that does not prove any external Provider
   or OAuth integration.
@@ -73,7 +82,7 @@ cause, are in the [evaluation](docs/evaluation/README.md).
   staged and prepared-public-ref variants; the pre-commit and pre-push hooks
   invoke the corresponding checks without printing matched values.
 
-## Experimental or partial
+## Defaults and optional parts
 
 - Sub-agents (`agent`, `workflow`, `ultracode`, `agent_tasks`) are off in the
   factory settings. The Nebius Token Factory one-key setup, which is the normal
@@ -91,22 +100,16 @@ cause, are in the [evaluation](docs/evaluation/README.md).
   external network access.
 - The SQLite Node backend is maintained and tested as a separate backend; the
   product-level default remains JSONL until the source runtime proves otherwise.
-- Bun/binary packaging and real interactive terminal behavior require separate
-  machine-level validation beyond TypeScript checks.
+- Bun/binary packaging requires separate machine-level validation beyond
+  TypeScript checks.
 
-## Currently unavailable or not verified
+## Current limits
 
-- Windows Code Intelligence archives are not stored in the source checkout.
-  `runtime-manifest.json` marks the release as published and provides exact
-  artifact sizes and SHA-256 values. Asset reachability and real language-server
-  startup have not been verified in this status snapshot.
-- A real Provider-backed first conversation cannot be verified without a user
-  supplied Provider/model and credential. No credential is stored in this
-  repository.
-- Token Factory's real low-balance error has not been seen, and how far each
-  thinking level of DeepSeek V4.1 Flash 1017 changes the amount of reasoning has
-  not been measured. The setup's automated tests run against a local stub
-  endpoint.
+- Token Factory's real low-balance error has not been seen, because the
+  maintainer's balance has never run out, and how far each thinking level of
+  DeepSeek V4.1 Flash 1017 changes the amount of reasoning has not been measured.
+  The setup's automated tests run against a local stub endpoint.
+- Running out of Google Drive quota has not come up in real use.
 - A fresh Linux/macOS checkout was not run in this Windows audit.
 - The local public-release validation covered the Windows Coding Agent suite and
   the targeted recovery tests. Hosted runner results and path spelling behavior
@@ -138,9 +141,9 @@ cause, are in the [evaluation](docs/evaluation/README.md).
 
 ## Next project-level work
 
-1. Make and verify the release-asset publication process, including exact
-   hashes, sizes, notices and Windows language-server startup.
-2. Publish a reproducible package or release artifact only after the source
-   and runtime paths have their own clean-clone and install evidence.
+1. Keep release assets verifiable, with exact hashes, sizes and notices for each
+   published installer and Code Intelligence module.
+2. Keep each release's source and install paths backed by their own clean-clone
+   and install evidence.
 3. Continue platform-specific CI and external Provider validation without
    presenting it as a default product guarantee.
