@@ -23,6 +23,14 @@ describe("auto memory", () => {
 		rmSync(testRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	});
 
+	// A persisted manager keeps its background timers and shares the memory lock under dataRoot. Left running, it can hold
+	// that lock during a later test on fake timers, whose lock retry then waits on a clock nothing moves any more.
+	async function stopManager(manager: AutoMemoryManager): Promise<void> {
+		manager.dispose();
+		await manager.waitForBackgroundTasks();
+		await manager.waitForMaintenancePersistence();
+	}
+
 	it("keeps global storage shared while isolating project storage", () => {
 		const agentDir = join(testRoot, "agent");
 		const firstProject = join(testRoot, "first");
@@ -175,6 +183,8 @@ describe("auto memory", () => {
 		expect(recalled?.display).toBe(false);
 		expect(recalled?.content).toContain("先检查真实源码");
 		expect(recalled?.content).toContain("Its priority is lower than system instructions");
+		await stopManager(extractor);
+		await stopManager(nextSession);
 	});
 
 	it("saves a memory whose ID has no scope prefix and still refuses an ID outside its scope", async () => {
@@ -355,6 +365,7 @@ describe("auto memory", () => {
 		expect(await extractor.runExtraction(entries)).toBe(false);
 		await extractor.waitForBackgroundTasks();
 		expect(errors).toEqual(["Auto Memory 返回了无效的操作格式"]);
+		await stopManager(extractor);
 	});
 
 	it("keeps scheduled extraction safe when the error observer throws", async () => {
@@ -395,6 +406,7 @@ describe("auto memory", () => {
 
 		extractor.scheduleExtraction(entries);
 		await expect(extractor.waitForBackgroundTasks()).resolves.toBeUndefined();
+		await stopManager(extractor);
 	});
 
 	it("invalidates an extraction that outlives its session", async () => {
@@ -563,6 +575,7 @@ describe("auto memory", () => {
 		expect(context.messages).toHaveLength(1);
 		expect(context).not.toHaveProperty("tools");
 		expect(options.reasoning).toBe("high");
+		await stopManager(extractor);
 	});
 
 	it("bounds background failures and retains pending work", async () => {

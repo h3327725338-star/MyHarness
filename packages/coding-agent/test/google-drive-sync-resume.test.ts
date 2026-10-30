@@ -321,7 +321,8 @@ describe("manual Download now / Sync now", () => {
 		expect(a.engine.status().pendingDownloads).toBe(0);
 		// Download only: the local memory is still waiting to upload.
 		expect(drive.batchNames().some((name) => name.startsWith("device-a-"))).toBe(false);
-	});
+		// 1,200 files uploaded by one device and written by the other: about 4 s here, but over 60 s on a busy CI runner.
+	}, 180_000);
 
 	it("retries a batch that was skipped for a missing object once the object is there", async () => {
 		const drive = new FakeDrive();
