@@ -14,7 +14,7 @@ The models are DeepSeek V4.1 Flash and NVIDIA Nemotron, served by Nebius Token F
 
 - Windows 10 or Windows 11, x64.
 - The installer from the Releases page. Alternatively, a source build needs Node.js `>=22.19.0` and Git for Windows.
-- A Nebius Token Factory API key, only for model replies. No shared key is included. The app links to the Token Factory console, where keys are created.
+- A Nebius Token Factory API key, only for model replies. **Judges:** judge-only Nebius Token Factory and Tavily API keys are in `MyHarness-Judge-Access-Keys.pdf`, the file attached to this project's Devpost submission under Additional info, which is for judges and organizers and does not appear on the public project page. Anyone else creates their own key: the app links to the Token Factory console. No key is stored in this repository.
 
 ## Install
 
@@ -51,6 +51,8 @@ Nebius Token Factory is built in, so attaching a model takes one API key.
 2. Sign in to Token Factory in the built-in browser and create a key.
 3. Paste it into the strip above that page, or into the card in Settings.
 
+Judges can skip steps 1 and 2 and paste the judge-only key from the Devpost file into that card.
+
 MyHarness checks the key against the account's model list, adds DeepSeek V4.1 Flash and the NVIDIA Nemotron models, and gives each job its model:
 
 - DeepSeek V4.1 Flash 1017: the main chat and commit descriptions. Ultra takes these when the account does not list DeepSeek.
@@ -73,7 +75,7 @@ Start each step in a new chat (**New chat** in the sidebar) unless it says other
 1. **Start.** A fresh install starts with a chat under **Default**, which belongs to no project. The composer shows **DeepSeek V4.1 Flash 1017**, which the setup made the main model, with a 1.0M context window.
 2. **Web search with Tavily.** Ask: `What did NVIDIA announce about Nemotron 3.5 Lightning? Look it up on the web and give your sources.`
    - Web search is on by default. Tavily answers without a key through its free keyless access, and the search step lists the results it read.
-   - **Get a free key** in Settings → **Web search** adds 1,000 searches a month.
+   - **Get a free key** in Settings → **Web search** adds 1,000 searches a month. Judges can use **Add API key** there to add the judge-only Tavily key from the Devpost file instead.
 3. **The built-in browser.** Ask: `Open https://github.com/h3327725338-star/MyHarness/releases in your browser and tell me the latest MyHarness version and what changed in it.`
    - Expected: the answer names version `0.0.6`. The agent works in its own background tab, so nothing jumps in front of you. The **Browser** button, the globe at the top right, shows its tabs.
    - To try a real sign-in, sign in to a site of your own in that browser, then ask about something behind it. The sign-in survives restarts. If a page needs a sign-in or a human check, a request bar appears on that tab and the agent waits for you.
@@ -114,7 +116,7 @@ Start each step in a new chat (**New chat** in the sidebar) unless it says other
 
 ## During the judging window
 
-The judging period is December 1–15, 2026, Pacific Time. Until it ends:
+The judging period is December 9–23, 2026, Pacific Time. Until it ends:
 
 - the repository stays public, with its Apache-2.0 license;
 - the installer stays downloadable from the Releases page.
